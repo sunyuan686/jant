@@ -1,8 +1,8 @@
-name = "jant-demo" # @create-jant: "${name}"
+name = "jant" # @create-jant: "${name}"
 main = "index.js"
 compatibility_date = "2026-01-20"
 compatibility_flags = ["nodejs_compat"]
-account_id = "03e7294bdb3750ed5a0d6afef6d770e4" # @create-jant: @remove
+account_id = "1fa95d28c712735240b0bb2f0004c085" # @create-jant: @remove
 
 [assets]
 directory = "./node_modules/@jant/core/dist/client"
@@ -24,7 +24,7 @@ port = 3000
 [vars]
 # Optional: Pin your site's public origin (e.g. https://my-blog.example.com)
 # https://github.com/jant-me/jant/blob/main/docs/configuration.md#public-urls-and-subpaths
-SITE_ORIGIN = "https://demo.jant.me" # @create-jant: @remove
+SITE_ORIGIN = "https://jant.xixihaha.tech" # @create-jant: @remove
 # Optional: Mount the site under a subpath such as /blog
 # SITE_PATH_PREFIX = "/blog"
 
@@ -43,30 +43,23 @@ SITE_ORIGIN = "https://demo.jant.me" # @create-jant: @remove
 # Optional: R2 Storage (for media uploads)
 # https://github.com/jant-me/jant/blob/main/docs/configuration.md#r2-default
 # R2_PUBLIC_URL = "https://cdn.example.com"
-R2_PUBLIC_URL = "https://demo-media.jant.me" # @create-jant: @remove
+# R2_PUBLIC_URL = "https://media.xixihaha.tech"  # 绑定 R2 自定义域名后取消注释
 
 # Optional: Cloudflare Image Transformations
 # For automatic thumbnail generation and image optimization
 # https://github.com/jant-me/jant/blob/main/docs/configuration.md#image-transformations-optional
 # IMAGE_TRANSFORM_URL = "https://example.com/cdn-cgi/image"
-IMAGE_TRANSFORM_URL = "https://demo-media.jant.me/cdn-cgi/image" # @create-jant: @remove
 
-# @create-jant: @remove-start
-DEMO_EMAIL = "demo@jant.me"
-DEMO_PASSWORD = "jantdemodemojant"
-DEMO_MODE = "true"
-# @create-jant: @remove-end
 
 [[d1_databases]]
 binding = "DB"
-database_name = "jant-demo-db" # @create-jant: "${name}-db"
-database_id = "76329154-291d-4580-af73-aa77397649f1" # @create-jant: "local"
+database_name = "jant-db" # @create-jant: "${name}-db"
+database_id = "45127a41-b2a2-4bc7-8c81-0b8d500cbacf" # @create-jant: "local"
 migrations_dir = "node_modules/@jant/core/src/db/migrations"
 
 [[r2_buckets]]
 binding = "R2"
-bucket_name = "jant-demo-media" # @create-jant: "${name}-media"
-remote = true # @create-jant: @remove
+bucket_name = "jant-media" # @create-jant: "${name}-media"
 
 # Optional: S3-compatible storage (alternative to R2)
 # Set STORAGE_DRIVER = "s3" and configure the options below.
