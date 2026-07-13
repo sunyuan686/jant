@@ -624,6 +624,38 @@ export const BUILTIN_COLOR_THEMES: ColorTheme[] = [
     },
   }),
 
+  // Pure white with neutral grays — zero tint, clean and clinical
+  defineTheme({
+    id: "snow",
+    name: "Snow",
+    light: {
+      bg: "oklch(1 0 0)",
+      fg: "oklch(0.205 0 0)",
+      primary: "oklch(0.25 0 0)",
+      primaryFg: "oklch(0.99 0 0)",
+      siteAccent: "oklch(0.37 0 0)",
+      muted: "oklch(0.965 0 0)",
+      mutedFg: "oklch(0.5 0 0)",
+      border: "oklch(0.91 0 0)",
+      readingTitle: "oklch(0.17 0 0)",
+      readingHeading: "oklch(0.205 0 0)",
+      readingBody: "oklch(0.24 0 0)",
+      readingQuote: "oklch(0.4 0 0)",
+      dashBg: "oklch(0.975 0 0)",
+    },
+    dark: {
+      bg: "oklch(0.17 0 0)",
+      fg: "oklch(0.92 0 0)",
+      primary: "oklch(0.85 0 0)",
+      primaryFg: "oklch(0.17 0 0)",
+      siteAccent: "oklch(0.78 0 0)",
+      muted: "oklch(0.235 0 0)",
+      mutedFg: "oklch(0.65 0 0)",
+      border: "oklch(0.3 0 0)",
+      dashBg: "oklch(0.15 0 0)",
+    },
+  }),
+
   // Deep coffee brown — rich and grounded
   defineTheme({
     id: "espresso",

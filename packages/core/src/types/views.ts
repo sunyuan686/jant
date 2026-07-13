@@ -171,6 +171,19 @@ export interface NavItemView {
   freshAt?: number;
 }
 
+export type SuggestedNavLinkTargetType = "page" | "collection" | "archive";
+
+export type SuggestedNavLinkNavItemType = "link" | "collection";
+
+export interface SuggestedNavLink {
+  key: string;
+  label: string;
+  url: string;
+  targetType: SuggestedNavLinkTargetType;
+  navItemType: SuggestedNavLinkNavItemType;
+  collectionId?: string;
+}
+
 /**
  * Search result from FTS5
  */
@@ -202,8 +215,8 @@ export interface SearchResultView {
 export interface TimelineItemView {
   post: PostView;
   threadPreview?: {
-    secondReply?: PostView;
-    penultimateReply?: PostView;
+    leadingReplies: PostView[];
+    trailingReplies: PostView[];
     latestReply: PostView;
     totalReplyCount: number;
   };

@@ -68,7 +68,8 @@ describe("getThreadPreviewState", () => {
 
     expect(
       getThreadPreviewState({
-        secondReply: latestReply,
+        leadingReplies: [latestReply],
+        trailingReplies: [],
         latestReply,
         totalReplyCount: 1,
       }),
@@ -77,29 +78,39 @@ describe("getThreadPreviewState", () => {
     });
   });
 
-  it("has no hidden posts for a 4-post thread when all four slots are visible", () => {
-    const secondReply = createPostView({
+  it("has no hidden posts for a 6-post thread when all slots are visible", () => {
+    const firstReply = createPostView({
       id: "post-2",
       permalink: "/post-2",
       slug: "post-2",
     });
-    const penultimateReply = createPostView({
+    const secondReply = createPostView({
       id: "post-3",
       permalink: "/post-3",
       slug: "post-3",
     });
-    const latestReply = createPostView({
+    const antepenultimateReply = createPostView({
       id: "post-4",
       permalink: "/post-4",
       slug: "post-4",
     });
+    const penultimateReply = createPostView({
+      id: "post-5",
+      permalink: "/post-5",
+      slug: "post-5",
+    });
+    const latestReply = createPostView({
+      id: "post-6",
+      permalink: "/post-6",
+      slug: "post-6",
+    });
 
     expect(
       getThreadPreviewState({
-        secondReply,
-        penultimateReply,
+        leadingReplies: [firstReply, secondReply],
+        trailingReplies: [antepenultimateReply, penultimateReply],
         latestReply,
-        totalReplyCount: 3,
+        totalReplyCount: 5,
       }),
     ).toEqual({
       hiddenCount: 0,
@@ -107,31 +118,41 @@ describe("getThreadPreviewState", () => {
   });
 
   it("counts hidden posts for longer threads after deduping visible slots", () => {
-    const secondReply = createPostView({
+    const firstReply = createPostView({
       id: "post-2",
       permalink: "/post-2",
       slug: "post-2",
     });
+    const secondReply = createPostView({
+      id: "post-3",
+      permalink: "/post-3",
+      slug: "post-3",
+    });
+    const antepenultimateReply = createPostView({
+      id: "post-7",
+      permalink: "/post-7",
+      slug: "post-7",
+    });
     const penultimateReply = createPostView({
-      id: "post-4",
-      permalink: "/post-4",
-      slug: "post-4",
+      id: "post-8",
+      permalink: "/post-8",
+      slug: "post-8",
     });
     const latestReply = createPostView({
-      id: "post-5",
-      permalink: "/post-5",
-      slug: "post-5",
+      id: "post-9",
+      permalink: "/post-9",
+      slug: "post-9",
     });
 
     expect(
       getThreadPreviewState({
-        secondReply,
-        penultimateReply,
+        leadingReplies: [firstReply, secondReply],
+        trailingReplies: [antepenultimateReply, penultimateReply],
         latestReply,
-        totalReplyCount: 4,
+        totalReplyCount: 8,
       }),
     ).toEqual({
-      hiddenCount: 1,
+      hiddenCount: 3,
     });
   });
 
@@ -191,7 +212,8 @@ describe("getThreadPreviewState", () => {
     const html = renderWithI18n(() =>
       ThreadPreview({
         rootPost,
-        secondReply,
+        leadingReplies: [secondReply],
+        trailingReplies: [],
         latestReply,
         totalReplyCount: 3,
       }),
@@ -214,18 +236,22 @@ describe("getThreadPreviewState", () => {
           summaryHtml: "<p>Root summary</p>",
           summaryHasMore: true,
         }),
-        secondReply: createPostView({
-          id: "post-2",
-          permalink: "/post-2",
-          slug: "post-2",
-          bodyHtml: "<p>Second</p>",
-        }),
-        penultimateReply: createPostView({
-          id: "post-4",
-          permalink: "/post-4",
-          slug: "post-4",
-          bodyHtml: "<p>Penultimate</p>",
-        }),
+        leadingReplies: [
+          createPostView({
+            id: "post-2",
+            permalink: "/post-2",
+            slug: "post-2",
+            bodyHtml: "<p>Second</p>",
+          }),
+        ],
+        trailingReplies: [
+          createPostView({
+            id: "post-4",
+            permalink: "/post-4",
+            slug: "post-4",
+            bodyHtml: "<p>Penultimate</p>",
+          }),
+        ],
         latestReply: createPostView({
           id: "post-5",
           permalink: "/post-5",
@@ -246,6 +272,37 @@ describe("getThreadPreviewState", () => {
     expect(html).toMatch(/data-label-less="[^"]+"/);
   });
 
+  it("renders at most six ordered posts with a gap between leading and trailing replies", () => {
+    const reply = (id: number) =>
+      createPostView({
+        id: `post-${id}`,
+        permalink: `/post-${id}`,
+        slug: `post-${id}`,
+        bodyHtml: `<p>Post ${id}</p>`,
+      });
+
+    const html = renderWithI18n(() =>
+      ThreadPreview({
+        rootPost: createPostView({ bodyHtml: "<p>Post 1</p>" }),
+        leadingReplies: [reply(2), reply(3)],
+        trailingReplies: [reply(6), reply(7)],
+        latestReply: reply(8),
+        totalReplyCount: 7,
+      }),
+    );
+
+    const visiblePosts = [1, 2, 3, 6, 7, 8];
+    for (const id of visiblePosts) {
+      expect(html).toContain(`<p>Post ${id}</p>`);
+    }
+    expect(html).toContain("2 more posts");
+    expect(visiblePosts.map((id) => html.indexOf(`<p>Post ${id}</p>`))).toEqual(
+      [...visiblePosts]
+        .map((id) => html.indexOf(`<p>Post ${id}</p>`))
+        .sort((left, right) => left - right),
+    );
+  });
+
   it("hides the show-more toggle on first paint for a short lone root that fits the cap", () => {
     // 2-post thread: the shell holds only the root. A short root genuinely
     // fits the height cap, so the toggle is rendered hidden to avoid flashing
@@ -257,6 +314,8 @@ describe("getThreadPreviewState", () => {
           bodyHtml: "<p>Root</p>",
           summary: "Root",
         }),
+        leadingReplies: [],
+        trailingReplies: [],
         latestReply: createPostView({
           id: "post-2",
           permalink: "/post-2",
@@ -285,6 +344,8 @@ describe("getThreadPreviewState", () => {
           bodyHtml: "<p>Root</p>",
           summary: "word ".repeat(60),
         }),
+        leadingReplies: [],
+        trailingReplies: [],
         latestReply: createPostView({
           id: "post-2",
           permalink: "/post-2",
@@ -308,12 +369,15 @@ describe("getThreadPreviewState", () => {
     const html = renderWithI18n(() =>
       ThreadPreview({
         rootPost: createPostView({ bodyHtml: "<p>Root</p>" }),
-        secondReply: createPostView({
-          id: "post-2",
-          permalink: "/post-2",
-          slug: "post-2",
-          bodyHtml: "<p>Second</p>",
-        }),
+        leadingReplies: [
+          createPostView({
+            id: "post-2",
+            permalink: "/post-2",
+            slug: "post-2",
+            bodyHtml: "<p>Second</p>",
+          }),
+        ],
+        trailingReplies: [],
         latestReply: createPostView({
           id: "post-3",
           permalink: "/post-3",
@@ -340,18 +404,22 @@ describe("getThreadPreviewState", () => {
     const html = renderWithI18n(() =>
       ThreadPreview({
         rootPost: createPostView({ bodyHtml: "<p>Root</p>" }),
-        secondReply: createPostView({
-          id: "post-2",
-          permalink: "/post-2",
-          slug: "post-2",
-          bodyHtml: "<p>Second</p>",
-        }),
-        penultimateReply: createPostView({
-          id: "post-4",
-          permalink: "/post-4",
-          slug: "post-4",
-          bodyHtml: "<p>Penultimate</p>",
-        }),
+        leadingReplies: [
+          createPostView({
+            id: "post-2",
+            permalink: "/post-2",
+            slug: "post-2",
+            bodyHtml: "<p>Second</p>",
+          }),
+        ],
+        trailingReplies: [
+          createPostView({
+            id: "post-4",
+            permalink: "/post-4",
+            slug: "post-4",
+            bodyHtml: "<p>Penultimate</p>",
+          }),
+        ],
         latestReply: createPostView({
           id: "post-5",
           permalink: "/post-5",
@@ -372,12 +440,15 @@ describe("getThreadPreviewState", () => {
     const html = renderWithI18n(() =>
       ThreadPreview({
         rootPost: createPostView({ bodyHtml: "<p>Root</p>" }),
-        penultimateReply: createPostView({
-          id: "post-4",
-          permalink: "/post-4",
-          slug: "post-4",
-          bodyHtml: "<p>Penultimate</p>",
-        }),
+        leadingReplies: [],
+        trailingReplies: [
+          createPostView({
+            id: "post-4",
+            permalink: "/post-4",
+            slug: "post-4",
+            bodyHtml: "<p>Penultimate</p>",
+          }),
+        ],
         latestReply: createPostView({
           id: "post-5",
           permalink: "/post-5",

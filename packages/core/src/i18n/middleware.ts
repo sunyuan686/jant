@@ -7,6 +7,7 @@ import type { I18n } from "@lingui/core";
 import {
   createI18n,
   baseLocale,
+  isLocale,
   isValidContentLanguage,
   normalizeContentLanguage,
   resolveCatalogLocale,
@@ -47,12 +48,14 @@ function isAdminPath(path: string): boolean {
  * Two related-but-distinct values are computed per request:
  *
  * - `lang` (used for `<html lang>` and RSS): the verbatim BCP 47 content
- *   language tag the operator configured. Accepts any tag — `fi`, `de`,
- *   `fr-CA`, etc. — independent of whether Jant has a dashboard catalog.
- * - The active i18n locale: the catalog Jant should render the dashboard in.
- *   Resolved from the content language via a fallback chain (exact catalog
- *   match → language family → `baseLocale`). On non-admin routes it is
- *   always `baseLocale` so public chrome stays English regardless.
+ *   language tag the operator configured (`SITE_LANGUAGE`). Accepts any tag —
+ *   `fi`, `de`, `fr-CA`, etc. — independent of whether Jant has a dashboard
+ *   catalog.
+ * - The active i18n locale: the catalog Jant renders the admin dashboard in.
+ *   Driven by the explicit `DASHBOARD_LANGUAGE` setting when set; otherwise it
+ *   falls back to deriving from the content language (exact catalog match →
+ *   language family → `baseLocale`). On non-admin routes it is always
+ *   `baseLocale` so public chrome stays English regardless.
  */
 export function i18nMiddleware(): MiddlewareHandler {
   return async (c, next) => {
@@ -60,8 +63,14 @@ export function i18nMiddleware(): MiddlewareHandler {
     const contentLang = isValidContentLanguage(rawSetting)
       ? normalizeContentLanguage(rawSetting)
       : baseLocale;
-    const catalogLocale = resolveCatalogLocale(contentLang);
-    const uiLang = isAdminPath(c.req.path) ? catalogLocale : baseLocale;
+    // Dashboard locale: explicit DASHBOARD_LANGUAGE wins; otherwise derive from
+    // the content language (the historical behaviour, so sites without the
+    // setting are unchanged).
+    const dashboardSetting = c.get("allSettings")?.DASHBOARD_LANGUAGE;
+    const dashboardLocale = isLocale(dashboardSetting)
+      ? dashboardSetting
+      : resolveCatalogLocale(contentLang);
+    const uiLang = isAdminPath(c.req.path) ? dashboardLocale : baseLocale;
     const i18n = createI18n(uiLang);
 
     c.set("lang", contentLang);

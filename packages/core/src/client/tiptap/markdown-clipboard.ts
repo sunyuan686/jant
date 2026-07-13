@@ -1,6 +1,7 @@
 import { createNodeFromContent, Extension } from "@tiptap/core";
 import { Fragment, Slice } from "@tiptap/pm/model";
 import { Plugin } from "@tiptap/pm/state";
+import { normalizeMarkdownDocument } from "../../lib/markdown-manager.js";
 
 function toFragment(
   content: ReturnType<typeof createNodeFromContent>,
@@ -62,7 +63,9 @@ export const MarkdownClipboard = Extension.create({
               event.clipboardData?.getData("text/plain")?.trim() ?? "";
             if (!text || !this.editor.markdown) return false;
 
-            const parsed = this.editor.markdown.parse(text);
+            const parsed = normalizeMarkdownDocument(
+              this.editor.markdown.parse(text),
+            );
             if (parsed.type !== "doc" || !parsed.content) return false;
 
             const content = createNodeFromContent(parsed, view.state.schema, {
@@ -82,7 +85,9 @@ export const MarkdownClipboard = Extension.create({
               return Slice.empty;
             }
 
-            const parsed = this.editor.markdown.parse(text);
+            const parsed = normalizeMarkdownDocument(
+              this.editor.markdown.parse(text),
+            );
             if (parsed.type !== "doc" || !parsed.content) {
               return Slice.empty;
             }

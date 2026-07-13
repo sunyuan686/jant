@@ -86,7 +86,7 @@ Public 页面（首页、Featured、Latest 等导航文案）当前固定为英�
 
 ## 为什么默认 `/feed` 是 Featured 而不是 Latest？
 
-Jant 把"发布到站点"和"广播给订阅者"看成两件事。默认 `/feed` 指向 Featured，让你可以写细碎记录而不打扰订阅者。要换回传统行为，**Settings → General → Feeds → Main RSS feed** 切到 Latest。三条 feed（`/feed/featured`、`/feed/latest`、`/archive/feed`）各管一段，详见 [写作与内容组织 § 为什么默认 feed 是 Featured](writing-and-organizing.md#为什么默认-feed-是-featured)。
+Jant 把"发布到站点"和"广播给订阅者"看成两件事。默认 `/feed` 指向 Featured，让你可以写细碎记录而不打扰订阅者。要换回传统行为，**Settings → General → Feeds → Main RSS feed** 切到 Latest。三条 feed（`/featured/feed`、`/latest/feed`、`/archive/feed`）各管一段，详见 [写作与内容组织 § 为什么默认 feed 是 Featured](writing-and-organizing.md#为什么默认-feed-是-featured)。
 
 ## 能挂在子路径下吗（例如 `example.com/blog`）？
 

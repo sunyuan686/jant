@@ -26,12 +26,29 @@ import {
   queueToastForNextPage,
 } from "./toast.js";
 import { openReplyForArticle } from "./compose-launch.js";
+import { hydratePartial } from "./hydrate-partial.js";
 import { getJsonString, readJsonObject } from "./json.js";
 import { uploadViaSession } from "./upload-session.js";
 import { publicPath } from "./runtime-paths.js";
 import { tiptapJsonToMarkdown } from "../lib/tiptap-to-markdown.js";
 import { getMediaCategory } from "../lib/upload.js";
-import { resolveInlineImageUrls } from "./tiptap/inline-image-upload.js";
+import {
+  resolveInlineImageUrls,
+  hasPendingInlineImagePlaceholders,
+} from "./tiptap/inline-image-upload.js";
+
+/**
+ * Whether a serialized post body still references inline image placeholders
+ * pending upload or paste-rehost. Drives the "uploading" toast and whether to
+ * resolve placeholders before submit.
+ */
+function bodyHasPendingInline(body: string): boolean {
+  try {
+    return hasPendingInlineImagePlaceholders(JSON.parse(body));
+  } catch {
+    return false;
+  }
+}
 
 function getComposeEditorFromEventTarget(
   target: globalThis.EventTarget | null,
@@ -75,6 +92,10 @@ async function refreshTimelineThreadView(
     if (!html) return false;
 
     content.innerHTML = html;
+    // Swapped-in markup carries interactions whose per-element setup only runs
+    // on DOMContentLoaded (thread "Show more" toggle, feed video autoplay, audio
+    // waveform); re-initialize them or they stay inert until a full reload.
+    hydratePartial(content);
     return true;
   } catch {
     return false;
@@ -97,6 +118,7 @@ async function refreshPostCardView(postId: string): Promise<boolean> {
       );
       if (!content) return false;
       content.innerHTML = html;
+      hydratePartial(content);
       return true;
     }
 
@@ -106,6 +128,11 @@ async function refreshPostCardView(postId: string): Promise<boolean> {
     if (!article) return false;
 
     article.outerHTML = html;
+    // outerHTML detaches `article`; re-query the replacement to hydrate it.
+    const nextArticle = document.querySelector<HTMLElement>(
+      `article[data-post-id="${postId}"]`,
+    );
+    if (nextArticle) hydratePartial(nextArticle);
     return true;
   } catch {
     return false;
@@ -125,6 +152,12 @@ async function refreshPostPageView(postId: string): Promise<boolean> {
     if (!html) return false;
 
     container.outerHTML = html;
+    // outerHTML detaches `container`; re-query the replacement to hydrate it
+    // (see refreshTimelineThreadView).
+    const next = document.querySelector<HTMLElement>(
+      `[data-post-view][data-post-view-id="${postId}"]`,
+    );
+    if (next) hydratePartial(next);
     return true;
   } catch {
     return false;
@@ -662,10 +695,10 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
   // Get labels for toast messages
   const labels = composeEl?.labels;
   const uploadingMsg = labels?.uploading ?? "Uploading...";
-  const hasInlineBlobs = detail.threadPosts
-    ? detail.threadPosts.some((p) => p.body.includes('"blob:'))
-    : detail.body.includes('"blob:');
-  const hasPending = detail.pendingAttachments.length > 0 || hasInlineBlobs;
+  const hasInlinePending = detail.threadPosts
+    ? detail.threadPosts.some((p) => bodyHasPendingInline(p.body))
+    : bodyHasPendingInline(detail.body);
+  const hasPending = detail.pendingAttachments.length > 0 || hasInlinePending;
   const publishedMsg = labels?.published ?? "Published!";
   const viewLabel = labels?.view ?? "View";
 
@@ -814,7 +847,7 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
       const resolvedPosts = await Promise.all(
         threadPosts.map(async (post) => {
           let body = post.body;
-          if (body.includes('"blob:')) {
+          if (bodyHasPendingInline(body)) {
             try {
               const bodyJson = JSON.parse(body);
               const resolved = await resolveInlineImageUrls(bodyJson);
@@ -923,8 +956,9 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
       mediaClientIdMap,
     );
 
-    // Resolve any blob: inline image URLs to real URLs before submitting
-    if (hasInlineBlobs) {
+    // Resolve any pending inline image placeholders (blob upload + paste rehost)
+    // to their stored URLs before submitting.
+    if (hasInlinePending) {
       try {
         const bodyJson = JSON.parse(detail.body);
         const resolved = await resolveInlineImageUrls(bodyJson);

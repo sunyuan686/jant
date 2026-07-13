@@ -8,6 +8,8 @@ interface TiptapNode {
   type: string;
   attrs?: Record<string, unknown>;
   content?: TiptapNode[];
+  marks?: Array<{ type: string; attrs?: Record<string, unknown> }>;
+  text?: string;
 }
 
 function findNode(node: TiptapNode, type: string): TiptapNode | null {
@@ -84,5 +86,64 @@ describe("markdown round-trip: htmlBlock", () => {
     const out = serializeMarkdownDocument(parseMarkdownDocument(md)).trim();
     expect(out).toContain("```jant-html");
     expect(out).toContain(inner);
+  });
+});
+
+describe("markdown manager integration", () => {
+  it("round-trips ordered-list numbering and nested inline formatting", () => {
+    const markdown = [
+      "5. **Five**",
+      "6. Six",
+      "   1. *Nested one*",
+      "   2. Nested two",
+    ].join("\n");
+
+    const parsed = parseMarkdownDocument(markdown) as TiptapNode;
+    const outerList = findNode(parsed, "orderedList");
+    expect(outerList?.attrs?.start).toBe(5);
+    expect(outerList?.content).toHaveLength(2);
+    const nestedList = findNode(
+      outerList?.content?.[1] ?? parsed,
+      "orderedList",
+    );
+    expect(nestedList?.attrs?.start ?? 1).toBe(1);
+    expect(nestedList?.content).toHaveLength(2);
+
+    const serialized = serializeMarkdownDocument(parsed);
+    expect(serialized).toContain("5. **Five**");
+    expect(serialized).toContain("6. Six");
+    expect(parseMarkdownDocument(serialized)).toEqual(parsed);
+  });
+
+  it("round-trips table, image, link, and footnote integrations", () => {
+    const markdown = [
+      "[Source](https://example.com)",
+      "",
+      "| Name | Value |",
+      "| --- | --- |",
+      "| Jant | 1 |",
+      "",
+      '![Alt text](https://example.com/image.png "Title")',
+      "",
+      "Body[^note]",
+      "",
+      "[^note]: Footnote body",
+    ].join("\n");
+
+    const parsed = parseMarkdownDocument(markdown) as TiptapNode;
+    expect(findNode(parsed, "table")).not.toBeNull();
+    expect(findNode(parsed, "image")?.attrs).toMatchObject({
+      src: "https://example.com/image.png",
+      alt: "Alt text",
+      title: "Title",
+    });
+    expect(findNode(parsed, "footnoteReference")?.attrs?.label).toBe("note");
+    expect(findNode(parsed, "footnoteDefinition")?.attrs?.label).toBe("note");
+    const linkedText = findNode(parsed, "text");
+    expect(linkedText?.marks?.[0]?.type).toBe("link");
+    expect(linkedText?.marks?.[0]?.attrs?.href).toBe("https://example.com");
+
+    const serialized = serializeMarkdownDocument(parsed);
+    expect(parseMarkdownDocument(serialized)).toEqual(parsed);
   });
 });

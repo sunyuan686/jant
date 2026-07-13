@@ -92,6 +92,49 @@ function getAtomTitle(post: PostView): string {
   return post.title || "";
 }
 
+interface SinglePostContentOptions {
+  /**
+   * Inline posts do not have their own Atom entry title/link, so their visible
+   * feed HTML must carry title and link metadata that top-level entries expose
+   * through Atom fields.
+   */
+  inline?: boolean;
+}
+
+function renderLinkedText(text: string, href?: string): string {
+  const label = escapeXml(text);
+  return href ? `<a href="${escapeXml(href)}">${label}</a>` : label;
+}
+
+function renderInlinePostHeader(
+  post: PostView,
+  permalinkUrl?: string,
+): string[] {
+  if (post.format === "quote") return [];
+
+  const parts: string[] = [];
+
+  if (post.format === "link") {
+    const linkUrl = post.url || "";
+    const domain = linkUrl ? extractDisplayDomain(linkUrl) || linkUrl : "";
+    if (domain) {
+      parts.push(`<p>${renderLinkedText(domain, linkUrl)}</p>`);
+    }
+    if (post.title) {
+      parts.push(
+        `<h2>${renderLinkedText(post.title, linkUrl || permalinkUrl)}</h2>`,
+      );
+    }
+    return parts;
+  }
+
+  if (post.title) {
+    parts.push(`<h2>${renderLinkedText(post.title, permalinkUrl)}</h2>`);
+  }
+
+  return parts;
+}
+
 /**
  * Render a star rating as HTML for feed content.
  */
@@ -187,9 +230,12 @@ function renderMediaItem(item: MediaView, postPermalinkUrl?: string): string {
         : "";
     // Prefix the caption with a ▶ glyph as a video cue. A CSS overlay would
     // be stripped by most feed-reader sanitizers, so a plain-text play
-    // character is the only marker that renders reliably everywhere.
-    const label = `▶ Watch video${meta ? ` · ${meta}` : ""}`;
-    return `<figure><a href="${url}"><img src="${escapeXml(poster)}" alt="${escapeXml(altText || name)}"${dims}/></a><figcaption>${escapeXml(label)}</figcaption></figure>`;
+    // character is the only marker that renders reliably everywhere. Link
+    // only the "Watch video" action label (so it's clickable like the
+    // thumbnail and reads cleanly to screen readers); metadata stays outside
+    // the link in parens, matching the audio/text/document attachment style.
+    const metaSuffix = meta ? ` (${escapeXml(meta)})` : "";
+    return `<figure><a href="${url}"><img src="${escapeXml(poster)}" alt="${escapeXml(altText || name)}"${dims}/></a><figcaption><a href="${url}">▶ Watch video</a>${metaSuffix}</figcaption></figure>`;
   }
 
   if (category === "audio") {
@@ -239,9 +285,18 @@ function renderMediaForFeed(
  *
  * @param post - Post view data
  * @param permalinkUrl - Absolute permalink URL back to the blog post
+ * @param options - Rendering options for top-level versus inline posts
  */
-function buildSinglePostContent(post: PostView, permalinkUrl?: string): string {
+function buildSinglePostContent(
+  post: PostView,
+  permalinkUrl?: string,
+  options: SinglePostContentOptions = {},
+): string {
   const parts: string[] = [];
+
+  if (options.inline) {
+    parts.push(...renderInlinePostHeader(post, permalinkUrl));
+  }
 
   if (post.format === "quote" && post.quoteText) {
     const sourceName = post.title || "";
@@ -313,10 +368,18 @@ function buildFeedContent(
     parts.push(
       `<p><small><time datetime="${escapeXml(reply.publishedAt)}">${escapeXml(reply.publishedAtFormatted)}</time></small></p>`,
     );
-    parts.push(buildSinglePostContent(reply, replyPermalink));
+    parts.push(buildSinglePostContent(reply, replyPermalink, { inline: true }));
   }
 
   return parts.join("\n");
+}
+
+function getEntryMedia(post: FeedPostView): MediaView[] {
+  const media = [...post.media];
+  for (const reply of post.threadReplies ?? []) {
+    media.push(...reply.media);
+  }
+  return media;
 }
 
 /**
@@ -351,7 +414,7 @@ export function defaultFeedRenderer(data: FeedData): string {
       // One <link rel="enclosure"> per attachment so podcast/offline readers
       // can fetch them. Atom omits length when size is unknown; mimeType is
       // always known from the upload pipeline.
-      const enclosureLinks = post.media
+      const enclosureLinks = getEntryMedia(post)
         .map((m) => {
           const lengthAttr =
             m.size != null && m.size > 0 ? ` length="${m.size}"` : "";

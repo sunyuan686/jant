@@ -62,4 +62,39 @@ describe("Block insertion flow", () => {
     expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
     expect(editor.state.selection.$from.parentOffset).toBe(0);
   });
+
+  it("renders a removable placeholder when an image fails to load", () => {
+    const editor = createEditor();
+
+    editor.commands.focus("start");
+    expect(editor.commands.setImage({ src: "/uploads/missing.webp" })).toBe(
+      true,
+    );
+
+    const figure = document.querySelector<HTMLElement>(".tiptap-image-figure");
+    const img = figure?.querySelector<HTMLImageElement>("img");
+    if (!figure || !img) {
+      throw new Error("expected image node view");
+    }
+
+    img.dispatchEvent(new Event("error"));
+
+    expect(figure.dataset.loadState).toBe("missing");
+    expect(figure.textContent).toContain("Image unavailable");
+
+    const deleteButton = figure.querySelector<HTMLButtonElement>(
+      ".tiptap-image-missing-delete",
+    );
+    if (!deleteButton) {
+      throw new Error("expected broken image delete button");
+    }
+
+    deleteButton.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+    );
+
+    expect(
+      editor.getJSON().content?.some((node) => node.type === "image"),
+    ).toBe(false);
+  });
 });

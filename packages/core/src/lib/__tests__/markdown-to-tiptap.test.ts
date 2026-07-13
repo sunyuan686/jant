@@ -119,6 +119,10 @@ describe("markdownToTiptapJson", () => {
     it("converts footnote definitions into dedicated block nodes", () => {
       const doc = parse("Body[^1]\n\n[^1]: Footnote body");
 
+      expect(doc.content[0].content).toEqual([
+        { type: "text", text: "Body" },
+        { type: "footnoteReference", attrs: { label: "1" } },
+      ]);
       expect(doc.content[1].type).toBe("footnoteDefinition");
       expect(doc.content[1].attrs.label).toBe("1");
       expect(doc.content[1].content[0].type).toBe("paragraph");
@@ -399,7 +403,7 @@ describe("end-to-end: Markdown → markdownToTiptapJson → renderTiptapJson", (
     const html = renderTiptapJson(json);
 
     expect(html).toContain(
-      '<label for="sn-1" class="margin-toggle sidenote-number">',
+      '<label for="sn-1" class="margin-toggle sidenote-number footref">',
     );
     expect(html).toContain('<span class="sidenote">Footnote body</span>');
     expect(html).not.toContain('<section class="footnotes"');

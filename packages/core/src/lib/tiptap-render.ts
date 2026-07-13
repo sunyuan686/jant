@@ -113,9 +113,13 @@ function renderSidenoteReference(
     ? stripSingleParagraph(context.renderChildren(definitionNode.content))
     : "";
 
+  // The `footref` / `footref-toggle` classes are not styled by us; they mark the
+  // Tufte sidenote trio as an Org-mode-style footnote so HTML-to-Markdown readers
+  // (Defuddle, used by Obsidian Web Clipper) recover `[^n]` references instead of
+  // silently dropping `span.sidenote`. See docs/internal/markdown-contract.md.
   return (
-    `<label for="sn-${escapeHtml(footnoteId)}" class="margin-toggle sidenote-number"></label>` +
-    `<input type="checkbox" id="sn-${escapeHtml(footnoteId)}" class="margin-toggle"/>` +
+    `<label for="sn-${escapeHtml(footnoteId)}" class="margin-toggle sidenote-number footref"></label>` +
+    `<input type="checkbox" id="sn-${escapeHtml(footnoteId)}" class="margin-toggle footref-toggle"/>` +
     `<span class="sidenote">${bodyHtml}</span>`
   );
 }

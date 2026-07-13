@@ -88,7 +88,6 @@ export function makeSiteConfig(over: Partial<SiteConfig> = {}): SiteConfig {
     siteDescription: "Export fixture",
     siteLanguage: "en",
     showJantBrandingOnHome: true,
-    homeDefaultView: "latest",
     mainRssFeed: "latest",
     siteFooter: "",
     showHeaderAvatar: false,

@@ -324,6 +324,42 @@ export const media = pgTable(
   ],
 );
 
+/**
+ * Recycle bin for deleted media storage objects. When media is deleted we
+ * hard-remove the DB row and immediately delete the object from its original
+ * (public) key — so the original URL 404s right away — but first move the bytes
+ * to a `trash/` key recorded here. The cleanup sweep deletes the trash object
+ * once `purge_after` elapses. `original_key` records where the object lived so
+ * it can be restored within the window. Only used when the storage driver
+ * supports server-side copy; otherwise deletes are immediate with no recycle.
+ */
+export const storagePurge = pgTable(
+  "storage_purge",
+  {
+    id: text("id").primaryKey(),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    storageKey: text("storage_key").notNull(),
+    originalKey: text("original_key").notNull(),
+    reason: text("reason"),
+    purgeAfter: integer("purge_after").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("uq_storage_purge_provider_key").on(
+      table.provider,
+      table.storageKey,
+    ),
+    index("idx_storage_purge_site_provider_due").on(
+      table.siteId,
+      table.provider,
+      table.purgeAfter,
+    ),
+  ],
+);
+
 export const uploadSessions = pgTable(
   "upload_session",
   {

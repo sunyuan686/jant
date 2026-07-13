@@ -35,7 +35,7 @@ export interface Bindings {
   SITE_NAME?: EnvBindingValue;
   SITE_DESCRIPTION?: EnvBindingValue;
   SITE_LANGUAGE?: EnvBindingValue;
-  HOME_DEFAULT_VIEW?: EnvBindingValue;
+  DASHBOARD_LANGUAGE?: EnvBindingValue;
   MAIN_RSS_FEED?: EnvBindingValue;
   TIME_ZONE?: EnvBindingValue;
   SITE_FOOTER?: EnvBindingValue;

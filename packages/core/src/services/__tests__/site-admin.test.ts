@@ -46,6 +46,50 @@ describe("SiteAdminService", () => {
     expect(siteRows).toEqual([{ key: "demo-cloud" }]);
   });
 
+  it("preserves valid browser timezones during managed site creation", async () => {
+    const { db, sqlite } = createTestDatabase();
+    const service = createSiteAdminService(db, sqliteSchemaBundle, "sqlite", {
+      siteResolutionMode: "host-based",
+    });
+
+    const created = await service.createManagedSite({
+      key: "timezone-site",
+      primaryHost: "timezone-site.example.com",
+      siteName: "Timezone Site",
+      timeZone: "Etc/GMT-8",
+    });
+
+    const timeZone = sqlite
+      .prepare(
+        'SELECT "value" FROM "site_setting" WHERE "site_id" = ? AND "key" = \'TIME_ZONE\'',
+      )
+      .get(created.site.id) as { value: string } | undefined;
+
+    expect(timeZone?.value).toBe("Etc/GMT-8");
+  });
+
+  it("falls back to UTC when optional provisioning timezone metadata is invalid", async () => {
+    const { db, sqlite } = createTestDatabase();
+    const service = createSiteAdminService(db, sqliteSchemaBundle, "sqlite", {
+      siteResolutionMode: "host-based",
+    });
+
+    const created = await service.createManagedSite({
+      key: "fallback-site",
+      primaryHost: "fallback-site.example.com",
+      siteName: "Fallback Site",
+      timeZone: "Unknown/Zone",
+    });
+
+    const timeZone = sqlite
+      .prepare(
+        'SELECT "value" FROM "site_setting" WHERE "site_id" = ? AND "key" = \'TIME_ZONE\'',
+      )
+      .get(created.site.id) as { value: string } | undefined;
+
+    expect(timeZone).toBeUndefined();
+  });
+
   it("returns the existing site when replayed with the same idempotency key", async () => {
     const { db } = createTestDatabase();
     const service = createSiteAdminService(db, sqliteSchemaBundle, "sqlite", {

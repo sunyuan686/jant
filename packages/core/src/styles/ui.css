@@ -848,7 +848,7 @@
       display: flex;
     }
 
-    .site-header-more-divider-responsive {
+    .site-header-more-divider-show-lg {
       display: block;
     }
   }
@@ -865,6 +865,10 @@
     .site-header-more-link-show-md {
       display: flex;
     }
+
+    .site-header-more-divider-show-md {
+      display: block;
+    }
   }
 
   @media (max-width: 580px) {
@@ -878,6 +882,10 @@
 
     .site-header-more-link-show-sm {
       display: flex;
+    }
+
+    .site-header-more-divider-show-sm {
+      display: block;
     }
   }
 
@@ -2205,8 +2213,16 @@
   }
 
   .feed-continue-link {
-    display: inline-block;
-    margin-top: 0.5rem;
+    /* Block so the whole content-width row is the tap target, not just the few
+       characters of "Read more". On mobile the trailing link on the last
+       summary line sits just above this control, so taps aimed here used to
+       land on that link. The larger `margin-top` is a dead (non-clickable)
+       buffer that separates the prose's trailing link from the control, and
+       `padding-bottom` grows the tap area downward, away from the footer
+       links below. Appearance is unchanged — only the hit area and spacing. */
+    display: block;
+    margin-top: 1rem;
+    padding-bottom: 0.6rem;
     font-size: var(--type-ui-meta);
     color: var(--site-text-secondary);
   }
@@ -2215,14 +2231,27 @@
     text-decoration: underline;
   }
 
+  /* Untitled note expand-in-place. The full body is rendered with a zero-width
+     `data-note-break` marker at the summary boundary; clamping hides only the
+     marker's following siblings, leaving the visible summary untouched so the
+     note grows in place without the page jumping. note-expand.ts toggles
+     `data-note-clamp` to reveal/hide the tail. */
+  [data-note-break] {
+    display: none;
+  }
+
+  [data-note-clamp] [data-note-break] ~ * {
+    display: none;
+  }
+
   .post-header-block {
-    margin-bottom: 1rem;
+    margin-bottom: 1.7rem;
   }
 
   .post-header-block-detail {
     display: flex;
     flex-direction: column;
-    gap: 0.55rem;
+    gap: 0.7rem;
   }
 
   .post-header-block .feed-link-title,
@@ -2256,7 +2285,7 @@
   .post-header-meta-link {
     color: var(--site-text-secondary);
     font-family: var(--font-ui);
-    font-size: var(--type-ui-meta);
+    font-size: var(--type-ui-hint);
     text-decoration: none;
     white-space: nowrap;
   }
@@ -2303,19 +2332,13 @@
   [data-page="post"] .feed-quote-attribution,
   [data-page="post"] .post-header-meta-row,
   [data-page="post"] .post-header-meta-link,
-  [data-page="post"] .post-header-meta-link time,
-  [data-page="post"] [data-post-meta],
-  [data-page="post"] [data-post-meta] .post-footer-meta,
-  [data-page="post"] [data-post-meta] a,
-  [data-page="post"] [data-post-meta] time {
+  [data-page="post"] .post-header-meta-link time {
     color: var(--site-reading-meta);
   }
 
   [data-page="post"] .feed-link-domain:hover,
   [data-page="post"] .feed-quote-source:hover,
-  [data-page="post"] .post-header-meta-link:hover,
-  [data-page="post"] [data-post-meta] a:hover,
-  [data-page="post"] [data-post-meta] .post-footer-external-link:hover {
+  [data-page="post"] .post-header-meta-link:hover {
     color: var(--site-reading-body);
   }
 
@@ -2331,16 +2354,39 @@
 
   .sidenote,
   .marginnote {
+    /* Layout: float into the right margin. A floated note anchors to its containing
+       block's right *content* edge, so if a theme gives that block inline-end padding
+       (e.g. a padded blockquote card) the anchor is inset and the note drifts left.
+       Themes expose that inset via --sidenote-anchor-inset (default 0) — best derived
+       from the same token that sets the padding — so the note still reaches the gutter
+       no matter how the container is indented. Core's own blocks add no inset. */
     float: right;
     clear: right;
-    margin-right: var(--layout-sidenote-margin);
+    margin-right: calc(
+      var(--layout-sidenote-margin) - var(--sidenote-anchor-inset, 0px)
+    );
     width: var(--layout-sidenote-width);
     margin-top: 0.3rem;
-    margin-bottom: 0;
-    font-size: var(--type-secondary);
-    line-height: 1.3;
+    /* Breathing room so multiple notes from one paragraph don't touch when they stack. */
+    margin-bottom: 1.4rem;
     vertical-align: baseline;
     position: relative;
+
+    /* Typographic isolation. A footnote is an annotation, not part of the text it
+       hangs off of, so it must render identically no matter what its reference sits
+       inside. The body span is emitted at the reference position (see tiptap-render
+       renderSidenoteReference), so when the [^n] is inside a blockquote / bold run /
+       heading the span inherits that context. Pin every inheritable type property to
+       the canonical note look to cut every such leak — not just the blockquote
+       serif+italic case. */
+    font-family: var(--font-body);
+    font-size: var(--type-sm);
+    font-style: normal;
+    font-weight: 400;
+    font-variant: normal;
+    line-height: 1.3;
+    letter-spacing: var(--type-body-tracking, normal);
+    text-align: left;
     color: var(--site-reading-meta);
   }
 
@@ -2358,25 +2404,22 @@
     content: counter(sidenote-counter);
     font-size: var(--type-code);
     top: -0.5rem;
-    left: 0.1rem;
+    /* Real margins (not `left`, which reserves no space) so the superscript
+       number keeps a gap from the words on both sides — matters for CJK, which
+       has no inter-word spacing. */
+    margin-left: 0.1rem;
+    margin-right: 0.25rem;
   }
 
   .sidenote::before {
     content: counter(sidenote-counter) " ";
-    font-size: var(--type-code);
+    font-size: var(--type-xs);
     top: -0.5rem;
   }
 
   .sidenote > code,
   .marginnote > code {
     font-size: var(--type-code);
-  }
-
-  blockquote .sidenote,
-  blockquote .marginnote {
-    margin-right: -82%;
-    min-width: 59%;
-    text-align: left;
   }
 
   input.margin-toggle {
@@ -2392,7 +2435,12 @@
     display: none;
   }
 
-  @media (max-width: 760px) {
+  /* Collapse sidenotes from floated margin notes to inline tap-to-toggle at the
+     same width the post column drops to `min(100%, 35rem)` (preset.css) and the
+     Tufte gutter disappears — see --layout-content-width in tokens.css. Below
+     1024px a floated `width: 50%; margin-right: -60%` note has no gutter to land
+     in and overflows the right edge, so it must inline instead. */
+  @media (max-width: 1024px) {
     label.margin-toggle:not(.sidenote-number) {
       display: inline;
       cursor: pointer;
@@ -2637,13 +2685,28 @@
      secondary to the focused post but not so much that text becomes gray
      and hard to read. Combined with the mask-image bottom fade this gives
      a "context drifts into the background" effect without dimming the
-     whole shell to the point of illegibility. */
-  .thread-context-shell {
+     whole shell to the point of illegibility.
+
+     Fade per item, not the whole shell: a blanket `opacity` on the shell
+     makes it a stacking context that *caps* descendant opacity, so the gap
+     marker ("N more posts") could never read brighter than the faded
+     context around it. Fading each item individually leaves the gap — a
+     real route into the rest of the thread, not background context — at
+     full strength. The items cover everything inside the shell (feed:
+     context + gap; detail page: ancestor detail items), so nothing slips
+     through undimmed. */
+  .thread-context-shell .thread-item {
     opacity: 0.6;
     transition: opacity 0.22s ease;
   }
 
-  .thread-context-shell:not([data-collapsed]) {
+  .thread-context-shell:not([data-collapsed]) .thread-item {
+    opacity: 1;
+  }
+
+  /* The gap is a structural "thread continues here" marker — never faded,
+     collapsed or expanded. */
+  .thread-context-shell .thread-item.thread-item-gap {
     opacity: 1;
   }
 
@@ -2708,31 +2771,76 @@
     padding-bottom: 0.35rem;
   }
 
+  /* Gap marker on the rail: swap the single post dot for a short column of
+     small beads (a vertical "⋮") so the thread line visibly "skips" a run
+     of posts — the familiar threaded-conversation cue for collapsed
+     content. Smaller and quieter than the real post dots, sitting on the
+     same rail x-position. The continuous rail line still shows through
+     behind the beads, so thread continuity reads intact. */
+  .thread-group-preview .thread-item-gap::before,
+  .thread-group-detail .thread-item-gap::before {
+    top: 50%;
+    transform: translateY(-50%);
+    left: calc(
+      var(--site-thread-rail-line-left) + var(--site-thread-rail-line-width) /
+        2 - 2px - var(--site-thread-rail-indent)
+    );
+    width: 4px;
+    height: 24px;
+    border: 0;
+    border-radius: 0;
+    background: radial-gradient(
+      circle,
+      var(--site-threadline) 1.75px,
+      transparent 2px
+    );
+    background-size: 4px 8px;
+    background-repeat: repeat-y;
+    background-position: center top;
+    box-shadow: none;
+  }
+
+  /* "N more posts" — a calm route into the rest of the thread, styled as a
+     sibling of `.thread-context-toggle` (same muted colour + size) rather
+     than a pill or an underlined link. A small chevron does the "this is
+     tappable / leads somewhere" work an underline does poorly on a short
+     standalone label; it points right because the link navigates into the
+     thread rather than expanding in place. Full opacity keeps it from
+     fading into the context above. */
   .thread-gap-link {
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    padding: 0.38rem 0.78rem;
-    border: 1px dashed var(--site-thread-context-border);
-    border-radius: 999px;
-    background: var(--site-thread-gap-bg);
+    gap: 0.4rem;
+    padding: 0.25rem 0;
     color: var(--site-text-secondary);
     font-size: var(--type-thread-context-meta);
-    line-height: 1.3;
+    font-weight: 500;
+    line-height: 1.2;
     text-decoration: none;
+    transition: color 0.18s ease;
+  }
+
+  .thread-gap-link::after {
+    content: "";
+    width: 0.36em;
+    height: 0.36em;
+    border: 1.5px solid currentColor;
+    border-left: 0;
+    border-bottom: 0;
+    opacity: 0.65;
+    transform: rotate(45deg);
     transition:
-      border-color 0.18s ease,
-      color 0.18s ease,
-      background-color 0.18s ease;
+      transform 0.18s ease,
+      opacity 0.18s ease;
   }
 
   .thread-gap-link:hover {
-    border-color: color-mix(
-      in srgb,
-      var(--site-accent) 22%,
-      var(--site-divider)
-    );
     color: var(--site-text-primary);
+  }
+
+  .thread-gap-link:hover::after {
+    opacity: 1;
+    transform: translateX(2px) rotate(45deg);
   }
 
   .thread-item-hero {
@@ -2838,8 +2946,8 @@
     padding-left: 0;
     font-family: var(--font-serif);
     color: var(--site-text-primary);
-    font-size: var(--type-content-subtitle);
-    line-height: var(--type-heading-leading);
+    font-size: var(--type-content-quote);
+    line-height: var(--type-content-quote-leading);
     white-space: pre-line;
     text-wrap: pretty;
   }
@@ -2889,6 +2997,10 @@
     font-family: var(--font-ui);
     font-size: var(--type-ui-meta);
     line-height: 1.3;
+  }
+
+  .feed-quote-attribution:has(+ .post-menu-footer) {
+    margin-bottom: 0.45rem;
   }
 
   .feed-quote-attribution::before {
@@ -3069,8 +3181,15 @@
 
   .post-footer-detail {
     margin-top: 24px;
-    font-size: var(--type-ui-meta);
+    font-size: var(--type-ui-hint);
     color: var(--site-text-secondary);
+  }
+
+  /* A standalone detail footer needs extra breathing room to close the
+     reading surface. Thread entries keep a smaller content gap so their
+     metadata stays connected without crowding the post body. */
+  .thread-group-detail .post-footer-detail {
+    margin-top: var(--content-gap);
   }
 
   .post-footer-meta {
@@ -4429,6 +4548,7 @@
     --compose-title-input-size: var(--type-content-subtitle);
     --compose-title-input-leading: var(--type-display-leading);
     --compose-quote-input-size: var(--type-content-subtitle);
+    --compose-quote-input-leading: 1.32;
     --compose-inline-input-size: var(--type-ui-input);
     --compose-panel-label-size: var(--type-ui-control);
     --compose-panel-hint-size: var(--type-ui-hint);
@@ -5095,7 +5215,7 @@
     font-size: var(--compose-quote-input-size);
     font-style: normal;
     font-weight: var(--fw-regular);
-    line-height: 1.32;
+    line-height: var(--compose-quote-input-leading);
     letter-spacing: -0.02em;
     min-height: 9rem;
     padding-top: 0.5rem;
@@ -5318,6 +5438,30 @@
     color: var(--site-text-primary);
   }
 
+  .compose-attached-done {
+    margin-left: auto;
+    padding: 6px 14px;
+    border: none;
+    border-radius: 8px;
+    background-color: var(--site-text-primary);
+    color: var(--site-elevated-bg);
+    font-size: var(--type-ui-control);
+    font-weight: var(--fw-medium);
+    line-height: 1.25;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+
+  .compose-attached-done:hover {
+    opacity: 0.82;
+  }
+
+  .compose-attached-done:focus-visible {
+    outline: 2px solid
+      color-mix(in srgb, var(--site-text-primary) 24%, transparent);
+    outline-offset: 2px;
+  }
+
   .compose-attached-tiptap {
     flex: 1;
     min-height: 0;
@@ -5327,6 +5471,10 @@
 
   .compose-attached-tiptap .tiptap {
     min-height: 100%;
+  }
+
+  .compose-attached-tiptap .tiptap > :first-child {
+    margin-top: 0;
   }
 
   .compose-attached-tiptap::-webkit-scrollbar {
@@ -6901,11 +7049,26 @@
     max-width: 100%;
   }
 
+  .compose-attachment:has(.compose-attachment-preview-fallback) {
+    width: 112px;
+  }
+
+  .compose-attachment:only-child:has(.compose-attachment-preview-fallback) {
+    width: min(100%, 160px);
+  }
+
   .compose-attachment-thumb {
     position: relative;
     border-radius: var(--media-radius, 0.5rem);
     overflow: hidden;
     background-color: var(--site-nav-hover-bg);
+  }
+
+  .compose-attachment:has(.compose-attachment-preview-fallback)
+    .compose-attachment-thumb,
+  .compose-attachment:has(.compose-attachment-preview-fallback)
+    .compose-attachment-sortable {
+    width: 100%;
   }
 
   .compose-attachment-sortable {
@@ -6958,8 +7121,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 120px;
-    aspect-ratio: 1 / 1;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    padding: 10px;
     border: 1px solid color-mix(in srgb, var(--site-divider) 88%, transparent);
     border-radius: var(--media-radius, 0.5rem);
     background: linear-gradient(
@@ -6971,7 +7137,22 @@
   }
 
   .compose-attachment-preview-fallback svg {
+    width: 24px;
+    height: 24px;
     opacity: 0.82;
+  }
+
+  .compose-attachment-preview-fallback-label {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--site-text-secondary);
+    font-family: var(--font-ui);
+    font-size: var(--type-2xs);
+    font-weight: var(--fw-medium);
+    line-height: 1.2;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Single image: constrain to container width. min-width keeps the preview
@@ -6986,8 +7167,7 @@
   }
 
   .compose-attachment:only-child .compose-attachment-preview-fallback {
-    width: min(100%, 320px);
-    max-width: 100%;
+    width: 100%;
     aspect-ratio: 4 / 3;
   }
 
@@ -7000,8 +7180,13 @@
   }
 
   .compose-attachment:not(:only-child) .compose-attachment-preview-fallback {
-    width: 150px;
-    aspect-ratio: 3 / 4;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+  }
+
+  .compose-attachment:only-child .compose-attachment-preview-fallback svg {
+    width: 28px;
+    height: 28px;
   }
 
   .compose-attachment-overlay {
@@ -7090,6 +7275,14 @@
       box-shadow 0.18s ease;
   }
 
+  .compose-attachment:has(.compose-attachment-preview-fallback)
+    .compose-attachment-remove {
+    top: 5px;
+    right: 5px;
+    width: 24px;
+    height: 24px;
+  }
+
   .compose-attachment-remove:hover {
     transform: translateY(-0.5px);
     background-color: color-mix(in srgb, black 58%, transparent);
@@ -7113,6 +7306,13 @@
     height: 11px;
     flex-shrink: 0;
     pointer-events: none;
+  }
+
+  .compose-attachment:has(.compose-attachment-preview-fallback)
+    .compose-attachment-remove
+    svg {
+    width: 12px;
+    height: 12px;
   }
 
   .compose-attachment-alt {
@@ -7322,6 +7522,53 @@
     position: relative;
   }
 
+  .compose-reply-compose-layout {
+    --compose-title-input-size: var(--type-content-subtitle);
+    --compose-title-input-leading: 1.35;
+    --compose-quote-input-size: calc(var(--type-content-body) * 1.06);
+    --compose-quote-input-leading: 1.42;
+    --compose-inline-input-size: var(--type-base);
+  }
+
+  .compose-reply-compose-layout .compose-quote-wrap {
+    margin-top: 0.4rem;
+    padding: 24px 18px 18px;
+    border-radius: 0.95rem;
+  }
+
+  .compose-reply-compose-layout .compose-link-url-wrap {
+    margin-top: 0.4rem;
+  }
+
+  .compose-reply-compose-layout .compose-quote-mark {
+    top: 0.58rem;
+    left: 0.9rem;
+    width: 1.55rem;
+  }
+
+  .compose-reply-compose-layout .compose-quote-text {
+    min-height: 6.5rem;
+    padding-top: 0.35rem;
+  }
+
+  @media (min-width: 700px) {
+    .compose-reply-compose-layout .compose-quote-wrap {
+      padding: 25px 20px 18px;
+      border-radius: 1rem;
+    }
+
+    .compose-reply-compose-layout .compose-quote-mark {
+      top: 0.62rem;
+      left: 1rem;
+      width: 1.6rem;
+    }
+
+    .compose-reply-compose-layout .compose-quote-text {
+      min-height: 6.5rem;
+      padding-top: 0.35rem;
+    }
+  }
+
   /* Continuous vertical line through the rail */
   .compose-thread-layout::before {
     content: "";
@@ -7384,6 +7631,92 @@
     background: transparent;
   }
 
+  .compose-reply-compose-layout .compose-editor-row .compose-attachments-dock {
+    --compose-reply-attachment-width: 96px;
+    --compose-reply-attachment-height: 72px;
+
+    max-height: min(116px, 18dvh);
+    padding-block: 4px 2px;
+  }
+
+  .compose-reply-compose-layout .compose-editor-row .compose-attachments {
+    gap: 6px;
+    padding-block: 0;
+  }
+
+  .compose-reply-compose-layout .compose-editor-row .compose-attachment {
+    gap: 2px;
+    max-width: none;
+  }
+
+  .compose-reply-compose-layout
+    .compose-editor-row
+    .compose-attachment:has(.compose-attachment-preview-fallback) {
+    width: var(--compose-reply-attachment-width);
+  }
+
+  .compose-reply-compose-layout
+    .compose-editor-row
+    .compose-attachment:only-child
+    .compose-attachment-img,
+  .compose-reply-compose-layout
+    .compose-editor-row
+    .compose-attachment:not(:only-child)
+    .compose-attachment-img {
+    width: var(--compose-reply-attachment-width);
+    height: var(--compose-reply-attachment-height);
+    min-width: 0;
+    max-width: var(--compose-reply-attachment-width);
+    max-height: var(--compose-reply-attachment-height);
+    object-fit: cover;
+    object-position: center;
+  }
+
+  .compose-reply-compose-layout
+    .compose-editor-row
+    .compose-attachment-preview-fallback,
+  .compose-reply-compose-layout
+    .compose-editor-row
+    .compose-attachment-processing {
+    width: var(--compose-reply-attachment-width);
+    height: var(--compose-reply-attachment-height);
+    aspect-ratio: auto;
+  }
+
+  .compose-reply-compose-layout
+    .compose-editor-row
+    .compose-attachment-preview-fallback
+    svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .compose-reply-compose-layout
+    .compose-editor-row
+    .compose-attachment-file-card,
+  .compose-reply-compose-layout
+    .compose-editor-row
+    .compose-attachment:not(:only-child)
+    .compose-attachment-file-card {
+    width: 112px;
+    height: var(--compose-reply-attachment-height);
+    gap: 4px;
+    padding: 8px 10px;
+  }
+
+  .compose-reply-compose-layout .compose-editor-row .compose-attachment-alt {
+    padding: 1px 3px;
+    font-size: var(--type-ui-micro);
+    line-height: 1.2;
+  }
+
+  .compose-reply-compose-layout .compose-editor-row .compose-attachment-remove {
+    top: 4px;
+    right: 4px;
+    width: 20px;
+    height: 20px;
+  }
+
   /* Dot marker for thread positions */
   .compose-thread-dot {
     width: var(--site-thread-marker-size);
@@ -7443,28 +7776,9 @@
 
   /*
    * Reply context clones feed/detail card internals into a much narrower shell.
-   * Reset the reading widths and heading scale so the preview uses the thread
-   * context ladder instead of the original page/card layout.
+   * Scale headings to the thread context ladder instead of the original
+   * page/card layout.
    */
-  .compose-reply-context-body
-    :is(
-      .post-detail-title,
-      .post-detail-body,
-      .post-body-summary,
-      .feed-note-title,
-      .feed-link-title,
-      .feed-quote,
-      .feed-quote-attribution,
-      .feed-quote-commentary,
-      .feed-link-domain,
-      .feed-continue-link,
-      [data-post-body].prose,
-      [data-post-meta]
-    ) {
-    width: 100%;
-    max-width: none;
-  }
-
   .compose-reply-context-body
     :is(.post-detail-title, .feed-note-title, .feed-link-title),
   .compose-reply-context-body .prose :is(h1, h2, h3, h4) {
@@ -7684,11 +7998,11 @@
     }
 
     .compose-thread-layout {
-      padding-top: 0.45rem;
+      padding-top: 0.75rem;
     }
 
     .compose-thread-layout::before {
-      top: 0.45rem;
+      top: 0.75rem;
     }
 
     .compose-reply-context {
@@ -7739,9 +8053,12 @@
     min-height: 72px;
   }
 
-  /* Focused thread post gets a subtle left accent */
+  /* Focused thread post gets a subtle left accent. Use an inset box-shadow, not
+     a border: a border adds 2px of layout width only while focused, so switching
+     focus between thread posts shifted each one sideways ("jitter"). box-shadow
+     paints in the same spot without affecting layout. */
   .compose-thread-post:focus-within > jant-compose-editor {
-    border-left: 2px solid transparent;
+    box-shadow: inset 2px 0 0 transparent;
   }
 
   /* "Add to thread" row inside thread compose layout */
@@ -7850,6 +8167,26 @@
     align-items: center;
     justify-content: space-between;
     padding: 6px 0 4px;
+  }
+
+  /* Reply / edit-reply compose (a .compose-editor-row directly under
+     .compose-thread-layout — not the multi-post thread variant) needs clear
+     separation from the parent post shown above it. A thread post is meant to
+     sit tight on the rail, so this is scoped away from thread compose. Uses a
+     static :not() rather than :has() on purpose: a :has() here re-evaluates on
+     focus changes inside the row and caused a one-frame horizontal reflow
+     ("jitter") when clicking into the editor. */
+  .compose-thread-layout:not(.compose-thread-compose-layout)
+    .compose-editor-row {
+    padding-top: 14px;
+  }
+
+  .compose-thread-post-header + .compose-body {
+    padding-top: 8px;
+  }
+
+  .compose-reply-compose-layout .compose-thread-post-header + .compose-body {
+    padding-top: 12px;
   }
 
   /* Thread format selector: pill-tag style (lighter than the main segmented) */
@@ -8315,9 +8652,13 @@
     }
   }
 
+  .command-palette-results-container {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
   .command-palette-results {
-    list-style: none;
-    margin: 0;
     padding: 0.25rem 0;
     max-height: 20rem;
     overflow-y: auto;
@@ -8359,6 +8700,7 @@
   .command-palette-result-body {
     display: flex;
     flex-direction: column;
+    flex: 1;
     gap: 0.125rem;
     min-width: 0;
   }
@@ -8377,6 +8719,37 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .command-palette-search-action {
+    flex-shrink: 0;
+    border-top: 1px solid var(--color-border);
+    padding-block: 0.625rem;
+    background-color: color-mix(
+      in srgb,
+      var(--color-muted) 32%,
+      var(--compose-paper-bg)
+    );
+  }
+
+  .command-palette-search-action:hover,
+  .command-palette-search-action.command-palette-result-selected {
+    background-color: var(--color-accent);
+  }
+
+  .command-palette-result-shortcut {
+    flex-shrink: 0;
+    margin-left: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 0.25rem;
+    padding: 0.125rem 0.375rem;
+    background-color: var(--compose-paper-bg);
+    color: var(--color-muted-foreground);
+    font-family: inherit;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1.25rem;
+    white-space: nowrap;
   }
 
   .command-palette-empty {
@@ -8568,11 +8941,19 @@
   .compose-tiptap-body .tiptap {
     outline: none;
     min-height: 120px;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
     font-size: var(--type-content-body);
     line-height: var(--type-body-leading);
     letter-spacing: var(--type-body-tracking);
     color: var(--site-text-primary);
     font-family: var(--font-body);
+  }
+
+  .compose-reply-compose-layout .compose-tiptap-body .tiptap {
+    font-size: var(--type-content-body);
+    line-height: var(--type-body-leading);
   }
 
   .compose-tiptap-thoughts .tiptap {
@@ -8613,16 +8994,24 @@
 
   .compose-tiptap-body .tiptap h2 {
     font-size: var(--type-content-title);
-    font-style: italic;
     margin-top: 2.1rem;
     margin-bottom: 1.4rem;
   }
 
   .compose-tiptap-body .tiptap h3 {
     font-size: var(--type-content-subtitle);
-    font-style: italic;
     margin-top: 2rem;
     margin-bottom: 1.4rem;
+  }
+
+  .compose-reply-compose-layout
+    .compose-tiptap-body
+    .tiptap
+    :is(h1, h2, h3, h4) {
+    font-size: var(--type-secondary);
+    line-height: 1.32;
+    margin-top: 1.4rem;
+    margin-bottom: 0.75rem;
   }
 
   .compose-tiptap-body .tiptap p {
@@ -8630,28 +9019,50 @@
     margin-bottom: 1.4rem;
   }
 
+  .compose-reply-compose-layout .compose-tiptap-body .tiptap p {
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  /* In inline-format compose (reply / edit-reply / thread — the editors wrapped
+     in .compose-editor-row), the format header sits right above the body, so the
+     first block's 1.4rem top margin reads as a gap between the format pills and
+     the input. Drop it there so the text hugs the header. Standalone new/edit
+     editors keep their natural lead-in. */
+  .compose-editor-row .compose-tiptap-body .tiptap > :first-child {
+    margin-top: 0;
+  }
+
   .compose-tiptap-body .tiptap ul {
     list-style-type: disc;
-    padding-left: 1.5em;
-    margin: 0.25em 0;
+    padding-left: 1.4em;
+    margin: 1.25em 0;
   }
 
   .compose-tiptap-body .tiptap ol {
     list-style-type: decimal;
-    padding-left: 1.5em;
-    margin: 0.25em 0;
+    padding-left: 1.4em;
+    margin: 1.25em 0;
   }
 
   .compose-tiptap-body .tiptap li {
-    margin: 0.15em 0;
+    margin: 0.5em 0;
+  }
+
+  .compose-tiptap-body .tiptap li > p:first-child {
+    margin-top: 0;
+  }
+
+  .compose-tiptap-body .tiptap li > p:last-child {
+    margin-bottom: 0;
   }
 
   .compose-tiptap-body .tiptap blockquote {
     --_blockquote-bg: var(--compose-blockquote-bg);
     --_blockquote-text: var(--compose-blockquote-text);
     position: relative;
-    margin: 0.72em 0;
-    padding: 1.3rem 0.9em 0.76em 1em;
+    margin: 1.4rem 0;
+    padding: 1.4rem 1rem 0.75rem;
     border: none;
     border-radius: 6px;
     background: var(--_blockquote-bg);
@@ -8664,6 +9075,22 @@
     transition:
       background 0.18s ease,
       color 0.18s ease;
+  }
+
+  /* Reply compose deliberately stays denser than ordinary authored prose. */
+  .compose-reply-compose-layout .compose-tiptap-body .tiptap ul,
+  .compose-reply-compose-layout .compose-tiptap-body .tiptap ol {
+    padding-left: 1.5em;
+    margin: 0.25em 0;
+  }
+
+  .compose-reply-compose-layout .compose-tiptap-body .tiptap li {
+    margin: 0.15em 0;
+  }
+
+  .compose-reply-compose-layout .compose-tiptap-body .tiptap blockquote {
+    margin: 0.72em 0;
+    padding: 1.3rem 0.9em 0.76em 1em;
   }
 
   /* CJK: no italic for blockquotes (no true italic glyph) */
@@ -8746,9 +9173,9 @@
 
   .compose-tiptap-body .tiptap table {
     border-collapse: collapse;
-    width: 100%;
+    width: max-content;
+    min-width: 100%;
     margin: 0.75em 0;
-    overflow: hidden;
   }
 
   .compose-tiptap-body .tiptap td,
@@ -8756,7 +9183,7 @@
     border: 1px solid var(--site-divider);
     padding: 0.4em 0.6em;
     vertical-align: top;
-    min-width: 1em;
+    min-width: 6rem;
     position: relative;
   }
 
@@ -8767,6 +9194,211 @@
 
   .compose-tiptap-body .tiptap .selectedCell {
     background: oklch(from var(--site-accent) l c h / 0.12);
+  }
+
+  /* Contextual table toolbar — deliberately quieter than the text bubble menu. */
+  .tiptap-table-controls {
+    position: fixed;
+    z-index: 10001;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid color-mix(in srgb, var(--site-divider) 58%, transparent);
+    border-radius: 11px;
+    background: color-mix(
+      in srgb,
+      var(--site-elevated-bg) 96%,
+      var(--site-nav-hover-bg) 4%
+    );
+    box-shadow:
+      0 10px 24px oklch(from var(--site-text-primary) l c h / 0.07),
+      0 2px 5px oklch(from var(--site-text-primary) l c h / 0.035);
+  }
+
+  .tiptap-table-control-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 8px;
+    color: var(--site-text-secondary);
+    cursor: pointer;
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease;
+  }
+
+  .tiptap-table-control-btn:hover,
+  .tiptap-table-control-btn:focus-visible,
+  .tiptap-table-control-btn[aria-expanded="true"] {
+    color: var(--site-text-primary);
+    background: color-mix(
+      in srgb,
+      var(--site-nav-hover-bg) 78%,
+      var(--site-elevated-bg) 22%
+    );
+  }
+
+  .tiptap-table-control-btn:focus-visible,
+  .tiptap-table-menu-item:focus-visible,
+  .tiptap-table-size-cell:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--site-accent) 72%, transparent);
+    outline-offset: 1px;
+  }
+
+  .tiptap-table-control-btn:disabled,
+  .tiptap-table-menu-item:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .tiptap-table-options {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    width: min(13.5rem, calc(100vw - 20px));
+    padding: 5px;
+    border: 1px solid color-mix(in srgb, var(--site-divider) 58%, transparent);
+    border-radius: 12px;
+    background: var(--site-elevated-bg);
+    box-shadow:
+      0 14px 28px oklch(from var(--site-text-primary) l c h / 0.08),
+      0 2px 6px oklch(from var(--site-text-primary) l c h / 0.04);
+    transform: translateX(-50%);
+  }
+
+  .tiptap-table-options[hidden] {
+    display: none;
+  }
+
+  .tiptap-table-menu-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 2.25rem;
+    padding: 0.45rem 0.65rem;
+    border-radius: 8px;
+    color: var(--site-text-primary);
+    font-size: var(--type-sm);
+    line-height: 1.25;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .tiptap-table-menu-item:hover,
+  .tiptap-table-menu-item:focus-visible {
+    background: var(--site-nav-hover-bg);
+  }
+
+  .tiptap-table-menu-item.is-destructive {
+    color: var(--destructive);
+  }
+
+  .tiptap-table-options-separator {
+    height: 1px;
+    margin: 4px 5px;
+    background: color-mix(in srgb, var(--site-divider) 58%, transparent);
+  }
+
+  /* Slash-command table size picker. */
+  .tiptap-table-size-picker {
+    position: fixed;
+    z-index: 10002;
+    width: min(17rem, calc(100vw - 20px));
+    padding: 10px;
+    border: 1px solid color-mix(in srgb, var(--site-divider) 58%, transparent);
+    border-radius: 13px;
+    background: linear-gradient(
+      180deg,
+      color-mix(
+          in srgb,
+          var(--site-elevated-bg) 96%,
+          var(--site-nav-hover-bg) 4%
+        )
+        0%,
+      var(--site-elevated-bg) 100%
+    );
+    box-shadow:
+      0 14px 30px oklch(from var(--site-text-primary) l c h / 0.08),
+      0 2px 6px oklch(from var(--site-text-primary) l c h / 0.035);
+  }
+
+  .tiptap-table-size-picker-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0 2px 8px;
+    color: var(--site-text-secondary);
+    font-size: var(--type-xs);
+    font-weight: var(--fw-medium);
+  }
+
+  .tiptap-table-size-picker-dimensions {
+    color: var(--site-text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tiptap-table-size-grid {
+    display: grid;
+    gap: 3px;
+  }
+
+  .tiptap-table-size-grid-row {
+    display: grid;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 3px;
+  }
+
+  .tiptap-table-size-cell {
+    aspect-ratio: 1;
+    min-width: 0;
+    border: 1px solid color-mix(in srgb, var(--site-divider) 68%, transparent);
+    border-radius: 4px;
+    background: color-mix(
+      in srgb,
+      var(--site-elevated-bg) 90%,
+      var(--site-nav-hover-bg) 10%
+    );
+    cursor: pointer;
+    transition:
+      border-color 0.1s ease,
+      background-color 0.1s ease,
+      transform 0.1s ease;
+  }
+
+  .tiptap-table-size-cell.is-selected {
+    border-color: color-mix(
+      in srgb,
+      var(--site-accent) 38%,
+      var(--site-divider)
+    );
+    background: color-mix(
+      in srgb,
+      var(--site-accent) 14%,
+      var(--site-elevated-bg)
+    );
+  }
+
+  .tiptap-table-size-cell.is-current {
+    border-color: color-mix(
+      in srgb,
+      var(--site-accent) 72%,
+      var(--site-divider)
+    );
+    transform: scale(0.9);
+  }
+
+  @media (pointer: coarse) {
+    .tiptap-table-control-btn {
+      width: 2.75rem;
+      height: 2.75rem;
+    }
+
+    .tiptap-table-menu-item {
+      min-height: 2.75rem;
+    }
   }
 
   /* --- Image figure in editor ------------------------------------------- */
@@ -8816,6 +9448,134 @@
     object-fit: contain;
     border-radius: 4px;
     display: block;
+  }
+
+  .tiptap-image-figure[data-load-state="missing"] img {
+    display: none;
+  }
+
+  .tiptap-image-missing {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    min-height: clamp(132px, 26vw, 220px);
+    padding: 18px;
+    border-radius: 4px;
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--site-elevated-bg) 88%, var(--site-accent)),
+      var(--site-elevated-bg)
+    );
+    color: var(--site-text-secondary);
+    text-align: left;
+  }
+
+  .tiptap-image-figure[data-load-state="missing"] .tiptap-image-missing {
+    display: flex;
+  }
+
+  .tiptap-image-missing:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+  }
+
+  .tiptap-image-missing-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    border: 1px solid var(--site-divider);
+    background: var(--compose-paper-bg);
+    color: var(--site-text-secondary);
+    flex-shrink: 0;
+  }
+
+  .tiptap-image-missing-copy {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .tiptap-image-missing-copy strong {
+    color: var(--site-text-primary);
+    font-family: var(--font-ui);
+    font-size: var(--type-sm);
+    line-height: 1.2;
+  }
+
+  .tiptap-image-missing-source {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--site-text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--type-2xs);
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tiptap-image-missing-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    flex: 0 0 auto;
+  }
+
+  .tiptap-image-missing-actions button {
+    border: 1px solid var(--site-divider);
+    border-radius: 5px;
+    padding: 5px 8px;
+    background: var(--compose-paper-bg);
+    color: var(--site-text-primary);
+    font-family: var(--font-ui);
+    font-size: var(--type-2xs);
+    line-height: 1.2;
+    cursor: pointer;
+    transition:
+      border-color 0.16s ease,
+      color 0.16s ease,
+      background-color 0.16s ease;
+  }
+
+  .tiptap-image-missing-actions button:hover {
+    border-color: color-mix(
+      in srgb,
+      var(--site-accent) 45%,
+      var(--site-divider)
+    );
+    color: var(--site-accent);
+  }
+
+  .tiptap-image-missing-actions button:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  .tiptap-image-missing-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .tiptap-image-missing-delete {
+    color: var(--destructive);
+  }
+
+  @media (max-width: 640px) {
+    .tiptap-image-missing {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .tiptap-image-missing-actions,
+    .tiptap-image-missing-actions button {
+      width: 100%;
+    }
   }
 
   /* Layout variants — in compact dialog, wide/full just fill the container */
@@ -9329,6 +10089,7 @@
     vertical-align: super;
     color: var(--site-accent);
     white-space: nowrap;
+    cursor: pointer;
   }
 
   .compose-tiptap-body
@@ -9364,11 +10125,20 @@
 
   .compose-tiptap-body
     .tiptap
-    > :not(.tiptap-footnote-definition)
-    + .tiptap-footnote-definition {
+    > :not(.tiptap-footnote-definition, .ProseMirror-gapcursor)
+    ~ .tiptap-footnote-definition {
     margin-top: 2rem;
     padding-top: 1rem;
     border-top: 1px solid var(--site-divider);
+  }
+
+  .compose-tiptap-body
+    .tiptap
+    > .tiptap-footnote-definition
+    ~ .tiptap-footnote-definition {
+    margin-top: 1rem;
+    padding-top: 0;
+    border-top: 0;
   }
 
   .compose-tiptap-body .tiptap .tiptap-footnote-definition > :first-child {
@@ -10981,6 +11751,24 @@
     line-height: 1.28;
   }
 
+  .theme-preview-accent {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    white-space: nowrap;
+    color: var(--preview-muted-light);
+  }
+
+  .theme-preview-swatch {
+    flex: none;
+    width: 0.62rem;
+    height: 0.62rem;
+    border-radius: 3px;
+    background: var(--preview-primary-light);
+    box-shadow: 0 0 0 1px
+      color-mix(in srgb, var(--preview-fg-light) 18%, transparent);
+  }
+
   .theme-preview-meta {
     color: var(--preview-muted-light);
     line-height: 1.55;
@@ -11012,6 +11800,16 @@
 
   .theme-preview-panel[data-theme-preview-mode="dark"] .theme-preview-meta {
     color: var(--preview-muted-dark);
+  }
+
+  .theme-preview-panel[data-theme-preview-mode="dark"] .theme-preview-accent {
+    color: var(--preview-muted-dark);
+  }
+
+  .theme-preview-panel[data-theme-preview-mode="dark"] .theme-preview-swatch {
+    background: var(--preview-primary-dark);
+    box-shadow: 0 0 0 1px
+      color-mix(in srgb, var(--preview-fg-dark) 18%, transparent);
   }
 
   .theme-preview-panel[data-theme-preview-mode="dark"] .theme-preview-divider {
@@ -11542,6 +12340,16 @@
       color: var(--preview-muted-dark);
     }
 
+    .theme-preview-panel[data-theme-preview-mode="auto"] .theme-preview-accent {
+      color: var(--preview-muted-dark);
+    }
+
+    .theme-preview-panel[data-theme-preview-mode="auto"] .theme-preview-swatch {
+      background: var(--preview-primary-dark);
+      box-shadow: 0 0 0 1px
+        color-mix(in srgb, var(--preview-fg-dark) 18%, transparent);
+    }
+
     .theme-preview-panel[data-theme-preview-mode="auto"]
       .theme-preview-divider {
       border-color: var(--preview-border-dark);
@@ -11649,4 +12457,29 @@
     transparent
   );
   color: color-mix(in srgb, var(--site-text-secondary) 80%, transparent);
+}
+
+/*
+ * Compose reply context renders cloned feed/detail post HTML. Keep this
+ * outside @layer components so it can override the unlayered global post-body
+ * width rules that intentionally make normal desktop post text use the 55%
+ * reading column.
+ */
+.compose-reply-context-body
+  :is(
+    .post-detail-title,
+    .post-detail-body,
+    .post-body-summary,
+    .feed-note-title,
+    .feed-link-title,
+    .feed-quote,
+    .feed-quote-attribution,
+    .feed-quote-commentary,
+    .feed-link-domain,
+    .feed-continue-link,
+    [data-post-body].prose,
+    [data-post-meta]
+  ) {
+  width: 100%;
+  max-width: none;
 }

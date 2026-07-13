@@ -19,6 +19,7 @@ import {
 } from "../lib/constants.js";
 import {
   baseLocale,
+  isLocale,
   isValidContentLanguage,
   normalizeContentLanguage,
 } from "../i18n/locales.js";
@@ -41,9 +42,10 @@ export interface GeneralSettingsData {
   siteDescription: string;
   siteFooter: string;
   siteLanguage: string;
+  /** Admin UI locale; empty string follows the content language. */
+  dashboardLanguage?: string;
   cjkSerifFont: string;
   showJantBrandingOnHome: boolean;
-  homeDefaultView?: FeedKind;
   mainRssFeed?: FeedKind;
   timeZone: string;
 }
@@ -61,6 +63,11 @@ export interface SiteSettingsResult {
 
 export interface LocaleSettingsData {
   siteLanguage: string;
+  /**
+   * Admin dashboard UI locale. Empty string clears the explicit setting so the
+   * dashboard follows the content language. When set, must be a catalog locale.
+   */
+  dashboardLanguage?: string;
   cjkSerifFont: string;
   timeZone: string;
 }
@@ -97,7 +104,11 @@ export interface SettingsService {
   ): Promise<SiteSettingsResult>;
   updateLocaleSettings(
     data: LocaleSettingsData,
-    opts: { oldLanguage: string; oldCjkSerifFont?: string },
+    opts: {
+      oldLanguage: string;
+      oldCjkSerifFont?: string;
+      oldDashboardLanguage?: string;
+    },
   ): Promise<{ languageChanged: boolean }>;
   updateFeedSettings(data: { mainRssFeed?: FeedKind }): Promise<void>;
   updateHomeBranding(showJantBrandingOnHome: boolean): Promise<void>;
@@ -131,15 +142,16 @@ export interface SettingsService {
    */
   uploadAvatar(data: AvatarUploadData, deps: AvatarUploadDeps): Promise<void>;
   /**
-   * Remove avatar and all favicon-related settings.
-   * Deletes the apple-touch-icon from storage if it exists.
-   *
-   * @param storage - Optional storage driver for deleting the apple-touch-icon file
+   * Remove avatar and all favicon-related settings. The apple-touch-icon's
+   * media row is deleted and its storage object is retired (moved to the
+   * recycle bin, or deleted) via the media service when supplied — so removal
+   * is recoverable rather than erasing the bytes with no trace.
    */
-  removeAvatar(
-    storage?: StorageDriver | null,
-    deps?: { media?: MediaService; storageProvider?: string },
-  ): Promise<void>;
+  removeAvatar(deps?: {
+    storage?: StorageDriver | null;
+    media?: MediaService;
+    storageProvider?: string;
+  }): Promise<void>;
 }
 
 export function createSettingsService(
@@ -301,6 +313,26 @@ export function createSettingsService(
         normalizeContentLanguage(trimmedLanguage),
       );
 
+      // Dashboard UI locale. undefined = leave untouched; "" = clear so the
+      // dashboard follows the content language; otherwise it must be one of the
+      // translated catalog locales.
+      let dashboardChanged = false;
+      if (data.dashboardLanguage !== undefined) {
+        const dashboardLanguage = data.dashboardLanguage.trim();
+        if (dashboardLanguage && !isLocale(dashboardLanguage)) {
+          throw new ValidationError(
+            "Choose a dashboard language Jant is translated into.",
+          );
+        }
+        if (dashboardLanguage) {
+          await this.set("DASHBOARD_LANGUAGE", dashboardLanguage);
+        } else {
+          await this.remove("DASHBOARD_LANGUAGE");
+        }
+        dashboardChanged =
+          (opts.oldDashboardLanguage ?? "") !== dashboardLanguage;
+      }
+
       // CJK serif font setting
       const cjkFont = data.cjkSerifFont?.trim() ?? "";
       if (cjkFont && isCjkSerifFont(cjkFont) && cjkFont !== "off") {
@@ -329,7 +361,8 @@ export function createSettingsService(
       return {
         languageChanged:
           opts.oldLanguage !== trimmedLanguage ||
-          (opts.oldCjkSerifFont ?? "off") !== effectiveCjkFont,
+          (opts.oldCjkSerifFont ?? "off") !== effectiveCjkFont ||
+          dashboardChanged,
       };
     },
 
@@ -369,15 +402,6 @@ export function createSettingsService(
         oldLanguage: opts.oldLanguage,
         oldCjkSerifFont: opts.oldCjkSerifFont,
       });
-
-      // Homepage default view: only update if provided (may be managed separately)
-      if (data.homeDefaultView !== undefined) {
-        if (data.homeDefaultView === "featured") {
-          await this.set("HOME_DEFAULT_VIEW", data.homeDefaultView);
-        } else {
-          await this.remove("HOME_DEFAULT_VIEW");
-        }
-      }
 
       await this.updateFeedSettings({ mainRssFeed: data.mainRssFeed });
 
@@ -469,19 +493,19 @@ export function createSettingsService(
       await this.set("SITE_FAVICON_VERSION", version);
     },
 
-    async removeAvatar(storage, deps) {
+    async removeAvatar(deps) {
       const appleTouchKey = await this.get("SITE_FAVICON_APPLE_TOUCH");
-      if (storage && appleTouchKey) {
-        await storage.delete(appleTouchKey);
-      }
 
+      // Retire the apple-touch-icon through the media service so its object goes
+      // to the recycle bin (recoverable) rather than being erased now. Also
+      // removes its media row.
       if (deps?.media && deps.storageProvider && appleTouchKey) {
         const existing = await deps.media.getByStorageKey(
           appleTouchKey,
           deps.storageProvider,
         );
         if (existing) {
-          await deps.media.delete(existing.id);
+          await deps.media.delete(existing.id, deps.storage);
         }
       }
 

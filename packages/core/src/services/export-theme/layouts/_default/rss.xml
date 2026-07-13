@@ -10,7 +10,7 @@
     - featured (`.Type == "featured"`): featured_at != nil
     - archive  (`.Type == "archive"`): all published (includes latest_hidden)
     - collection (`.Type == "collection"`): Params.collections.slug match,
-        pinned first then per `sort_order`
+        ordered per `sort_order`; pinning is ignored for RSS
 
   Per-entry payload mirrors `buildSinglePostContent` + `buildFeedContent`:
     - Title: empty for quote posts, else .Title
@@ -23,7 +23,8 @@
         body    → Hugo-rendered .Content (stripped of <script>/<style>)
         rating  → <p>★★★★☆ 4/5</p>
         link    → trailing <p><a href=permalink> ★ </a></p>
-        replies → <hr/> + <p><small><time>{dt}</time></small></p> + content
+        replies → <hr/> + <p><small><time>{dt}</time></small></p>
+                  + inline title/link metadata + content
 
   Hugo's default RSS media-type override (`[outputFormats.RSS]`) makes this
   template produce application/atom+xml at /{section}/index.xml.
@@ -59,25 +60,15 @@
       {{- end -}}
     {{- end -}}
   {{- end -}}
-  {{- $pinned := slice -}}
-  {{- $unpinned := slice -}}
-  {{- range $members -}}
-    {{- if .entry.pinned_at -}}
-      {{- $pinned = $pinned | append . -}}
-    {{- else -}}
-      {{- $unpinned = $unpinned | append . -}}
-    {{- end -}}
-  {{- end -}}
-  {{- if $pinned -}}{{- $pinned = sort $pinned "entry.pinned_at" "desc" -}}{{- end -}}
   {{- $sortOrder := $page.Params.sort_order | default "position" -}}
-  {{- if $unpinned -}}
+  {{- $ordered := $members -}}
+  {{- if $ordered -}}
     {{- if eq $sortOrder "collected_at_desc" -}}
-      {{- $unpinned = sort $unpinned "entry.collected_at" "desc" -}}
+      {{- $ordered = sort $ordered "entry.collected_at" "desc" -}}
     {{- else -}}
-      {{- $unpinned = sort $unpinned "entry.position" "asc" -}}
+      {{- $ordered = sort $ordered "entry.position" "asc" -}}
     {{- end -}}
   {{- end -}}
-  {{- $ordered := $pinned | append $unpinned -}}
   {{- range $ordered -}}{{- $posts = $posts | append .post -}}{{- end -}}
 {{- end -}}
 

@@ -28,7 +28,6 @@ suffixes = [ "xml" ]
 
 [params]
 description = ""
-home_default_view = "latest"
 main_rss_feed = "featured"
 show_jant_branding_on_home = true
 show_header_avatar = false

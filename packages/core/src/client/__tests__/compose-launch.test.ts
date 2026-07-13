@@ -1,11 +1,22 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it } from "vitest";
-import { getReplyRefreshTarget } from "../compose-launch.js";
+import {
+  getReplyRefreshTarget,
+  getReplyTargetArticle,
+} from "../compose-launch.js";
 
 function getArticle(): HTMLElement {
   const article = document.querySelector<HTMLElement>("article[data-post]");
   if (!article) throw new Error("expected article[data-post] in DOM");
+  return article;
+}
+
+function getArticleByPostId(postId: string): HTMLElement {
+  const article = document.querySelector<HTMLElement>(
+    `article[data-post-id="${postId}"]`,
+  );
+  if (!article) throw new Error(`expected article for ${postId}`);
   return article;
 }
 
@@ -116,5 +127,43 @@ describe("getReplyRefreshTarget", () => {
     `;
 
     expect(getReplyRefreshTarget(getArticle())).toBeNull();
+  });
+});
+
+describe("getReplyTargetArticle", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("targets the latest thread detail post when the current page is the root", () => {
+    document.body.innerHTML = `
+      <div data-post-view data-post-view-id="pst_root">
+        <div class="thread-group thread-group-detail" data-page="post">
+          <div class="thread-item thread-detail-item" data-post-current>
+            <article data-post data-post-id="pst_root" data-thread-root-id="pst_root"></article>
+          </div>
+          <div class="thread-item thread-detail-item">
+            <article data-post data-post-id="pst_reply_1" data-thread-root-id="pst_root"></article>
+          </div>
+          <div class="thread-item thread-detail-item">
+            <article data-post data-post-id="pst_reply_2" data-thread-root-id="pst_root"></article>
+          </div>
+        </div>
+      </div>
+    `;
+
+    expect(getReplyTargetArticle(document)?.dataset.postId).toBe("pst_reply_2");
+  });
+
+  it("keeps using the current article outside thread detail pages", () => {
+    document.body.innerHTML = `
+      <div data-post-view data-post-view-id="pst_single">
+        <article data-post data-post-id="pst_single"></article>
+      </div>
+    `;
+
+    expect(getReplyTargetArticle(document)).toBe(
+      getArticleByPostId("pst_single"),
+    );
   });
 });

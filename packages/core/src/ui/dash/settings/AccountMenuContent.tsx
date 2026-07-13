@@ -66,7 +66,7 @@ export function AccountMenuContent({
     : i18n._(
         msg({
           message:
-            "Manage sign-in security, exports, and irreversible actions.",
+            "Manage sign-in security, site exports, and irreversible actions.",
           comment:
             "@context: Intro text on the account settings menu page below the title",
         }),
@@ -105,7 +105,7 @@ export function AccountMenuContent({
         <h1 class="page-intro-title page-intro-title-compact">
           {i18n._(
             msg({
-              message: "Account",
+              message: "Account & Data",
               comment: "@context: Page title for the account settings menu",
             }),
           )}

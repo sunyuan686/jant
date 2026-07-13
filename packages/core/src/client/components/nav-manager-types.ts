@@ -30,6 +30,16 @@ export interface NavManagerCollection {
   group?: string | null;
 }
 
+export interface NavManagerSuggestedLink {
+  key: string;
+  label: string;
+  url: string;
+  targetType: "page" | "collection" | "archive";
+  targetLabel: string;
+  navItemType: "link" | "collection";
+  collectionId?: string;
+}
+
 export interface NavManagerLabels {
   preview: string;
   navigationItems: string;
@@ -54,6 +64,10 @@ export interface NavManagerLabels {
   addLinkDescription: string;
   urlPlaceholder: string;
   labelAndUrlRequired: string;
+  suggestedLinks: string;
+  suggestedLinksDescription: string;
+  addSuggestedLink: string;
+  suggestedLinkAdded: string;
   collection: string;
   addCollection: string;
   addCollectionToNavigation: string;
@@ -66,14 +80,4 @@ export interface NavManagerLabels {
   moreEmptyHint: string;
   placementSaved: string;
   cancel: string;
-}
-
-export interface NavManagerUpdateDetail {
-  id: string;
-  label: string;
-  url?: string;
-}
-
-export interface NavManagerDeleteDetail {
-  id: string;
 }

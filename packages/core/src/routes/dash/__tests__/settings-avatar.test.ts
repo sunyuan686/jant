@@ -215,29 +215,47 @@ describe("Settings - Avatar Upload Logic", () => {
       expect(await settingsService.get("SITE_FAVICON_VERSION")).toBeNull();
     });
 
-    it("deletes apple-touch-icon from storage when storage is provided", async () => {
+    it("removes the apple-touch-icon media row and retires its object", async () => {
       const storage = createMockStorage();
+      const appleTouchKey = `media/${DEFAULT_TEST_SITE_ID}/assets/favicon/apple-touch-icon.png`;
+      const media = await mediaService.create({
+        filename: "apple-touch-icon.png",
+        originalName: "apple-touch-icon.png",
+        mimeType: "image/png",
+        size: 1234,
+        storageKey: appleTouchKey,
+        provider: "r2",
+      });
+      await settingsService.set("SITE_FAVICON_APPLE_TOUCH", appleTouchKey);
+
+      await settingsService.removeAvatar({
+        storage,
+        media: mediaService,
+        storageProvider: "r2",
+      });
+
+      // Row removed and setting cleared; the object is retired via storage
+      // (this mock has no server-side copy, so it's deleted outright).
+      expect(await mediaService.getById(media.id)).toBeNull();
+      expect(await settingsService.get("SITE_FAVICON_APPLE_TOUCH")).toBeNull();
+      expect(storage.delete).toHaveBeenCalledWith(appleTouchKey);
+    });
+
+    it("is a no-op for media when no apple-touch-icon key exists", async () => {
       await settingsService.set(
-        "SITE_FAVICON_APPLE_TOUCH",
-        `media/${DEFAULT_TEST_SITE_ID}/assets/favicon/apple-touch-icon.png`,
+        "SITE_AVATAR",
+        `media/${DEFAULT_TEST_SITE_ID}/assets/avatar/some-id.png`,
       );
 
-      await settingsService.removeAvatar(storage);
+      await settingsService.removeAvatar({
+        media: mediaService,
+        storageProvider: "r2",
+      });
 
-      expect(storage.delete).toHaveBeenCalledWith(
-        `media/${DEFAULT_TEST_SITE_ID}/assets/favicon/apple-touch-icon.png`,
-      );
+      expect(await settingsService.get("SITE_AVATAR")).toBeNull();
     });
 
-    it("skips storage delete when no apple-touch-icon key exists", async () => {
-      const storage = createMockStorage();
-
-      await settingsService.removeAvatar(storage);
-
-      expect(storage.delete).not.toHaveBeenCalled();
-    });
-
-    it("handles null storage gracefully", async () => {
+    it("clears settings even without a media service", async () => {
       await settingsService.set(
         "SITE_AVATAR",
         `media/${DEFAULT_TEST_SITE_ID}/assets/avatar/some-id.png`,
@@ -247,7 +265,7 @@ describe("Settings - Avatar Upload Logic", () => {
         `media/${DEFAULT_TEST_SITE_ID}/assets/favicon/apple-touch-icon.png`,
       );
 
-      await settingsService.removeAvatar(null);
+      await settingsService.removeAvatar();
 
       expect(await settingsService.get("SITE_AVATAR")).toBeNull();
       expect(await settingsService.get("SITE_FAVICON_APPLE_TOUCH")).toBeNull();

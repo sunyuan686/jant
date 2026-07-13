@@ -50,6 +50,14 @@ describe("SettingsService", () => {
       expect(result).toBe("Asia/Shanghai");
     });
 
+    it("preserves runtime-supported IANA zones and fixed offsets", async () => {
+      await settingsService.set("TIME_ZONE", "America/Phoenix");
+      expect(await settingsService.get("TIME_ZONE")).toBe("America/Phoenix");
+
+      await settingsService.set("TIME_ZONE", "+08");
+      expect(await settingsService.get("TIME_ZONE")).toBe("+08:00");
+    });
+
     it("rejects unsupported timezone values", async () => {
       await expect(settingsService.set("TIME_ZONE", "+8")).rejects.toThrowError(
         "Choose a valid time zone.",
@@ -164,7 +172,6 @@ describe("SettingsService", () => {
       siteLanguage: "en",
       cjkSerifFont: "off",
       showJantBrandingOnHome: false,
-      homeDefaultView: "latest",
       mainRssFeed: "featured",
       timeZone: "UTC",
     };
@@ -196,25 +203,6 @@ describe("SettingsService", () => {
       );
 
       expect(await settingsService.get("SITE_NAME")).toBe("Trimmed");
-    });
-
-    it("removes HOME_DEFAULT_VIEW when set to default", async () => {
-      await settingsService.set("HOME_DEFAULT_VIEW", "featured");
-      await settingsService.updateGeneral(
-        { ...defaults, homeDefaultView: "latest" },
-        { oldLanguage: "en", fallbackSiteName: "Jant" },
-      );
-
-      expect(await settingsService.get("HOME_DEFAULT_VIEW")).toBeNull();
-    });
-
-    it("stores HOME_DEFAULT_VIEW when set to featured", async () => {
-      await settingsService.updateGeneral(
-        { ...defaults, homeDefaultView: "featured" },
-        { oldLanguage: "en", fallbackSiteName: "Jant" },
-      );
-
-      expect(await settingsService.get("HOME_DEFAULT_VIEW")).toBe("featured");
     });
 
     it("removes MAIN_RSS_FEED when set to default (featured)", async () => {
@@ -446,6 +434,61 @@ describe("SettingsService", () => {
       expect(await settingsService.get("SITE_LANGUAGE")).toBe("en");
     });
 
+    it("stores a valid dashboard language and reports the change", async () => {
+      const result = await settingsService.updateLocaleSettings(
+        {
+          siteLanguage: "fr",
+          dashboardLanguage: "zh-Hant",
+          cjkSerifFont: "off",
+          timeZone: "UTC",
+        },
+        { oldLanguage: "fr", oldDashboardLanguage: "" },
+      );
+
+      expect(result.languageChanged).toBe(true);
+      expect(await settingsService.get("SITE_LANGUAGE")).toBe("fr");
+      expect(await settingsService.get("DASHBOARD_LANGUAGE")).toBe("zh-Hant");
+    });
+
+    it("clears DASHBOARD_LANGUAGE when dashboard language is blank", async () => {
+      await settingsService.set("DASHBOARD_LANGUAGE", "zh-Hans");
+      await settingsService.updateLocaleSettings(
+        {
+          siteLanguage: "en",
+          dashboardLanguage: "",
+          cjkSerifFont: "off",
+          timeZone: "UTC",
+        },
+        { oldLanguage: "en", oldDashboardLanguage: "zh-Hans" },
+      );
+
+      expect(await settingsService.get("DASHBOARD_LANGUAGE")).toBeNull();
+    });
+
+    it("leaves DASHBOARD_LANGUAGE untouched when not provided", async () => {
+      await settingsService.set("DASHBOARD_LANGUAGE", "zh-Hans");
+      await settingsService.updateLocaleSettings(
+        { siteLanguage: "en", cjkSerifFont: "off", timeZone: "UTC" },
+        { oldLanguage: "en" },
+      );
+
+      expect(await settingsService.get("DASHBOARD_LANGUAGE")).toBe("zh-Hans");
+    });
+
+    it("rejects a dashboard language Jant is not translated into", async () => {
+      await expect(
+        settingsService.updateLocaleSettings(
+          {
+            siteLanguage: "en",
+            dashboardLanguage: "fr",
+            cjkSerifFont: "off",
+            timeZone: "UTC",
+          },
+          { oldLanguage: "en" },
+        ),
+      ).rejects.toThrow();
+    });
+
     it("updates grouped feed, home, and search settings independently", async () => {
       await settingsService.updateFeedSettings({ mainRssFeed: "latest" });
       await settingsService.updateHomeBranding(true);
@@ -459,6 +502,11 @@ describe("SettingsService", () => {
 
       await settingsService.updateSearchSettings(true, { demoMode: false });
       expect(await settingsService.get("NOINDEX")).toBeNull();
+
+      await settingsService.updateHomeBranding(false);
+      expect(
+        await settingsService.get("SHOW_JANT_BRANDING_ON_HOME"),
+      ).toBeNull();
     });
   });
 });

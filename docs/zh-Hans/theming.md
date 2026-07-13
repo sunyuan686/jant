@@ -165,6 +165,8 @@ Jant 提供三种自定义外观的方式，按粒度从粗到细：
 
 | 属性                 | 出现在       | 取值                                                                         |
 | -------------------- | ------------ | ---------------------------------------------------------------------------- |
+| `data-theme`         | `<html>`     | 当前配色主题 id（`tufte`、`linen`、`frost` …）                               |
+| `data-theme-mode`    | `<html>`     | `auto`、`light`、`dark`                                                      |
 | `data-page`          | 页面外层容器 | `home`, `post`, `search`, `archive`, `collection`, `collections`, `featured` |
 | `data-post`          | `<article>`  | 每篇帖子都会带上                                                             |
 | `data-format`        | `<article>`  | `note`, `link`, `quote`                                                      |

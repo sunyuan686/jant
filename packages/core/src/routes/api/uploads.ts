@@ -35,9 +35,61 @@ const CompleteUploadSchema = z.object({
     .optional(),
 });
 
+const SideloadSchema = z.object({
+  url: z.string().url(),
+  alt: z.string().max(2000).optional(),
+});
+
 export const uploadsApiRoutes = new Hono<Env>();
 
 uploadsApiRoutes.use("*", requireAuthApi());
+
+/**
+ * Rehost a remote image into the site's own storage. Used when an author pastes
+ * an article whose `<img>` tags point at external URLs — the server fetches the
+ * bytes (bypassing browser CORS) and stores them. Returns the new media's
+ * public URL so the editor can swap the node's `src`.
+ */
+uploadsApiRoutes.post("/sideload", async (c) => {
+  const storage = c.var.storage;
+  if (!storage) {
+    return c.json(
+      { error: "File storage isn't set up. Check your server config." },
+      500,
+    );
+  }
+
+  const { url, alt } = parseValidated(SideloadSchema, await c.req.json());
+
+  const media = await c.var.services.media.ingestFromUrl(
+    { url, alt },
+    {
+      storage,
+      storageDriver: c.var.appConfig.storageDriver,
+      maxFileSizeMB: c.var.appConfig.uploadMaxFileSize,
+    },
+  );
+
+  const mediaPublicUrl = getPublicUrlForProvider(
+    c.var.appConfig.storageDriver,
+    c.var.appConfig.r2PublicUrl,
+    c.var.appConfig.s3PublicUrl,
+    c.var.appConfig.localPublicUrl,
+  );
+
+  return c.json({
+    id: media.id,
+    url: getMediaUrl(
+      media.storageKey,
+      mediaPublicUrl,
+      c.var.appConfig.sitePathPrefix,
+    ),
+    width: media.width,
+    height: media.height,
+    mimeType: media.mimeType,
+    size: media.size,
+  });
+});
 
 function scheduleExpiredUploadCleanup(
   c: {

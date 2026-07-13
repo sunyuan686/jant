@@ -20,6 +20,8 @@ const labels = {
   showMore: "Show more",
   showLess: "Show less",
   newThread: "New Thread",
+  replyTitle: "Reply",
+  editTitle: "Edit",
 } as ComposeLabels;
 
 async function flush(el?: JantComposeFullscreen) {

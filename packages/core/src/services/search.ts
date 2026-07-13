@@ -180,7 +180,7 @@ export function createSearchService(
           snippet(post_fts, 1, char(2), char(3), '...', 32) AS snippet
         FROM post_fts
         JOIN post ON post.rowid = post_fts.rowid
-        JOIN post AS root_post ON root_post.id = post.thread_id
+        JOIN post AS root_post ON root_post.id = post.thread_id AND root_post.site_id = post.site_id
         JOIN path_registry
           ON path_registry.post_id = post.id
          AND path_registry.site_id = post.site_id
@@ -254,7 +254,7 @@ export function createSearchService(
         ) AS snippet
       FROM post
       CROSS JOIN search_query
-      JOIN post AS root_post ON root_post.id = post.thread_id
+      JOIN post AS root_post ON root_post.id = post.thread_id AND root_post.site_id = post.site_id
       JOIN path_registry
         ON path_registry.post_id = post.id
        AND path_registry.site_id = post.site_id
@@ -300,7 +300,7 @@ export function createSearchService(
           ) AS rank,
           NULL AS snippet
         FROM post
-        JOIN post AS root_post ON root_post.id = post.thread_id
+        JOIN post AS root_post ON root_post.id = post.thread_id AND root_post.site_id = post.site_id
         JOIN path_registry
           ON path_registry.post_id = post.id
          AND path_registry.site_id = post.site_id
@@ -342,7 +342,7 @@ export function createSearchService(
         0 AS rank,
         NULL AS snippet
       FROM post
-      JOIN post AS root_post ON root_post.id = post.thread_id
+      JOIN post AS root_post ON root_post.id = post.thread_id AND root_post.site_id = post.site_id
       JOIN path_registry
         ON path_registry.post_id = post.id
        AND path_registry.site_id = post.site_id

@@ -1,6 +1,14 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { msg } from "@lingui/core/macro";
 import { createI18n } from "../i18n.js";
+
+const CORE_ROOT = resolve(import.meta.dirname, "../../..");
+
+function readLocaleFile(path: string): string {
+  return readFileSync(resolve(CORE_ROOT, path), "utf8");
+}
 
 /**
  * Guards the "public surface stays English under non-English locales" contract.
@@ -36,5 +44,21 @@ describe("i18n locale fallback", () => {
       comment: "@context: test fixture — not shipped anywhere",
     });
     expect(i18n._(unique)).toBe("Jant fallback canary string");
+  });
+
+  it("keeps Chinese settings format labels concise", () => {
+    const zhHansSettings = readLocaleFile(
+      "src/i18n/locales/settings/zh-Hans.po",
+    );
+    const zhHantSettings = readLocaleFile(
+      "src/i18n/locales/settings/zh-Hant.po",
+    );
+
+    expect(zhHansSettings).toContain('msgid "Quote"\nmsgstr "引用"');
+    expect(zhHantSettings).toContain('msgid "Link"\nmsgstr "連結"');
+    expect(zhHantSettings).toContain('msgid "Quote"\nmsgstr "引用"');
+
+    expect(zhHansSettings).not.toContain("Jant 的帖子格式之一");
+    expect(zhHantSettings).not.toContain("Jant 的貼文格式之一");
   });
 });

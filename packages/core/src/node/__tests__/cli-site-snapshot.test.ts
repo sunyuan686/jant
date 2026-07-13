@@ -32,32 +32,41 @@ const REMAPPED_MEDIA_KEY = `media/${REMAPPED_TARGET_SITE_ID}/files/${SNAPSHOT_ME
 const REMAPPED_POSTER_KEY = `media/${REMAPPED_TARGET_SITE_ID}/posters/${SNAPSHOT_MEDIA_ID}.webp`;
 const REMAPPED_AVATAR_KEY = `media/${REMAPPED_TARGET_SITE_ID}/assets/avatar/${SNAPSHOT_AVATAR_MEDIA_ID}.png`;
 const REMAPPED_APPLE_TOUCH_KEY = `media/${REMAPPED_TARGET_SITE_ID}/assets/favicon/apple-touch-icon.png`;
+const NODE_CLI_ENV_KEYS = [
+  "DATABASE_URL",
+  "DATA_DIR",
+  "LOCAL_STORAGE_PATH",
+  "STORAGE_DRIVER",
+  "S3_ENDPOINT",
+  "S3_BUCKET",
+  "S3_REGION",
+  "S3_PUBLIC_URL",
+  "S3_ACCESS_KEY_ID",
+  "S3_SECRET_ACCESS_KEY",
+  "SITE_RESOLUTION_MODE",
+] as const;
+
+function useLocalSnapshotRuntime(databaseUrl: string, storagePath: string) {
+  delete process.env.DATA_DIR;
+  process.env.DATABASE_URL = databaseUrl;
+  process.env.LOCAL_STORAGE_PATH = storagePath;
+  process.env.STORAGE_DRIVER = "local";
+}
 
 describe("jant site snapshot export/import", () => {
   const tempDirs: string[] = [];
-  const originalEnv = {
-    DATABASE_URL: process.env.DATABASE_URL,
-    LOCAL_STORAGE_PATH: process.env.LOCAL_STORAGE_PATH,
-    SITE_RESOLUTION_MODE: process.env.SITE_RESOLUTION_MODE,
-  };
+  const originalEnv = Object.fromEntries(
+    NODE_CLI_ENV_KEYS.map((key) => [key, process.env[key]]),
+  ) as Record<(typeof NODE_CLI_ENV_KEYS)[number], string | undefined>;
 
   afterEach(async () => {
-    if (originalEnv.DATABASE_URL === undefined) {
-      delete process.env.DATABASE_URL;
-    } else {
-      process.env.DATABASE_URL = originalEnv.DATABASE_URL;
-    }
-
-    if (originalEnv.LOCAL_STORAGE_PATH === undefined) {
-      delete process.env.LOCAL_STORAGE_PATH;
-    } else {
-      process.env.LOCAL_STORAGE_PATH = originalEnv.LOCAL_STORAGE_PATH;
-    }
-
-    if (originalEnv.SITE_RESOLUTION_MODE === undefined) {
-      delete process.env.SITE_RESOLUTION_MODE;
-    } else {
-      process.env.SITE_RESOLUTION_MODE = originalEnv.SITE_RESOLUTION_MODE;
+    for (const key of NODE_CLI_ENV_KEYS) {
+      const value = originalEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
 
     await Promise.all(
@@ -219,8 +228,7 @@ describe("jant site snapshot export/import", () => {
       contentType: "image/png",
     });
 
-    process.env.DATABASE_URL = `file:${sourceDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = sourceStoragePath;
+    useLocalSnapshotRuntime(`file:${sourceDbPath}`, sourceStoragePath);
 
     const exportLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const { run: runExport } =
@@ -241,8 +249,7 @@ describe("jant site snapshot export/import", () => {
       `Exported Node database snapshot to ${snapshotPath}`,
     );
 
-    process.env.DATABASE_URL = `file:${targetDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = targetStoragePath;
+    useLocalSnapshotRuntime(`file:${targetDbPath}`, targetStoragePath);
 
     const importLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const { run: runImport } =
@@ -379,8 +386,7 @@ describe("jant site snapshot export/import", () => {
       sourceSqlite.close();
     }
 
-    process.env.DATABASE_URL = `file:${sourceDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = sourceStoragePath;
+    useLocalSnapshotRuntime(`file:${sourceDbPath}`, sourceStoragePath);
 
     vi.spyOn(console, "log").mockImplementation(() => {});
     const { run: runExport } =
@@ -453,16 +459,14 @@ describe("jant site snapshot export/import", () => {
       targetSqlite.close();
     }
 
-    process.env.DATABASE_URL = `file:${sourceDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = sourceStoragePath;
+    useLocalSnapshotRuntime(`file:${sourceDbPath}`, sourceStoragePath);
 
     vi.spyOn(console, "log").mockImplementation(() => {});
     const { run: runExport } =
       await import("../../../bin/commands/site/snapshot/export.js");
     await runExport(["--output", snapshotPath, "--skip-objects"]);
 
-    process.env.DATABASE_URL = `file:${targetDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = targetStoragePath;
+    useLocalSnapshotRuntime(`file:${targetDbPath}`, targetStoragePath);
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { run: runImport } =
@@ -538,16 +542,14 @@ describe("jant site snapshot export/import", () => {
       targetSqlite.close();
     }
 
-    process.env.DATABASE_URL = `file:${sourceDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = sourceStoragePath;
+    useLocalSnapshotRuntime(`file:${sourceDbPath}`, sourceStoragePath);
 
     vi.spyOn(console, "log").mockImplementation(() => {});
     const { run: runExport } =
       await import("../../../bin/commands/site/snapshot/export.js");
     await runExport(["--output", snapshotPath, "--skip-objects"]);
 
-    process.env.DATABASE_URL = `file:${targetDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = targetStoragePath;
+    useLocalSnapshotRuntime(`file:${targetDbPath}`, targetStoragePath);
 
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const { run: runImport } =
@@ -580,8 +582,10 @@ describe("jant site snapshot export/import", () => {
     tempDirs.push(root);
 
     const snapshotPath = join(root, "snapshot");
-    process.env.DATABASE_URL = `file:${join(root, "jant.sqlite")}`;
-    process.env.LOCAL_STORAGE_PATH = join(root, "media");
+    useLocalSnapshotRuntime(
+      `file:${join(root, "jant.sqlite")}`,
+      join(root, "media"),
+    );
 
     await rm(snapshotPath, { recursive: true, force: true });
     await mkdir(snapshotPath, { recursive: true });
@@ -702,15 +706,13 @@ describe("jant site snapshot export/import", () => {
       targetSqlite.close();
     }
 
-    process.env.DATABASE_URL = `file:${sourceDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = sourceStoragePath;
+    useLocalSnapshotRuntime(`file:${sourceDbPath}`, sourceStoragePath);
 
     const { run: runExport } =
       await import("../../../bin/commands/site/snapshot/export.js");
     await runExport(["--output", snapshotPath]);
 
-    process.env.DATABASE_URL = `file:${targetDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = targetStoragePath;
+    useLocalSnapshotRuntime(`file:${targetDbPath}`, targetStoragePath);
 
     const { run: runImport } =
       await import("../../../bin/commands/site/snapshot/import.js");
@@ -868,16 +870,14 @@ describe("jant site snapshot export/import", () => {
       targetSqlite.close();
     }
 
-    process.env.DATABASE_URL = `file:${sourceDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = sourceStoragePath;
+    useLocalSnapshotRuntime(`file:${sourceDbPath}`, sourceStoragePath);
     delete process.env.SITE_RESOLUTION_MODE;
 
     const { run: runExport } =
       await import("../../../bin/commands/site/snapshot/export.js");
     await runExport(["--output", snapshotPath]);
 
-    process.env.DATABASE_URL = `file:${targetDbPath}`;
-    process.env.LOCAL_STORAGE_PATH = targetStoragePath;
+    useLocalSnapshotRuntime(`file:${targetDbPath}`, targetStoragePath);
     delete process.env.SITE_RESOLUTION_MODE;
 
     const importLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});

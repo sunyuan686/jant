@@ -57,6 +57,36 @@ export function getCurrentDetailPostArticle(
   return null;
 }
 
+function getLastThreadDetailArticle(
+  root: globalThis.Document | globalThis.Element,
+): HTMLElement | null {
+  const threadGroup = root.querySelector<HTMLElement>(
+    ".thread-group-detail[data-page='post']",
+  );
+  if (!threadGroup) return null;
+
+  const articles = threadGroup.querySelectorAll<HTMLElement>(
+    ".thread-detail-item article[data-post]",
+  );
+  return articles.length > 0 ? articles.item(articles.length - 1) : null;
+}
+
+export function getReplyTargetArticle(
+  root: globalThis.Document | globalThis.Element = document,
+): HTMLElement | null {
+  const lastThreadPost = getLastThreadDetailArticle(root);
+  if (lastThreadPost) return lastThreadPost;
+
+  if (root === document) {
+    const hoveredPost = document.querySelector<HTMLElement>(
+      "[data-page='post'] article[data-post]:hover",
+    );
+    if (hoveredPost) return hoveredPost;
+  }
+
+  return getCurrentDetailPostArticle(root);
+}
+
 export function getReplyRefreshTarget(
   article: HTMLElement,
 ): ReplyRefreshTarget | null {

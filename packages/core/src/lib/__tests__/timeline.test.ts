@@ -18,7 +18,7 @@ import { createPostService } from "../../services/post.js";
 import { createMediaService } from "../../services/media.js";
 import { createPathService } from "../../services/path.js";
 import { createCollectionService } from "../../services/collection.js";
-import { postCollections, posts as postTable } from "../../db/schema.js";
+import { postCollections, posts as postTable, sites } from "../../db/schema.js";
 import { buildMediaMap } from "../media-helpers.js";
 import {
   assembleCollectionTimeline,
@@ -157,18 +157,14 @@ describe("Timeline data assembly", () => {
         return {
           post: postWithMedia,
           threadPreview: {
-            secondReply: threadCtx.secondReply
-              ? {
-                  ...threadCtx.secondReply,
-                  mediaAttachments: [],
-                }
-              : undefined,
-            penultimateReply: threadCtx.penultimateReply
-              ? {
-                  ...threadCtx.penultimateReply,
-                  mediaAttachments: [],
-                }
-              : undefined,
+            leadingReplies: threadCtx.leadingReplies.map((reply) => ({
+              ...reply,
+              mediaAttachments: [],
+            })),
+            trailingReplies: threadCtx.trailingReplies.map((reply) => ({
+              ...reply,
+              mediaAttachments: [],
+            })),
             latestReply: {
               ...threadCtx.latestReply,
               mediaAttachments: [],
@@ -183,7 +179,9 @@ describe("Timeline data assembly", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0]?.threadPreview).toBeDefined();
-    expect(items[0]?.threadPreview?.secondReply?.bodyText).toBe("Reply 1");
+    expect(items[0]?.threadPreview?.leadingReplies[0]?.bodyText).toBe(
+      "Reply 1",
+    );
     expect(items[0]?.threadPreview?.latestReply.bodyText).toBe("Reply 2");
     expect(items[0]?.threadPreview?.totalReplyCount).toBe(2);
   });
@@ -375,6 +373,53 @@ describe("Timeline data assembly", () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.post.id).toBe(root.id);
     expect(result.items[0]?.curatedThread).toBeUndefined();
+  });
+
+  it("scopes featured count and list to the current site", async () => {
+    // The current site has a single featured post.
+    const ownRoot = await postService.create({
+      format: "note",
+      bodyMarkdown: "Our featured post",
+      featured: true,
+    });
+
+    // Another tenant sharing the same database has its own featured posts.
+    const otherSiteId = "sit_test00000000000000000000001";
+    await db.insert(sites).values({
+      id: otherSiteId,
+      key: "other",
+      status: "active",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const otherPathService = createPathService(db, otherSiteId);
+    const otherPostService = createPostService(
+      db,
+      { slugIdLength: 5 },
+      otherSiteId,
+      otherPathService,
+    );
+    await otherPostService.create({
+      format: "note",
+      bodyMarkdown: "Other tenant featured A",
+      featured: true,
+    });
+    await otherPostService.create({
+      format: "note",
+      bodyMarkdown: "Other tenant featured B",
+      featured: true,
+    });
+
+    const result = await assembleFeaturedTimeline(createTimelineContext(), {
+      isAuthenticated: true,
+    });
+
+    // Count, pages, and items must reflect only the current site — the other
+    // tenant's featured posts must not inflate the total or appear in the feed.
+    expect(result.totalCount).toBe(1);
+    expect(result.totalPages).toBe(1);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.post.id).toBe(ownRoot.id);
   });
 
   it("groups featured replies under their thread root with hidden gaps", async () => {

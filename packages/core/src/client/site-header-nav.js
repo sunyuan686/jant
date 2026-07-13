@@ -5,6 +5,9 @@
  * Manages the "More" dropdown popover.
  */
 
+const moreControllers = new WeakMap();
+const drawerControllers = new WeakMap();
+
 function initMoreDropdown(root) {
   const trigger = root.querySelector(".site-header-more-btn");
   const popover = root.querySelector(".site-header-more-popover");
@@ -12,6 +15,9 @@ function initMoreDropdown(root) {
   if (!trigger || !popover) return;
   if (trigger.dataset.moreInitialized === "true") return;
   trigger.dataset.moreInitialized = "true";
+  const controller = new AbortController();
+  const signal = controller.signal;
+  moreControllers.set(trigger, controller);
 
   function open() {
     popover.setAttribute("aria-hidden", "false");
@@ -29,30 +35,49 @@ function initMoreDropdown(root) {
     if (focusTrigger) trigger.focus();
   }
 
-  trigger.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (trigger.getAttribute("aria-expanded") === "true") {
-      close();
-    } else {
-      open();
-    }
-  });
+  trigger.addEventListener(
+    "click",
+    (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (trigger.getAttribute("aria-expanded") === "true") {
+        close();
+      } else {
+        open();
+      }
+    },
+    { signal },
+  );
 
-  document.addEventListener("click", (e) => {
-    if (!(e.target instanceof Node)) return;
-    if (!trigger.parentElement?.contains(e.target)) close();
-  });
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (!(e.target instanceof Node)) return;
+      if (!trigger.parentElement?.contains(e.target)) close();
+    },
+    { signal },
+  );
 
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && popover.getAttribute("aria-hidden") === "false") {
-      close(true);
-    }
-  });
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (
+        e.key === "Escape" &&
+        popover.getAttribute("aria-hidden") === "false"
+      ) {
+        close(true);
+      }
+    },
+    { signal },
+  );
 
-  document.addEventListener("basecoat:popover", (e) => {
-    if (e.detail?.source !== trigger.parentElement) close();
-  });
+  document.addEventListener(
+    "basecoat:popover",
+    (e) => {
+      if (e.detail?.source !== trigger.parentElement) close();
+    },
+    { signal },
+  );
 }
 
 const FRESH_VISIT_KEY = "jant:nav-fresh-visits";
@@ -111,6 +136,9 @@ export function initSiteHeaderNav(root = document) {
   if (!hamburger || !drawer || !backdrop) return;
   if (hamburger.dataset.drawerInitialized === "true") return;
   hamburger.dataset.drawerInitialized = "true";
+  const controller = new AbortController();
+  const signal = controller.signal;
+  drawerControllers.set(hamburger, controller);
 
   function open() {
     drawer.setAttribute("aria-hidden", "false");
@@ -138,35 +166,65 @@ export function initSiteHeaderNav(root = document) {
           drawer.setAttribute("inert", "");
         }
       },
-      { once: true },
+      { once: true, signal },
     );
 
     if (returnFocus) hamburger.focus();
   }
 
-  hamburger.addEventListener("click", () => {
-    if (hamburger.getAttribute("aria-expanded") === "true") {
-      close();
-    } else {
-      open();
-    }
-  });
+  hamburger.addEventListener(
+    "click",
+    () => {
+      if (hamburger.getAttribute("aria-expanded") === "true") {
+        close();
+      } else {
+        open();
+      }
+    },
+    { signal },
+  );
 
-  closeBtn?.addEventListener("click", () => close());
-  backdrop.addEventListener("click", () => close());
-  drawer.addEventListener("click", (event) => {
-    if (!(event.target instanceof Element)) return;
-    if (event.target.closest("a[href]")) {
-      close(false);
-    }
-  });
+  closeBtn?.addEventListener("click", () => close(), { signal });
+  backdrop.addEventListener("click", () => close(), { signal });
+  drawer.addEventListener(
+    "click",
+    (event) => {
+      if (!(event.target instanceof Element)) return;
+      if (event.target.closest("a[href]")) {
+        close(false);
+      }
+    },
+    { signal },
+  );
 
-  drawer.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      close();
-    }
-  });
+  drawer.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    },
+    { signal },
+  );
+}
+
+export function destroySiteHeaderNav(root = document) {
+  for (const trigger of root.querySelectorAll(".site-header-more-btn")) {
+    const controller = moreControllers.get(trigger);
+    controller?.abort();
+    moreControllers.delete(trigger);
+    delete trigger.dataset.moreInitialized;
+  }
+
+  for (const hamburger of root.querySelectorAll(".site-header-hamburger")) {
+    const controller = drawerControllers.get(hamburger);
+    controller?.abort();
+    drawerControllers.delete(hamburger);
+    delete hamburger.dataset.drawerInitialized;
+  }
+
+  document.documentElement.classList.remove("drawer-open");
 }
 
 initSiteHeaderNav();

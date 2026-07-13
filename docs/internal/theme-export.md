@@ -80,7 +80,9 @@ matter. No custom taxonomies are emitted — instead, the home, featured,
 and archive layouts use `where` + `.Paginate` over `.Site.RegularPages`
 to filter at render time. This means pinned-vs-public, featured, and
 unlisted distinctions are encoded as front-matter fields (`pinned_at`,
-`featured_at`, `visibility`), not as taxonomy membership.
+`featured_at`, `visibility`), not as taxonomy membership. Thread activity is
+encoded on the root bundle as `last_activity_at`; reply bundles do not carry a
+per-reply quiet marker.
 
 ## Front matter shape
 
@@ -90,6 +92,7 @@ Root post at `content/{slug}/_index.md`:
 id: pst_...
 title: Hello
 date: 2025-01-15T12:00:00Z
+last_activity_at: 2025-01-16T08:00:00Z
 slug: hello
 type: post
 draft: false

@@ -18,6 +18,7 @@ import {
   toPublicAssetPath,
 } from "../../lib/asset-path.js";
 import { getJantIconHref } from "../../lib/jant-branding.js";
+import { getPublicUrlForProvider } from "../../lib/image.js";
 import { getThemeBrowserColors, resolveBuiltinTheme } from "../../lib/theme.js";
 import { toAbsoluteAssetUrl, toPublicPath } from "../../lib/url.js";
 import {
@@ -133,6 +134,16 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
   const assetBasePath = IS_VITE_DEV
     ? "/"
     : appConfig?.assetBasePath || getPublicAssetBasePath(sitePathPrefix);
+  // Public base URL for the active media provider, exposed so the client can
+  // tell which pasted images are already ours and skip rehosting them. Empty
+  // means media is served same-origin (the client's same-origin check covers it).
+  const mediaBase =
+    getPublicUrlForProvider(
+      appConfig?.storageDriver ?? "",
+      appConfig?.r2PublicUrl,
+      appConfig?.s3PublicUrl,
+      appConfig?.localPublicUrl,
+    ) ?? "";
   const currentUrl = c ? c.get("publicRequestUrl") : undefined;
   const rawPath = c?.req?.path ?? "/";
   const manifestStartPath = sitePathPrefix
@@ -239,10 +250,10 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
     socialImageWidthValue >= 300;
   const mainFeedHref = appConfig ? toPublicPath("/feed", sitePathPrefix) : null;
   const latestFeedHref = appConfig
-    ? toPublicPath("/feed/latest", sitePathPrefix)
+    ? toPublicPath("/latest/feed", sitePathPrefix)
     : null;
   const featuredFeedHref = appConfig
-    ? toPublicPath("/feed/featured", sitePathPrefix)
+    ? toPublicPath("/featured/feed", sitePathPrefix)
     : null;
   const mainFeedTitle =
     i18n?._(
@@ -277,9 +288,11 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
       {raw("<!DOCTYPE html>")}
       <html
         lang={resolvedLang}
+        data-theme={appConfig?.themeId}
         data-theme-mode={themeMode}
         data-site-path-prefix={sitePathPrefix}
         data-asset-base-path={assetBasePath}
+        data-media-base={mediaBase}
       >
         <head>
           <meta charset="UTF-8" />
@@ -421,7 +434,7 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
               responsive header layout before external CSS/JS loads */}
           <style
             dangerouslySetInnerHTML={{
-              __html: `.site-header-search-link,.site-header-hamburger,.site-header-more-responsive-only,.site-header-more-link-responsive,.site-header-more-divider-responsive{display:none!important}@media(max-width:1200px){.site-header-search-form{display:none!important}.site-header-search-link{display:inline-flex!important}}@media(max-width:960px){.site-header-link-collapse-lg{display:none!important}.site-header-more-responsive-only.site-header-more-tier-lg{display:inline-flex!important}.site-header-more-link-show-lg{display:flex!important}.site-header-more-divider-responsive{display:block!important}}@media(max-width:780px){.site-header-link-collapse-md{display:none!important}.site-header-more-responsive-only.site-header-more-tier-md{display:inline-flex!important}.site-header-more-link-show-md{display:flex!important}}@media(max-width:580px){.site-header-link-collapse-sm{display:none!important}.site-header-more-responsive-only.site-header-more-tier-sm{display:inline-flex!important}.site-header-more-link-show-sm{display:flex!important}}@media(max-width:480px){.site-header-nav,.site-header-more{display:none!important}.site-header-search-slot{display:flex!important}.site-header-hamburger{display:flex!important}.site-header-right{margin-left:.35rem}}`,
+              __html: `.site-header-search-link,.site-header-hamburger,.site-header-more-responsive-only,.site-header-more-link-responsive,.site-header-more-divider-responsive{display:none!important}@media(max-width:1200px){.site-header-search-form{display:none!important}.site-header-search-link{display:inline-flex!important}}@media(max-width:960px){.site-header-link-collapse-lg{display:none!important}.site-header-more-responsive-only.site-header-more-tier-lg{display:inline-flex!important}.site-header-more-link-show-lg{display:flex!important}.site-header-more-divider-show-lg{display:block!important}}@media(max-width:780px){.site-header-link-collapse-md{display:none!important}.site-header-more-responsive-only.site-header-more-tier-md{display:inline-flex!important}.site-header-more-link-show-md{display:flex!important}.site-header-more-divider-show-md{display:block!important}}@media(max-width:580px){.site-header-link-collapse-sm{display:none!important}.site-header-more-responsive-only.site-header-more-tier-sm{display:inline-flex!important}.site-header-more-link-show-sm{display:flex!important}.site-header-more-divider-show-sm{display:block!important}}@media(max-width:480px){.site-header-nav,.site-header-more{display:none!important}.site-header-search-slot{display:flex!important}.site-header-hamburger{display:flex!important}.site-header-right{margin-left:.35rem}}`,
             }}
           />
           {themeStyle && (

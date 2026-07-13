@@ -337,7 +337,7 @@ function handleMuteToggle(event: Event): void {
 }
 
 export function initFeedVideoPlayer(
-  root: globalThis.ParentNode = document,
+  root: globalThis.Document | globalThis.Element = document,
 ): void {
   const videos = root.querySelectorAll<HTMLVideoElement>(
     "[data-feed-short-video]",

@@ -15,6 +15,12 @@ import {
 import { createEntityId } from "../lib/ids.js";
 import { ValidationError } from "../lib/errors.js";
 import { now } from "../lib/time.js";
+import {
+  normalizePath,
+  normalizeSitePathPrefix,
+  stripSitePathPrefix,
+  toSameSitePath,
+} from "../lib/url.js";
 import { COLLECTION_FRESHNESS_WINDOW_SECONDS } from "../types.js";
 import type {
   NavItem,
@@ -23,10 +29,20 @@ import type {
   CreateNavItem,
   UpdateNavItem,
   SystemNavKey,
+  SuggestedNavLink,
 } from "../types.js";
 import { SYSTEM_NAV_KEYS } from "../types.js";
 
 const POSITION_RETRY_ATTEMPTS = 5;
+const SUGGESTED_NAV_LINK_CANDIDATES = [
+  { key: "about", path: "/about", label: "About" },
+  { key: "now", path: "/now", label: "Now" },
+] as const;
+
+export interface ListSuggestedLinksOptions {
+  siteOrigin?: string;
+  sitePathPrefix?: string;
+}
 
 // Re-export shared constraint detection — see db/dialect.ts
 import { isUniqueConstraintError } from "../db/dialect.js";
@@ -45,6 +61,9 @@ export interface NavItemService {
     afterId: string | null,
     beforeId: string | null,
   ): Promise<NavItem | null>;
+  listSuggestedLinks(
+    options?: ListSuggestedLinksOptions,
+  ): Promise<SuggestedNavLink[]>;
   getCollectionFreshness(collectionIds: string[]): Promise<Map<string, number>>;
 }
 
@@ -53,7 +72,8 @@ export function createNavItemService(
   siteId: string,
   databaseSchema: DatabaseSchema = sqliteSchemaBundle,
 ): NavItemService {
-  const { navItems, postCollections, posts } = databaseSchema;
+  const { navItems, postCollections, posts, pathRegistry, collections } =
+    databaseSchema;
 
   const defaultSystemOrder = [
     "latest",
@@ -119,6 +139,58 @@ export function createNavItemService(
       placement: data.placement ?? "header",
       position: data.position,
     };
+  }
+
+  function withLeadingSlash(path: string): string {
+    const normalized = normalizePath(path);
+    return normalized ? `/${normalized}` : "/";
+  }
+
+  function getComparableInternalPath(
+    url: string,
+    options: ListSuggestedLinksOptions = {},
+  ): string | null {
+    const value = url.trim();
+    const sitePathPrefix = normalizeSitePathPrefix(
+      options.sitePathPrefix ?? "",
+    );
+    const sameSitePath = toSameSitePath(value, options.siteOrigin ?? "");
+    if (sameSitePath !== null) {
+      try {
+        const pathname = new URL(sameSitePath, "https://jant.invalid").pathname;
+        const internalPath = stripSitePathPrefix(pathname, sitePathPrefix);
+        return internalPath ? withLeadingSlash(internalPath) : null;
+      } catch {
+        return null;
+      }
+    }
+
+    if (
+      value.startsWith("http://") ||
+      value.startsWith("https://") ||
+      value.startsWith("//") ||
+      value.startsWith("mailto:") ||
+      value.startsWith("tel:") ||
+      value.startsWith("#")
+    ) {
+      return null;
+    }
+
+    try {
+      const pathname = new URL(value, "https://jant.invalid").pathname;
+      const internalPath = stripSitePathPrefix(pathname, sitePathPrefix);
+      return internalPath ? withLeadingSlash(internalPath) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizeSuggestedLabel(
+    label: string | null | undefined,
+    fallback: string,
+  ): string {
+    const trimmed = label?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : fallback;
   }
 
   async function getLastPosition(): Promise<string | null> {
@@ -412,6 +484,119 @@ export function createNavItemService(
       }
 
       throw new Error("Failed to assign a unique nav item position");
+    },
+
+    async listSuggestedLinks(options: ListSuggestedLinksOptions = {}) {
+      const existingRows = await db
+        .select({
+          url: navItems.url,
+          collectionId: navItems.collectionId,
+        })
+        .from(navItems)
+        .where(eq(navItems.siteId, siteId));
+      const existingPaths = new Set(
+        existingRows.flatMap((item) => {
+          const path = getComparableInternalPath(item.url, options);
+          return path ? [path] : [];
+        }),
+      );
+      const existingCollectionIds = new Set(
+        existingRows.flatMap((item) =>
+          item.collectionId ? [item.collectionId] : [],
+        ),
+      );
+
+      const suggestions: SuggestedNavLink[] = [];
+
+      for (const candidate of SUGGESTED_NAV_LINK_CANDIDATES) {
+        const path = withLeadingSlash(candidate.path);
+        if (existingPaths.has(path)) continue;
+
+        const pathRows = await db
+          .select()
+          .from(pathRegistry)
+          .where(
+            and(
+              eq(pathRegistry.siteId, siteId),
+              eq(pathRegistry.path, normalizePath(candidate.path)),
+            ),
+          )
+          .limit(1);
+        const record = pathRows[0];
+        if (!record || record.kind === "redirect") continue;
+
+        if (record.postId) {
+          const postRows = await db
+            .select({
+              title: posts.title,
+              status: posts.status,
+              visibility: posts.visibility,
+            })
+            .from(posts)
+            .where(and(eq(posts.siteId, siteId), eq(posts.id, record.postId)))
+            .limit(1);
+          const post = postRows[0];
+          if (
+            !post ||
+            post.status !== "published" ||
+            post.visibility === "private"
+          ) {
+            continue;
+          }
+
+          suggestions.push({
+            key: candidate.key,
+            label: normalizeSuggestedLabel(post.title, candidate.label),
+            url: path,
+            targetType: "page",
+            navItemType: "link",
+          });
+          continue;
+        }
+
+        if (record.collectionId) {
+          if (existingCollectionIds.has(record.collectionId)) continue;
+
+          const collectionRows = await db
+            .select({
+              title: collections.title,
+            })
+            .from(collections)
+            .where(
+              and(
+                eq(collections.siteId, siteId),
+                eq(collections.id, record.collectionId),
+              ),
+            )
+            .limit(1);
+          const collection = collectionRows[0];
+          if (!collection) continue;
+
+          suggestions.push({
+            key: candidate.key,
+            label: normalizeSuggestedLabel(collection.title, candidate.label),
+            url: path,
+            targetType: "collection",
+            navItemType: record.kind === "slug" ? "collection" : "link",
+            ...(record.kind === "slug" && {
+              collectionId: record.collectionId,
+            }),
+          });
+          continue;
+        }
+
+        if (record.kind === "archive") {
+          suggestions.push({
+            key: candidate.key,
+            label: candidate.label,
+            url: path,
+            targetType: "archive",
+            navItemType: "link",
+          });
+        }
+      }
+
+      return suggestions;
     },
 
     async getCollectionFreshness(collectionIds) {

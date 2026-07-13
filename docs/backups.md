@@ -11,6 +11,16 @@ A complete backup spans these layers:
 - **Auth**: `user` / `session` / `account` / `api_token` / `verification`
 - **Binary**: the uploaded media files themselves (a local directory or an S3-compatible bucket)
 
+## Deleted media recycle window
+
+Jant keeps a built-in safety net for media deletions. When media is deleted — whether by a user, the compose-orphan cleanup sweep, or a post deletion — the database row is removed and the object's **original key is freed immediately**, so the original URL 404s right away (a buggy or accidental deletion surfaces at once rather than silently).
+
+On storage backends that support server-side copy (S3-compatible, including Cloudflare R2 via its S3 API), the bytes are not lost: they are first moved to an internal `trash/` key recorded in the `storage_purge` table, and physically deleted only after a **30-day retention window** by the upload cleanup sweep (`jant uploads cleanup`). Within those 30 days the object is recoverable from its trash key. This matters most on object stores without versioning (for example Cloudflare R2 by default), which offer no undelete of their own.
+
+On backends **without** server-side copy (the R2 Workers binding, local disk), deletion is immediate with no recycle window.
+
+This is a recovery convenience, **not** a substitute for the database + media backups below: it only protects the bytes for a bounded window, doesn't help if the storage backend itself is lost, and doesn't cover full-site teardown (which deletes objects immediately).
+
 ## Choosing the right tool
 
 | Need                                        | Use                                             |

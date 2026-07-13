@@ -168,6 +168,47 @@ describe("LinkToolbar", () => {
     expect(linkMark).toBeUndefined();
   });
 
+  it("opens the popover when a link is clicked (tap on mobile)", async () => {
+    const editor = createEditor();
+
+    // Create a link, then move the caret off it and dismiss the popover.
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    editor.view.dom.dispatchEvent(new CustomEvent("tiptap:open-link-input"));
+    const urlInput = requireElement(
+      document.querySelector<HTMLInputElement>(".tiptap-link-input-field"),
+      "expected url field",
+    );
+    urlInput.value = "https://example.com";
+    urlInput.dispatchEvent(
+      new globalThis.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await Promise.resolve();
+
+    editor.commands.setTextSelection(10);
+    await Promise.resolve();
+    editor.commands.blur();
+    const popup = requireElement(
+      document.querySelector<HTMLElement>(".tiptap-link-input"),
+      "expected link popup",
+    );
+    popup.style.display = "none";
+
+    // Clicking the rendered link re-opens the popover without a prior caret
+    // move — this is the path that was broken on touch devices.
+    const anchor = requireElement(
+      editor.view.dom.querySelector<HTMLAnchorElement>("a"),
+      "expected rendered link",
+    );
+    anchor.dispatchEvent(
+      new globalThis.MouseEvent("click", { bubbles: true, button: 0 }),
+    );
+    await Promise.resolve();
+
+    expect(popup.style.display).toBe("flex");
+    expect(urlInput.value).toBe("https://example.com");
+    expect(editor.state.selection.empty).toBe(true);
+  });
+
   it("replaces the link text when the text field is edited", async () => {
     const editor = createEditor();
 

@@ -23,6 +23,7 @@ import {
   toPublicHref,
   toPublicPath,
 } from "../../lib/url.js";
+import { ABOUT_PAGE_SLUG } from "../../services/about-page.js";
 import { isTextAttachment } from "../../services/media.js";
 import type { Post } from "../../types.js";
 import { renderArchivePage } from "./archive.js";
@@ -186,12 +187,30 @@ async function renderPostWithTextPreview(
   });
 }
 
-async function renderPost(c: Context<Env>, post: Post) {
+function canRenderDraftAboutEditor(
+  c: Context<Env>,
+  fullPath: string,
+  post: Post,
+): boolean {
+  return (
+    post.status === "draft" &&
+    fullPath === ABOUT_PAGE_SLUG &&
+    c.req.query("edit") === "1" &&
+    c.var.isAuthenticated
+  );
+}
+
+async function renderPost(
+  c: Context<Env>,
+  post: Post,
+  options: { allowDraft?: boolean } = {},
+) {
   // Start navData fetch immediately — it's independent of thread/media queries
   const navDataPromise = getNavigationData(c);
   const display = await assemblePostPageDisplay(c, post, {
     // Private-post access is validated before renderPost() is called.
     isAuthenticated: true,
+    allowDraft: options.allowDraft,
   });
   if (!display) {
     return c.notFound();
@@ -208,15 +227,25 @@ async function renderPost(c: Context<Env>, post: Post) {
   return renderPublicPage(c, {
     title: buildPageTitle(meta.title, navData.siteName),
     description: meta.description,
-    canonicalHref,
-    socialImageUrl: display.socialImage?.url,
-    socialImageAlt: display.socialImage?.alt,
-    socialImageWidth: display.socialImage?.width,
-    socialImageHeight: display.socialImage?.height,
-    ogType: "article",
-    articlePublishedTime: display.articlePublishedTime,
-    articleModifiedTime: display.articleModifiedTime,
-    jsonLd: buildPostJsonLd(c, display, meta, canonicalHref, navData.siteName),
+    ...(post.status === "published"
+      ? {
+          canonicalHref,
+          socialImageUrl: display.socialImage?.url,
+          socialImageAlt: display.socialImage?.alt,
+          socialImageWidth: display.socialImage?.width,
+          socialImageHeight: display.socialImage?.height,
+          ogType: "article" as const,
+          articlePublishedTime: display.articlePublishedTime,
+          articleModifiedTime: display.articleModifiedTime,
+          jsonLd: buildPostJsonLd(
+            c,
+            display,
+            meta,
+            canonicalHref,
+            navData.siteName,
+          ),
+        }
+      : {}),
     navData,
     content: (
       <PostPage post={display.postView} threadPosts={display.threadPostViews} />
@@ -350,7 +379,10 @@ pageRoutes.get("/*", async (c) => {
 
   if (resolved.postId) {
     const post = await c.var.services.posts.getById(resolved.postId);
-    if (!post || post.status === "draft") return c.notFound();
+    if (!post) return c.notFound();
+
+    const allowDraft = canRenderDraftAboutEditor(c, fullPath, post);
+    if (post.status === "draft" && !allowDraft) return c.notFound();
 
     if (post.visibility === "private") {
       const navData = await getNavigationData(c);
@@ -368,7 +400,7 @@ pageRoutes.get("/*", async (c) => {
       }
     }
 
-    return renderPost(c, post);
+    return renderPost(c, post, { allowDraft });
   }
 
   if (resolved.collectionId) {

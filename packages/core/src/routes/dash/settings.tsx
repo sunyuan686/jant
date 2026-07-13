@@ -13,12 +13,12 @@ import { z } from "zod";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { sse, dsRedirect, dsToast } from "../../lib/sse.js";
-import { getI18n } from "../../i18n/index.js";
+import { getI18n, isLocale, resolveCatalogLocale } from "../../i18n/index.js";
 import { renderPublicPage } from "../../lib/render.js";
 import { getNavigationData } from "../../lib/navigation.js";
 import { buildPageTitle } from "../../lib/page-title.js";
 import { AdminBreadcrumb } from "../../ui/shared/AdminBreadcrumb.js";
-import { TIMEZONES } from "../../lib/timezones.js";
+import { getTimeZoneOptions } from "../../lib/timezones.js";
 import { ValidationError } from "../../lib/errors.js";
 import { SETTINGS_KEYS } from "../../lib/constants.js";
 import { getAvailableThemes } from "../../lib/theme.js";
@@ -75,6 +75,7 @@ import {
   isSyncPending,
   markSyncPending,
   runBackgroundSync,
+  triggerGitHubSyncInline,
 } from "../../lib/github-sync-trigger.js";
 import { buildSyncSiteConfig } from "../../lib/github-sync-site-config.js";
 import {
@@ -94,6 +95,9 @@ export const settingsRoutes = new Hono<Env>();
 
 const UpdateLocaleSettingsSchema = z.object({
   siteLanguage: z.string(),
+  // Optional for back-compat: absent = leave the dashboard language untouched,
+  // "" = clear it (follow content language).
+  dashboardLanguage: z.string().optional(),
   cjkSerifFont: z.string(),
   timeZone: z.string(),
 });
@@ -112,6 +116,10 @@ const UpdateSearchSettingsSchema = z.object({
 
 function publicPath(c: Context<Env>, path: string): string {
   return toPublicPath(path, c.var.appConfig.sitePathPrefix);
+}
+
+function aboutEditPath(c: Context<Env>): string {
+  return `${publicPath(c, "/about")}?edit=1`;
 }
 
 /**
@@ -181,7 +189,10 @@ function breadcrumbLabel(
       );
     case "account":
       return i18n._(
-        msg({ message: "Account", comment: "@context: Breadcrumb label" }),
+        msg({
+          message: "Account & Data",
+          comment: "@context: Breadcrumb label",
+        }),
       );
     case "sessions":
       return i18n._(
@@ -299,7 +310,10 @@ settingsRoutes.get("/general", async (c) => {
   const dbSiteDescription = allSettings["SITE_DESCRIPTION"] ?? "";
 
   const saved = c.req.query("saved") !== undefined;
-  const navData = await getNavigationData(c);
+  const [navData, aboutPage] = await Promise.all([
+    getNavigationData(c),
+    c.var.services.aboutPage.getStatus(),
+  ]);
   const siteUrlForDisplay =
     appConfig.siteUrl || new URL(publicPath(c, "/"), c.req.url).toString();
 
@@ -318,6 +332,11 @@ settingsRoutes.get("/general", async (c) => {
           siteName={dbSiteName || ""}
           siteDescription={dbSiteDescription || ""}
           siteLanguage={appConfig.siteLanguage}
+          dashboardLanguage={
+            isLocale(appConfig.dashboardLanguage)
+              ? appConfig.dashboardLanguage
+              : resolveCatalogLocale(appConfig.siteLanguage)
+          }
           cjkSerifFont={appConfig.cjkSerifFont}
           siteNameFallback={appConfig.fallbacks.siteName}
           siteDescriptionFallback={appConfig.fallbacks.siteDescription}
@@ -328,12 +347,17 @@ settingsRoutes.get("/general", async (c) => {
             appConfig.sitePathPrefix,
           )}
           latestFeedUrl={toAbsoluteSiteUrl(
-            "/feed/latest",
+            "/latest/feed",
             siteUrlForDisplay,
             appConfig.sitePathPrefix,
           )}
           featuredFeedUrl={toAbsoluteSiteUrl(
-            "/feed/featured",
+            "/featured/feed",
+            siteUrlForDisplay,
+            appConfig.sitePathPrefix,
+          )}
+          archiveFeedUrl={toAbsoluteSiteUrl(
+            "/archive/feed",
             siteUrlForDisplay,
             appConfig.sitePathPrefix,
           )}
@@ -342,7 +366,10 @@ settingsRoutes.get("/general", async (c) => {
           showJantBrandingOnHome={appConfig.showJantBrandingOnHome}
           noindex={appConfig.noindex}
           demoMode={appConfig.demoMode}
-          timezones={TIMEZONES}
+          timezones={getTimeZoneOptions(appConfig.timeZone)}
+          aboutPage={aboutPage}
+          aboutEditUrl={aboutEditPath(c)}
+          aboutCreateUrl={publicPath(c, "/settings/general/about-page")}
         />
       </>
     ),
@@ -427,6 +454,7 @@ settingsRoutes.post("/general/language-time", async (c) => {
     await c.var.services.settings.updateLocaleSettings(body, {
       oldLanguage: c.var.appConfig.siteLanguage,
       oldCjkSerifFont: c.var.appConfig.cjkSerifFont,
+      oldDashboardLanguage: c.var.appConfig.dashboardLanguage,
     });
 
   const wantsJson = c.req.header("accept")?.includes("application/json");
@@ -518,6 +546,32 @@ settingsRoutes.post("/general/search", async (c) => {
       }),
     ),
   );
+});
+
+settingsRoutes.post("/general/about-page", async (c) => {
+  try {
+    await c.var.services.aboutPage.ensurePage();
+    await triggerGitHubSyncInline(c);
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      const wantsJson = c.req.header("accept")?.includes("application/json");
+      if (wantsJson) {
+        return c.json({ error: error.message, code: error.code }, 400);
+      }
+      return c.text(error.message, 400);
+    }
+    throw error;
+  }
+
+  const wantsJson = c.req.header("accept")?.includes("application/json");
+  if (wantsJson) {
+    return c.json({
+      status: "redirect" as const,
+      url: aboutEditPath(c),
+    });
+  }
+
+  return c.redirect(aboutEditPath(c));
 });
 
 // ===========================================================================
@@ -651,7 +705,11 @@ settingsRoutes.post("/avatar", async (c) => {
 });
 
 settingsRoutes.post("/avatar/remove", async (c) => {
-  await c.var.services.settings.removeAvatar(c.var.storage);
+  await c.var.services.settings.removeAvatar({
+    storage: c.var.storage,
+    media: c.var.services.media,
+    storageProvider: c.var.appConfig.storageDriver,
+  });
   try {
     await syncHostedControlPlaneSiteAvatar({
       appConfig: c.var.appConfig,
@@ -725,9 +783,13 @@ settingsRoutes.post("/avatar/display", async (c) => {
 // ===========================================================================
 
 settingsRoutes.get("/navigation", async (c) => {
-  const [navItems, directoryData] = await Promise.all([
+  const [navItems, directoryData, suggestedLinks] = await Promise.all([
     c.var.services.navItems.list(),
     c.var.services.collections.listDirectoryData(),
+    c.var.services.navItems.listSuggestedLinks({
+      siteOrigin: c.var.appConfig.siteOrigin,
+      sitePathPrefix: c.var.appConfig.sitePathPrefix,
+    }),
   ]);
   const navData = await getNavigationData(c);
 
@@ -744,6 +806,7 @@ settingsRoutes.get("/navigation", async (c) => {
         <NavigationContent
           navItems={navItems}
           directoryData={directoryData}
+          suggestedLinks={suggestedLinks}
           mainRssFeed={c.var.appConfig.mainRssFeed}
           siteName={navData.siteName}
           sitePathPrefix={c.var.appConfig.sitePathPrefix}

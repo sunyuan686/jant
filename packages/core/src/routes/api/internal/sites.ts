@@ -3,7 +3,10 @@ import { z } from "zod";
 import { requireInternalAdminApi } from "../../../middleware/auth.js";
 import { ConflictError } from "../../../lib/errors.js";
 import { parseValidated } from "../../../lib/schemas.js";
-import { getSiteResolutionMode } from "../../../lib/env.js";
+import {
+  getConfiguredStorageDriver,
+  getSiteResolutionMode,
+} from "../../../lib/env.js";
 import type { Bindings } from "../../../types.js";
 import type { AppVariables } from "../../../types/app-context.js";
 
@@ -44,6 +47,10 @@ const CreateManagedSiteSchema = z.object({
 
 const SitePostCountsSchema = z.object({
   siteIds: z.array(z.string().trim().min(1)).max(200),
+});
+
+const CleanupSiteUploadsSchema = z.object({
+  limit: z.number().int().positive().max(500).optional(),
 });
 
 const ManagedSiteDomainSchema = z.object({
@@ -153,6 +160,42 @@ internalSitesRoutes.get(
     );
 
     return c.json(usage);
+  },
+);
+
+// Clean up a single managed site's expired upload sessions and due trash
+// objects. Invoked per-site by the hosted control plane's scheduled
+// maintenance. Self-hosted operators use the host-scoped
+// `POST /api/internal/uploads/cleanup` route / `jant uploads cleanup` CLI
+// instead.
+internalSitesRoutes.post(
+  "/:siteId/uploads/cleanup",
+  requireInternalAdminApi(),
+  async (c) => {
+    assertHostBasedMode(c.env);
+
+    const storage = c.var.storage;
+    if (!storage) {
+      return c.json(
+        { error: "File storage isn't set up. Check your server config." },
+        500,
+      );
+    }
+
+    const contentType = c.req.header("Content-Type") || "";
+    const rawBody = contentType.includes("application/json")
+      ? await c.req.json().catch(() => ({}))
+      : {};
+    const body = parseValidated(CleanupSiteUploadsSchema, rawBody);
+
+    const services = c.var.servicesForSite(c.req.param("siteId"));
+    const result = await services.uploads.cleanupExpired({
+      storage,
+      storageDriver: getConfiguredStorageDriver(c.env),
+      limit: body.limit,
+    });
+
+    return c.json(result);
   },
 );
 

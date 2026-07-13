@@ -79,6 +79,20 @@ describe("Setup bootstrap logic", () => {
     );
   });
 
+  it("pins the dashboard language to the detected catalog locale", async () => {
+    await runSetupBootstrap(services, { siteLanguage: "zh-TW" });
+
+    const rows = await services.db.select().from(settings);
+    // Content language stays verbatim; the dashboard locale is the resolved
+    // catalog (zh-Hant) so it is stable if content language later changes.
+    expect(rows.find((row) => row.key === "SITE_LANGUAGE")?.value).toBe(
+      "zh-TW",
+    );
+    expect(rows.find((row) => row.key === "DASHBOARD_LANGUAGE")?.value).toBe(
+      "zh-Hant",
+    );
+  });
+
   it("is idempotent when default navigation already exists", async () => {
     const timestamp = Math.floor(Date.now() / 1000);
     await services.db.run(sql`

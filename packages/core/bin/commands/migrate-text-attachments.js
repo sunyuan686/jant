@@ -75,9 +75,7 @@ export async function run(argv) {
   });
 
   if (values.help) {
-    console.log(
-      "Usage: jant migrate-text-attachments [--url <url>] [options]",
-    );
+    console.log("Usage: jant migrate-text-attachments [--url <url>] [options]");
     console.log("");
     console.log("Convert legacy text attachments to the current markdown-only");
     console.log("storage format. Handles both prior layouts:");

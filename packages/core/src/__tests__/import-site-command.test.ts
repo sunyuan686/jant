@@ -24,6 +24,7 @@ const {
   uploadMediaList,
   normalizeTextAttachmentSpec,
   isAbsoluteImportUrl,
+  shouldImportReplyQuietly,
 } = __test__;
 
 async function writeFileTree(
@@ -97,7 +98,6 @@ describe("Hugo import CLI helpers", () => {
         'site_name = "Example Site"',
         'site_description = "A description"',
         'site_language = "en"',
-        'home_default_view = "featured"',
         "show_jant_branding_on_home = true",
         "show_header_avatar = false",
         "noindex = false",
@@ -135,7 +135,7 @@ describe("Hugo import CLI helpers", () => {
     expect(siteConfig.title).toBe("Example Site");
     expect(siteConfig.base_url).toBe("https://example.com/");
     expect(siteConfig.extra.jant.theme_id).toBe("paper");
-    expect(siteConfig.extra.jant.home_default_view).toBe("featured");
+    expect(siteConfig.extra.jant).not.toHaveProperty("home_default_view");
     expect(siteConfig.extra.jant.nav_exported).toBe(true);
     expect(siteConfig.extra.jant.nav).toHaveLength(1);
     expect(siteConfig.extra.jant.collections_directory_exported).toBe(true);
@@ -368,6 +368,35 @@ describe("Hugo import CLI helpers", () => {
     });
   });
 
+  it("buildPostPayloadFromBundle can mark imported replies as quiet", () => {
+    const bundle = {
+      slug: "reply-a",
+      frontMatter: {
+        id: "pst_reply",
+        title: "Reply A",
+        date: "2026-04-01T01:00:00Z",
+        slug: "reply-a",
+        type: "post",
+        format: "note",
+        status: "published",
+        visibility: "public",
+      },
+      body: "Reply body",
+    };
+    const data = buildPostPayloadFromBundle(bundle, {
+      bodyMarkdown: "Reply body",
+      attachments: [],
+      memberships: { entries: [], ids: [] },
+      replyToId: "pst_root",
+      quietReply: true,
+    });
+
+    expect(data).toMatchObject({
+      replyToId: "pst_root",
+      quietReply: true,
+    });
+  });
+
   it("buildPostPayloadFromBundle preserves every canonical visibility value", () => {
     const base = {
       slug: "hello",
@@ -404,6 +433,51 @@ describe("Hugo import CLI helpers", () => {
       payloadOptions,
     );
     expect(fallback.visibility).toBeUndefined();
+  });
+
+  it("shouldImportReplyQuietly preserves exported thread activity cutoffs", () => {
+    const rootFrontMatter = {
+      date: "2026-04-01T00:00:00Z",
+      last_activity_at: "2026-04-01T01:00:00Z",
+    };
+
+    expect(
+      shouldImportReplyQuietly(rootFrontMatter, {
+        date: "2026-04-01T00:30:00Z",
+        status: "published",
+      }),
+    ).toBe(false);
+    expect(
+      shouldImportReplyQuietly(rootFrontMatter, {
+        date: "2026-04-01T01:00:00Z",
+        status: "published",
+      }),
+    ).toBe(false);
+    expect(
+      shouldImportReplyQuietly(rootFrontMatter, {
+        date: "2026-04-01T02:00:00Z",
+        status: "published",
+      }),
+    ).toBe(true);
+  });
+
+  it("shouldImportReplyQuietly falls back to root date for all-quiet threads", () => {
+    const rootFrontMatter = {
+      date: "2026-04-01T00:00:00Z",
+    };
+
+    expect(
+      shouldImportReplyQuietly(rootFrontMatter, {
+        date: "2026-04-01T01:00:00Z",
+        status: "published",
+      }),
+    ).toBe(true);
+    expect(
+      shouldImportReplyQuietly(rootFrontMatter, {
+        date: "2026-04-01T01:00:00Z",
+        status: "draft",
+      }),
+    ).toBe(false);
   });
 
   it("getRootAliasPathsForImport prefers root_aliases and strips reply slugs", () => {

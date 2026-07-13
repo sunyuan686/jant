@@ -7,6 +7,7 @@
 
 import type { Editor, JSONContent } from "@tiptap/core";
 import { uploadWithMetadata } from "../upload-with-metadata.js";
+import { publicPath } from "../runtime-paths.js";
 
 type InlineImageUpload = (file: File) => Promise<{ url: string }>;
 
@@ -26,12 +27,15 @@ const inflightUploads = new Map<string, Promise<string>>();
  */
 const adoptedUploads = new Map<string, Promise<string>>();
 
-function replaceInlineImage(editor: Editor, blobUrl: string, realUrl: string) {
+function replaceInlineImage(editor: Editor, fromUrl: string, realUrl: string) {
   if (editor.isDestroyed) return;
   const { doc } = editor.state;
-  let replaced = false;
+  // Replace every node sharing this src. Blob placeholders are unique, but a
+  // deduped remote URL can appear in several nodes after a paste, and they all
+  // need to point at the one rehosted copy. setNodeMarkup preserves node size,
+  // so positions stay valid across the walk.
   doc.descendants((node, pos) => {
-    if (replaced || node.type.name !== "image" || node.attrs.src !== blobUrl) {
+    if (node.type.name !== "image" || node.attrs.src !== fromUrl) {
       return;
     }
 
@@ -45,7 +49,6 @@ function replaceInlineImage(editor: Editor, blobUrl: string, realUrl: string) {
         return true;
       })
       .run();
-    replaced = true;
   });
 }
 
@@ -63,6 +66,26 @@ function removeInlineImage(editor: Editor, blobUrl: string) {
         .run();
     }
   });
+}
+
+/**
+ * Apply the outcome of an inline upload/rehost to the placeholder node(s).
+ *
+ * On success the src is swapped to the final URL. On failure a `blob:`
+ * placeholder (from the insert flow) is removed, while a remote/`data:`
+ * placeholder (from the rehost flow) is left untouched so the original image
+ * still shows — rehosting is best-effort.
+ */
+function settlePlaceholder(
+  editor: Editor,
+  placeholderSrc: string,
+  realUrl: string | null,
+) {
+  if (realUrl) {
+    replaceInlineImage(editor, placeholderSrc, realUrl);
+  } else if (placeholderSrc.startsWith("blob:")) {
+    removeInlineImage(editor, placeholderSrc);
+  }
 }
 
 /**
@@ -93,9 +116,9 @@ export async function uploadAndInsertInlineImage(
 
   try {
     const realUrl = await uploaded;
-    replaceInlineImage(editor, placeholderUrl, realUrl);
+    settlePlaceholder(editor, placeholderUrl, realUrl);
   } catch {
-    removeInlineImage(editor, placeholderUrl);
+    settlePlaceholder(editor, placeholderUrl, null);
   } finally {
     // Only cleanup if not adopted by another editor
     if (inflightUploads.delete(placeholderUrl)) {
@@ -105,16 +128,88 @@ export async function uploadAndInsertInlineImage(
 }
 
 /**
- * Adopt in-flight inline image uploads into a new editor instance.
+ * Result of the remote-image sideload endpoint.
+ */
+export interface SideloadResult {
+  id: string;
+  url: string;
+  width?: number;
+  height?: number;
+}
+
+/**
+ * Ask the server to rehost a remote image URL into the site's own storage.
  *
- * Scans the editor's document for blob: image URLs that match pending uploads.
- * For each match, takes ownership from the original editor and sets up
- * replacement/removal watchers on the new editor.
+ * The server fetches the bytes (browser fetch of a third-party image is blocked
+ * by CORS), stores them, and returns the new public URL.
  *
- * Call this immediately after `setContent` with JSON that may contain blob: URLs
- * (e.g. after fullscreen close transfers content back to compose editor).
+ * @param url - The remote http(s) image URL
+ * @param alt - Optional alt text to persist on the media row
+ * @returns The created media's id, public URL, and dimensions
+ * @throws {Error} When the endpoint responds with a non-OK status
+ */
+export async function sideloadImage(
+  url: string,
+  alt?: string,
+): Promise<SideloadResult> {
+  const res = await fetch(publicPath("/api/uploads/sideload"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, alt }),
+  });
+  if (!res.ok) {
+    throw new Error(`Sideload failed: HTTP ${res.status}`);
+  }
+  return (await res.json()) as SideloadResult;
+}
+
+/**
+ * Rehost an image node that already exists in the document (inserted by a paste)
+ * whose `src` is a remote or `data:` URL. Tracks the work in the shared registry
+ * so submit waits for it, swaps the src to the stored URL on success, and leaves
+ * the node untouched on failure (the original image keeps showing).
  *
- * @param editor - The TipTap editor that now contains the content with blob: URLs
+ * Does NOT insert a node — the paste already created it.
+ *
+ * @param editor - TipTap editor containing the placeholder node
+ * @param placeholderSrc - The current (remote/data) src of the node to rehost
+ * @param resolveUrl - Produces the final stored URL (server sideload or client upload)
+ * @returns Resolves after the node is updated or left in place
+ * @example
+ * ```ts
+ * await rehostInlineImage(editor, src, () => sideloadImage(src).then((r) => r.url));
+ * ```
+ */
+export async function rehostInlineImage(
+  editor: Editor,
+  placeholderSrc: string,
+  resolveUrl: () => Promise<string>,
+): Promise<void> {
+  const uploaded = resolveUrl();
+  inflightUploads.set(placeholderSrc, uploaded);
+
+  try {
+    const realUrl = await uploaded;
+    settlePlaceholder(editor, placeholderSrc, realUrl);
+  } catch {
+    settlePlaceholder(editor, placeholderSrc, null);
+  } finally {
+    inflightUploads.delete(placeholderSrc);
+  }
+}
+
+/**
+ * Adopt in-flight inline image uploads/rehosts into a new editor instance.
+ *
+ * Scans the editor's document for image srcs that match pending registry entries
+ * (`blob:` placeholders from the insert flow, or remote/`data:` placeholders
+ * from the paste-rehost flow). For each match, takes ownership from the original
+ * editor and sets up replacement/removal watchers on the new editor.
+ *
+ * Call this immediately after `setContent` with JSON that may contain pending
+ * placeholders (e.g. after fullscreen close transfers content back to compose).
+ *
+ * @param editor - The TipTap editor that now contains the placeholder content
  * @returns Array of promises that resolve when each adopted upload completes
  */
 export function adoptPendingInlineImageUploads(
@@ -126,7 +221,7 @@ export function adoptPendingInlineImageUploads(
   doc.descendants((node) => {
     if (node.type.name !== "image") return;
     const src = node.attrs.src as string;
-    if (!src?.startsWith("blob:")) return;
+    if (typeof src !== "string") return;
 
     const uploaded = inflightUploads.get(src);
     if (!uploaded) return;
@@ -137,14 +232,17 @@ export function adoptPendingInlineImageUploads(
     inflightUploads.delete(src);
     adoptedUploads.set(src, uploaded);
 
+    // Blob placeholders own an object URL and are removed on failure; remote/
+    // data rehost placeholders have neither (keep the node, nothing to revoke).
+    const isBlob = src.startsWith("blob:");
     const promise = uploaded
       .then(
         (realUrl) => replaceInlineImage(editor, src, realUrl),
-        () => removeInlineImage(editor, src),
+        () => settlePlaceholder(editor, src, null),
       )
       .finally(() => {
         adoptedUploads.delete(src);
-        URL.revokeObjectURL(src);
+        if (isBlob) URL.revokeObjectURL(src);
       });
     adopted.push(promise);
   });
@@ -153,80 +251,106 @@ export function adoptPendingInlineImageUploads(
 }
 
 /**
- * Resolve all blob: inline image URLs in a TipTap JSON document.
+ * Resolve all pending inline image placeholders in a TipTap JSON document.
  *
- * Waits for pending uploads and returns a new JSON tree with real URLs.
- * Failed or unresolvable blob: images are removed from the content.
+ * Covers both placeholder kinds tracked in the registries: `blob:` URLs from
+ * the insert/upload flow and remote/`data:` URLs from the paste-rehost flow.
+ * Waits for the pending work and returns a new JSON tree with stored URLs.
+ * Unresolved `blob:` placeholders (upload failed) are removed; unresolved
+ * remote/`data:` placeholders are kept with their original src (rehost is
+ * best-effort, so the original image still shows).
  *
  * Used by the submit bridge to finalize content before posting.
  *
- * @param json - TipTap JSON document that may contain blob: image URLs
- * @returns Resolved JSON with all blob: URLs replaced or removed
+ * @param json - TipTap JSON document that may contain placeholder image srcs
+ * @returns Resolved JSON with placeholder srcs replaced (or kept/removed)
  */
 export async function resolveInlineImageUrls(
   json: JSONContent | null,
 ): Promise<JSONContent | null> {
   if (!json) return json;
 
-  // Collect all blob URLs and their upload promises
-  const blobUrls = new Map<string, Promise<string>>();
-  collectBlobUrls(json, blobUrls);
+  // Collect every placeholder src present in the registries + its promise.
+  const placeholders = new Map<string, Promise<string>>();
+  collectPlaceholderUrls(json, placeholders);
 
-  if (blobUrls.size === 0) return json;
+  if (placeholders.size === 0) return json;
 
-  // Wait for all uploads to settle
-  const resolved = new Map<string, string>();
+  // Wait for all pending work; record success (URL) or failure (null) per src.
+  const outcomes = new Map<string, string | null>();
   await Promise.allSettled(
-    Array.from(blobUrls.entries()).map(async ([blobUrl, promise]) => {
-      const realUrl = await promise;
-      resolved.set(blobUrl, realUrl);
+    Array.from(placeholders.entries()).map(async ([src, promise]) => {
+      try {
+        outcomes.set(src, await promise);
+      } catch {
+        outcomes.set(src, null);
+      }
     }),
   );
 
-  return replaceBlobUrlsInJson(json, resolved);
+  return applyPlaceholderOutcomes(json, outcomes);
 }
 
-function collectBlobUrls(node: JSONContent, out: Map<string, Promise<string>>) {
-  if (
-    node.type === "image" &&
-    typeof node.attrs?.src === "string" &&
-    node.attrs.src.startsWith("blob:")
-  ) {
-    const promise =
-      inflightUploads.get(node.attrs.src) ?? adoptedUploads.get(node.attrs.src);
+/**
+ * Whether a TipTap JSON document still references inline image placeholders that
+ * are pending upload/rehost. Used to decide the "uploading" toast and whether to
+ * run {@link resolveInlineImageUrls} before submit.
+ *
+ * @param json - TipTap JSON document to inspect
+ * @returns True if any image src is a pending placeholder
+ */
+export function hasPendingInlineImagePlaceholders(
+  json: JSONContent | null,
+): boolean {
+  if (!json) return false;
+  const placeholders = new Map<string, Promise<string>>();
+  collectPlaceholderUrls(json, placeholders);
+  return placeholders.size > 0;
+}
+
+function collectPlaceholderUrls(
+  node: JSONContent,
+  out: Map<string, Promise<string>>,
+) {
+  if (node.type === "image" && typeof node.attrs?.src === "string") {
+    const src = node.attrs.src;
+    const promise = inflightUploads.get(src) ?? adoptedUploads.get(src);
     if (promise) {
-      out.set(node.attrs.src, promise);
+      out.set(src, promise);
     }
   }
   if (node.content) {
     for (const child of node.content) {
-      collectBlobUrls(child, out);
+      collectPlaceholderUrls(child, out);
     }
   }
 }
 
-function replaceBlobUrlsInJson(
+function applyPlaceholderOutcomes(
   node: JSONContent,
-  resolved: Map<string, string>,
+  outcomes: Map<string, string | null>,
 ): JSONContent {
-  // Remove image nodes with unresolved blob URLs (upload failed or orphaned)
   if (
     node.type === "image" &&
     typeof node.attrs?.src === "string" &&
-    node.attrs.src.startsWith("blob:")
+    outcomes.has(node.attrs.src)
   ) {
-    const realUrl = resolved.get(node.attrs.src);
-    if (!realUrl) {
-      // Signal removal by returning a marker — handled by parent
+    const src = node.attrs.src;
+    const realUrl = outcomes.get(src);
+    if (realUrl) {
+      return { ...node, attrs: { ...node.attrs, src: realUrl } };
+    }
+    // Unresolved: drop blob placeholders (orphaned upload), keep remote/data.
+    if (src.startsWith("blob:")) {
       return { type: "__removed__" };
     }
-    return { ...node, attrs: { ...node.attrs, src: realUrl } };
+    return node;
   }
 
   if (!node.content) return node;
 
   const newContent = node.content
-    .map((child) => replaceBlobUrlsInJson(child, resolved))
+    .map((child) => applyPlaceholderOutcomes(child, outcomes))
     .filter((child) => child.type !== "__removed__");
 
   return newContent === node.content ? node : { ...node, content: newContent };

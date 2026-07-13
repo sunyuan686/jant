@@ -9,11 +9,50 @@ import { now } from "../../lib/time.js";
 
 const TEST_COLLECTION_ID = "col_test00000000000000000000001";
 const TEST_COLLECTION_ID_2 = "col_test00000000000000000000002";
+const TEST_POST_ID = "pst_test00000000000000000000001";
+const TEST_POST_ID_2 = "pst_test00000000000000000000002";
+
+function insertTestPath(
+  sqlite: ReturnType<typeof createTestDatabase>["sqlite"],
+  input: {
+    id: string;
+    path: string;
+    kind: "slug" | "alias" | "redirect" | "archive";
+    postId?: string | null;
+    collectionId?: string | null;
+    redirectToPath?: string | null;
+    redirectType?: 301 | 302 | null;
+    archiveQuery?: string | null;
+  },
+) {
+  const ts = now();
+  sqlite
+    .prepare(
+      `INSERT INTO path_registry (
+        id, site_id, path, kind, post_id, collection_id, redirect_to_path,
+        redirect_type, archive_query, created_at, updated_at
+      )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.id,
+      DEFAULT_TEST_SITE_ID,
+      input.path,
+      input.kind,
+      input.postId ?? null,
+      input.collectionId ?? null,
+      input.redirectToPath ?? null,
+      input.redirectType ?? null,
+      input.archiveQuery ?? null,
+      ts,
+      ts,
+    );
+}
 
 function insertTestCollection(
   sqlite: ReturnType<typeof createTestDatabase>["sqlite"],
   id: string,
-  _slug: string,
+  slug: string,
   title: string,
 ) {
   const ts = now();
@@ -23,6 +62,51 @@ function insertTestCollection(
        VALUES (?, ?, ?, 'newest', ?, ?)`,
     )
     .run(id, DEFAULT_TEST_SITE_ID, title, ts, ts);
+  insertTestPath(sqlite, {
+    id: `pth_col_${id.slice(4)}`,
+    path: slug,
+    kind: "slug",
+    collectionId: id,
+  });
+}
+
+function insertTestPost(
+  sqlite: ReturnType<typeof createTestDatabase>["sqlite"],
+  input: {
+    id: string;
+    slug: string;
+    title: string | null;
+    status?: "draft" | "published";
+    visibility?: "public" | "latest_hidden" | "private";
+  },
+) {
+  const ts = now();
+  sqlite
+    .prepare(
+      `INSERT INTO post (
+        id, site_id, format, status, visibility, title, thread_id,
+        published_at, last_activity_at, created_at, updated_at
+      )
+       VALUES (?, ?, 'note', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.id,
+      DEFAULT_TEST_SITE_ID,
+      input.status ?? "published",
+      input.visibility ?? "latest_hidden",
+      input.title,
+      input.id,
+      ts,
+      ts,
+      ts,
+      ts,
+    );
+  insertTestPath(sqlite, {
+    id: `pth_pst_${input.id.slice(4)}`,
+    path: input.slug,
+    kind: "slug",
+    postId: input.id,
+  });
 }
 
 describe("NavItemService", () => {
@@ -274,6 +358,152 @@ describe("NavItemService", () => {
       expect(items[0]?.type).toBe("link");
       expect(items[1]?.type).toBe("system");
       expect(items[1]?.systemKey).toBe("settings");
+    });
+  });
+
+  describe("listSuggestedLinks", () => {
+    it("suggests a published /about page as a normal link", async () => {
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID,
+        slug: "about",
+        title: "About me",
+      });
+
+      const suggestions = await navItemService.listSuggestedLinks();
+
+      expect(suggestions).toEqual([
+        {
+          key: "about",
+          label: "About me",
+          url: "/about",
+          targetType: "page",
+          navItemType: "link",
+        },
+      ]);
+    });
+
+    it("suggests a canonical /now collection as a collection nav item", async () => {
+      insertTestCollection(sqlite, TEST_COLLECTION_ID, "now", "Now");
+
+      const suggestions = await navItemService.listSuggestedLinks();
+
+      expect(suggestions).toEqual([
+        {
+          key: "now",
+          label: "Now",
+          url: "/now",
+          targetType: "collection",
+          navItemType: "collection",
+          collectionId: TEST_COLLECTION_ID,
+        },
+      ]);
+    });
+
+    it("suggests a /now collection alias as a normal link to preserve the path", async () => {
+      insertTestCollection(sqlite, TEST_COLLECTION_ID, "updates", "Updates");
+      insertTestPath(sqlite, {
+        id: "pth_now_alias",
+        path: "now",
+        kind: "alias",
+        collectionId: TEST_COLLECTION_ID,
+      });
+
+      const suggestions = await navItemService.listSuggestedLinks();
+
+      expect(suggestions).toEqual([
+        {
+          key: "now",
+          label: "Updates",
+          url: "/now",
+          targetType: "collection",
+          navItemType: "link",
+        },
+      ]);
+    });
+
+    it("hides suggestions already represented by path or collection id", async () => {
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID,
+        slug: "about",
+        title: "About",
+      });
+      insertTestCollection(sqlite, TEST_COLLECTION_ID, "now", "Now");
+
+      await navItemService.create({
+        type: "link",
+        label: "About",
+        url: "/about/",
+      });
+      await navItemService.create({
+        type: "collection",
+        collectionId: TEST_COLLECTION_ID,
+        label: "Now",
+        url: "/now",
+      });
+
+      const suggestions = await navItemService.listSuggestedLinks();
+
+      expect(suggestions).toEqual([]);
+    });
+
+    it("hides suggestions already represented by a same-site absolute URL", async () => {
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID,
+        slug: "about",
+        title: "About",
+      });
+
+      await navItemService.create({
+        type: "link",
+        label: "About",
+        url: "https://preview-test.owenyoung.com/about",
+      });
+
+      const suggestions = await navItemService.listSuggestedLinks({
+        siteOrigin: "https://preview-test.owenyoung.com",
+      });
+
+      expect(suggestions).toEqual([]);
+    });
+
+    it("hides suggestions already represented by a public path prefix", async () => {
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID,
+        slug: "about",
+        title: "About",
+      });
+
+      await navItemService.create({
+        type: "link",
+        label: "About",
+        url: "https://example.com/blog/about",
+      });
+
+      const suggestions = await navItemService.listSuggestedLinks({
+        siteOrigin: "https://example.com",
+        sitePathPrefix: "/blog",
+      });
+
+      expect(suggestions).toEqual([]);
+    });
+
+    it("does not suggest draft or private posts", async () => {
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID,
+        slug: "about",
+        title: "About",
+        status: "draft",
+      });
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID_2,
+        slug: "now",
+        title: "Now",
+        visibility: "private",
+      });
+
+      const suggestions = await navItemService.listSuggestedLinks();
+
+      expect(suggestions).toEqual([]);
     });
   });
 

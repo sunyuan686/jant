@@ -345,19 +345,8 @@ describe("Sitemap Routes", () => {
       expect(xml).toContain(`${TEST_SITE_ORIGIN}/archive`);
     });
 
-    it("includes /latest when the homepage default is 'featured'", async () => {
-      const { app, services } = createSitemapTestApp();
-      await services.settings.set("HOME_DEFAULT_VIEW", "featured");
-
-      const xml = await (await app.request("/sitemap-pages.xml")).text();
-      expect(xml).toContain(`${TEST_SITE_ORIGIN}/latest`);
-      expect(xml).not.toContain(`${TEST_SITE_ORIGIN}/featured`);
-    });
-
-    it("includes /featured when the homepage default is 'latest'", async () => {
-      const { app, services } = createSitemapTestApp();
-      await services.settings.set("HOME_DEFAULT_VIEW", "latest");
-
+    it("includes /featured as the secondary aggregate page", async () => {
+      const { app } = createSitemapTestApp();
       const xml = await (await app.request("/sitemap-pages.xml")).text();
       expect(xml).toContain(`${TEST_SITE_ORIGIN}/featured`);
       expect(xml).not.toContain(`${TEST_SITE_ORIGIN}/latest`);

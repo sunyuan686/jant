@@ -119,6 +119,8 @@ export interface PostFilters {
   hasReplies?: boolean;
   /** Explicit result sort order */
   sortOrder?: SortOrder;
+  /** Ignore global pinned ordering when sorting subscription/feed results. */
+  ignorePinnedSort?: boolean;
   limit?: number;
   cursor?: string;
   offset?: number; // offset for page-based pagination
@@ -135,6 +137,11 @@ interface ThreadRootPageOptions {
   excludePrivate?: boolean;
   limit?: number;
   offset?: number;
+}
+
+interface CollectionFeedEntryOptions extends ThreadRootPageOptions {
+  /** Ignore per-collection pinned ordering when sorting collection feeds. */
+  ignoreCollectionPinnedSort?: boolean;
 }
 
 interface CollectionThreadRootPageOptions extends ThreadRootPageOptions {
@@ -314,12 +321,12 @@ export interface PostService {
   /** List collection feed entries ordered by latest added-at timestamp */
   listCollectionFeedEntries(
     collectionId: string,
-    options?: ThreadRootPageOptions,
+    options?: CollectionFeedEntryOptions,
   ): Promise<CollectionFeedEntry[]>;
   /** List collection feed entries for a union of collections */
   listCollectionFeedEntriesForCollections(
     collectionIds: string[],
-    options?: ThreadRootPageOptions,
+    options?: CollectionFeedEntryOptions,
   ): Promise<CollectionFeedEntry[]>;
   /** Fetch all published, non-deleted posts for each requested thread root */
   getPublishedThreads(rootIds: string[]): Promise<Map<string, Post[]>>;
@@ -532,7 +539,7 @@ export function createPostService(
 
   const effectiveVisibilityExpr = sql<string>`coalesce(
     ${posts.visibility},
-    (SELECT root.visibility FROM post AS root WHERE root.id = ${posts.threadId})
+    (SELECT root.visibility FROM post AS root WHERE root.id = ${posts.threadId} AND root.site_id = ${siteId})
   )`;
 
   /** Check if a slug is available (not used by posts or path_registry) */
@@ -902,76 +909,90 @@ export function createPostService(
     const cursorSortTimestamp = getCursorSortTimestamp(cursorPost);
     const cursorRatingPresence = cursorPost.rating === null ? 0 : 1;
     const cursorRating = cursorPost.rating ?? -1;
+    const withPinnedSortKey = (
+      keys: [CursorSortKey, ...CursorSortKey[]],
+    ): [CursorSortKey, ...CursorSortKey[]] =>
+      filters.ignorePinnedSort
+        ? keys
+        : [
+            { direction: "desc", expr: pinnedSortExpr, value: cursorPinnedAt },
+            ...keys,
+          ];
 
     if (filters.featured || filters.sortOrder === undefined) {
       if (filters.featured) {
-        return buildLexicographicCursorCondition([
-          { direction: "desc", expr: pinnedSortExpr, value: cursorPinnedAt },
-          {
-            direction: "desc",
-            expr: featuredSortExpr,
-            value: cursorFeaturedAt,
-          },
-          { direction: "desc", expr: posts.id, value: cursorPost.id },
-        ]);
+        return buildLexicographicCursorCondition(
+          withPinnedSortKey([
+            {
+              direction: "desc",
+              expr: featuredSortExpr,
+              value: cursorFeaturedAt,
+            },
+            { direction: "desc", expr: posts.id, value: cursorPost.id },
+          ]),
+        );
       }
 
-      return buildLexicographicCursorCondition([
-        { direction: "desc", expr: pinnedSortExpr, value: cursorPinnedAt },
-        {
-          direction: "desc",
-          expr: sortTimestampSortExpr,
-          value: cursorSortTimestamp,
-        },
-        { direction: "desc", expr: posts.id, value: cursorPost.id },
-      ]);
+      return buildLexicographicCursorCondition(
+        withPinnedSortKey([
+          {
+            direction: "desc",
+            expr: sortTimestampSortExpr,
+            value: cursorSortTimestamp,
+          },
+          { direction: "desc", expr: posts.id, value: cursorPost.id },
+        ]),
+      );
     }
 
     if (filters.sortOrder === "oldest") {
-      return buildLexicographicCursorCondition([
-        { direction: "desc", expr: pinnedSortExpr, value: cursorPinnedAt },
-        {
-          direction: "asc",
-          expr: sortTimestampSortExpr,
-          value: cursorSortTimestamp,
-        },
-        { direction: "asc", expr: posts.id, value: cursorPost.id },
-      ]);
+      return buildLexicographicCursorCondition(
+        withPinnedSortKey([
+          {
+            direction: "asc",
+            expr: sortTimestampSortExpr,
+            value: cursorSortTimestamp,
+          },
+          { direction: "asc", expr: posts.id, value: cursorPost.id },
+        ]),
+      );
     }
 
     if (filters.sortOrder === "rating_desc") {
-      return buildLexicographicCursorCondition([
-        { direction: "desc", expr: pinnedSortExpr, value: cursorPinnedAt },
+      return buildLexicographicCursorCondition(
+        withPinnedSortKey([
+          {
+            direction: "desc",
+            expr: ratingPresenceExpr,
+            value: cursorRatingPresence,
+          },
+          { direction: "desc", expr: ratingSortExpr, value: cursorRating },
+          {
+            direction: "desc",
+            expr: sortTimestampSortExpr,
+            value: cursorSortTimestamp,
+          },
+          { direction: "desc", expr: posts.id, value: cursorPost.id },
+        ]),
+      );
+    }
+
+    return buildLexicographicCursorCondition(
+      withPinnedSortKey([
         {
           direction: "desc",
           expr: ratingPresenceExpr,
           value: cursorRatingPresence,
         },
-        { direction: "desc", expr: ratingSortExpr, value: cursorRating },
+        { direction: "asc", expr: ratingSortExpr, value: cursorRating },
         {
           direction: "desc",
           expr: sortTimestampSortExpr,
           value: cursorSortTimestamp,
         },
         { direction: "desc", expr: posts.id, value: cursorPost.id },
-      ]);
-    }
-
-    return buildLexicographicCursorCondition([
-      { direction: "desc", expr: pinnedSortExpr, value: cursorPinnedAt },
-      {
-        direction: "desc",
-        expr: ratingPresenceExpr,
-        value: cursorRatingPresence,
-      },
-      { direction: "asc", expr: ratingSortExpr, value: cursorRating },
-      {
-        direction: "desc",
-        expr: sortTimestampSortExpr,
-        value: cursorSortTimestamp,
-      },
-      { direction: "desc", expr: posts.id, value: cursorPost.id },
-    ]);
+      ]),
+    );
   }
 
   function toPost(
@@ -1092,7 +1113,7 @@ export function createPostService(
   }
 
   function buildThreadRootPageConditions(options?: ThreadRootPageOptions) {
-    const conditions: SQL[] = [];
+    const conditions: SQL[] = [eq(posts.siteId, siteId)];
     const status = options?.status;
 
     if (status) {
@@ -1103,6 +1124,21 @@ export function createPostService(
     }
 
     return conditions;
+  }
+
+  function buildCollectionThreadActivityExpr(alias: string) {
+    return sql<number>`MAX(
+      COALESCE(
+        (
+          SELECT root.last_activity_at
+          FROM post AS root
+          WHERE root.site_id = ${siteId}
+            AND root.id = ${posts.threadId}
+        ),
+        ${posts.publishedAt},
+        ${posts.updatedAt}
+      )
+    )`.as(alias);
   }
 
   function isMediaAttachmentInput(
@@ -1313,6 +1349,9 @@ export function createPostService(
       const pinnedSortExpr = sql<number>`coalesce(${posts.pinnedAt}, -1)`;
       const featuredSortExpr = sql<number>`coalesce(${posts.featuredAt}, -1)`;
       const sortTimestampSortExpr = sql<number>`coalesce(${sortTimestamp}, -1)`;
+      const pinnedOrder = filters.ignorePinnedSort
+        ? []
+        : [desc(pinnedSortExpr)];
 
       const baseQuery = db
         .select()
@@ -1323,7 +1362,7 @@ export function createPostService(
       let query =
         filters.featured || filters.sortOrder === undefined
           ? baseQuery.orderBy(
-              desc(pinnedSortExpr),
+              ...pinnedOrder,
               filters.featured
                 ? desc(featuredSortExpr)
                 : desc(sortTimestampSortExpr),
@@ -1331,20 +1370,20 @@ export function createPostService(
             )
           : filters.sortOrder === "oldest"
             ? baseQuery.orderBy(
-                desc(pinnedSortExpr),
+                ...pinnedOrder,
                 asc(sortTimestampSortExpr),
                 asc(posts.id),
               )
             : filters.sortOrder === "rating_desc"
               ? baseQuery.orderBy(
-                  desc(pinnedSortExpr),
+                  ...pinnedOrder,
                   desc(ratingPresence),
                   desc(posts.rating),
                   desc(sortTimestampSortExpr),
                   desc(posts.id),
                 )
               : baseQuery.orderBy(
-                  desc(pinnedSortExpr),
+                  ...pinnedOrder,
                   desc(ratingPresence),
                   asc(posts.rating),
                   desc(sortTimestampSortExpr),
@@ -2483,7 +2522,7 @@ export function createPostService(
         .select()
         .from(posts)
         .where(and(eq(posts.siteId, siteId), eq(posts.threadId, rootId)))
-        .orderBy(posts.createdAt);
+        .orderBy(posts.createdAt, posts.id);
 
       return hydratePosts(rows);
     },
@@ -2679,8 +2718,8 @@ export function createPostService(
         .from(rankedReplies)
         .where(
           or(
-            eq(rankedReplies.firstReplyRank, 1),
-            lte(rankedReplies.latestReplyRank, 2),
+            lte(rankedReplies.firstReplyRank, 2),
+            lte(rankedReplies.latestReplyRank, 3),
           ),
         );
 
@@ -2691,25 +2730,25 @@ export function createPostService(
       const contextByThreadId = new Map<
         string,
         {
-          secondReplyId: string | null;
-          penultimateReplyId: string | null;
+          leadingReplyIds: Map<number, string>;
+          trailingReplyIds: Map<number, string>;
           latestReplyId: string | null;
           totalReplyCount: number;
         }
       >();
       for (const row of contextRows) {
         const existing = contextByThreadId.get(row.threadId) ?? {
-          secondReplyId: null,
-          penultimateReplyId: null,
+          leadingReplyIds: new Map<number, string>(),
+          trailingReplyIds: new Map<number, string>(),
           latestReplyId: null,
           totalReplyCount: row.totalReplyCount,
         };
 
-        if (row.firstReplyRank === 1) {
-          existing.secondReplyId = row.id;
+        if (row.firstReplyRank <= 2) {
+          existing.leadingReplyIds.set(row.firstReplyRank, row.id);
         }
-        if (row.latestReplyRank === 2) {
-          existing.penultimateReplyId = row.id;
+        if (row.latestReplyRank === 2 || row.latestReplyRank === 3) {
+          existing.trailingReplyIds.set(row.latestReplyRank, row.id);
         }
         if (row.latestReplyRank === 1) {
           existing.latestReplyId = row.id;
@@ -2725,13 +2764,20 @@ export function createPostService(
         const latestReply = hydratedPosts.get(context.latestReplyId);
         if (!latestReply) continue;
 
+        const hydrateReplyIds = (ids: Array<string | undefined>) =>
+          ids
+            .map((id) => (id ? hydratedPosts.get(id) : undefined))
+            .filter((post): post is Post => post !== undefined);
+
         result.set(threadId, {
-          secondReply: context.secondReplyId
-            ? (hydratedPosts.get(context.secondReplyId) ?? null)
-            : null,
-          penultimateReply: context.penultimateReplyId
-            ? (hydratedPosts.get(context.penultimateReplyId) ?? null)
-            : null,
+          leadingReplies: hydrateReplyIds([
+            context.leadingReplyIds.get(1),
+            context.leadingReplyIds.get(2),
+          ]),
+          trailingReplies: hydrateReplyIds([
+            context.trailingReplyIds.get(3),
+            context.trailingReplyIds.get(2),
+          ]),
           latestReply,
           totalReplyCount: context.totalReplyCount,
         });
@@ -2845,6 +2891,8 @@ export function createPostService(
         sortOrder === "oldest"
           ? sql<number>`MIN(${posts.publishedAt})`.as("published_at")
           : sql<number>`MAX(${posts.publishedAt})`.as("published_at");
+      const threadActivityAt =
+        buildCollectionThreadActivityExpr("thread_activity_at");
       const ratingPresence = sql<number>`MAX(
         CASE
           WHEN ${posts.rating} IS NULL THEN 0
@@ -2864,6 +2912,7 @@ export function createPostService(
         .select({
           threadId: posts.threadId,
           publishedAt,
+          threadActivityAt,
           collectionPinnedAt,
           ratingPresence,
           ratingValue,
@@ -2891,12 +2940,12 @@ export function createPostService(
                 desc(collectionPinnedAt),
                 desc(ratingPresence),
                 desc(ratingValue),
-                desc(publishedAt),
+                desc(threadActivityAt),
                 desc(posts.threadId),
               )
             : baseQuery.orderBy(
                 desc(collectionPinnedAt),
-                desc(publishedAt),
+                desc(threadActivityAt),
                 desc(posts.threadId),
               );
 
@@ -2923,9 +2972,8 @@ export function createPostService(
         ...buildThreadRootPageConditions(options),
         buildCollectionMembershipCondition(collectionIds),
       ];
-      const publishedAt = sql<number>`MAX(${posts.publishedAt})`.as(
-        "published_at",
-      );
+      const threadActivityAt =
+        buildCollectionThreadActivityExpr("thread_activity_at");
       const collectedAt = sql<number>`MAX(${postCollections.createdAt})`.as(
         "collected_at",
       );
@@ -2933,11 +2981,14 @@ export function createPostService(
         sql<number>`MAX(coalesce(${postCollections.pinnedAt}, -1))`.as(
           "collection_pinned_at",
         );
+      const pinnedOrder = options.ignoreCollectionPinnedSort
+        ? []
+        : [desc(collectionPinnedAt)];
 
       let query = db
         .select({
           threadId: posts.threadId,
-          publishedAt,
+          threadActivityAt,
           collectedAt,
           collectionPinnedAt,
         })
@@ -2951,11 +3002,7 @@ export function createPostService(
         )
         .where(and(...conditions))
         .groupBy(posts.threadId)
-        .orderBy(
-          desc(collectionPinnedAt),
-          desc(publishedAt),
-          desc(posts.threadId),
-        );
+        .orderBy(...pinnedOrder, desc(threadActivityAt), desc(posts.threadId));
 
       if (options.limit !== undefined) {
         query = query.limit(options.limit) as typeof query;

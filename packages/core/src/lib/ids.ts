@@ -19,6 +19,7 @@ export const ID_PREFIX = {
   telegramBinding: "tgb",
   telegramBindingCode: "tgc",
   telegramMediaGroupItem: "tmg",
+  storagePurge: "spg",
 } as const;
 
 export type IdPrefix = (typeof ID_PREFIX)[keyof typeof ID_PREFIX];

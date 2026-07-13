@@ -57,12 +57,13 @@ async function buildTimelineItems(
     mediaCtx.sitePathPrefix,
   );
 
-  // Batch load media for thread preview posts (second + penultimate + latest)
+  // Batch load media for the bounded leading/trailing thread context.
   const contextPostIds = new Set<string>();
   for (const ctx of threadContexts.values()) {
     contextPostIds.add(ctx.latestReply.id);
-    if (ctx.secondReply) contextPostIds.add(ctx.secondReply.id);
-    if (ctx.penultimateReply) contextPostIds.add(ctx.penultimateReply.id);
+    for (const reply of [...ctx.leadingReplies, ...ctx.trailingReplies]) {
+      contextPostIds.add(reply.id);
+    }
   }
   const [contextMediaMap, contextCollectionsMap, contextAliasesMap] =
     contextPostIds.size > 0
@@ -108,19 +109,21 @@ async function buildTimelineItems(
       // Thread root is not the last post — hide reply button on it
       postView.isLastInThread = false;
 
-      const secondReplyView = threadCtx.secondReply
-        ? toPostView(
-            {
-              ...threadCtx.secondReply,
-              mediaAttachments:
-                contextMediaMap.get(threadCtx.secondReply.id) ?? [],
-            },
-            mediaCtx,
-            contextCollectionsMap.get(threadCtx.secondReply.id),
-            threadCtx.secondReply.id === threadCtx.latestReply.id,
-            firstContextAlias(threadCtx.secondReply.id),
-          )
-        : undefined;
+      const toContextPostView = (reply: Post) =>
+        toPostView(
+          {
+            ...reply,
+            mediaAttachments: contextMediaMap.get(reply.id) ?? [],
+          },
+          mediaCtx,
+          contextCollectionsMap.get(reply.id),
+          false,
+          firstContextAlias(reply.id),
+        );
+
+      const leadingReplyViews = threadCtx.leadingReplies.map(toContextPostView);
+      const trailingReplyViews =
+        threadCtx.trailingReplies.map(toContextPostView);
 
       const latestReplyView = toPostView(
         {
@@ -133,25 +136,11 @@ async function buildTimelineItems(
         firstContextAlias(threadCtx.latestReply.id),
       );
 
-      const penultimateReplyView = threadCtx.penultimateReply
-        ? toPostView(
-            {
-              ...threadCtx.penultimateReply,
-              mediaAttachments:
-                contextMediaMap.get(threadCtx.penultimateReply.id) ?? [],
-            },
-            mediaCtx,
-            contextCollectionsMap.get(threadCtx.penultimateReply.id),
-            false, // penultimateReply is not the last post
-            firstContextAlias(threadCtx.penultimateReply.id),
-          )
-        : undefined;
-
       return {
         post: postView,
         threadPreview: {
-          secondReply: secondReplyView,
-          penultimateReply: penultimateReplyView,
+          leadingReplies: leadingReplyViews,
+          trailingReplies: trailingReplyViews,
           latestReply: latestReplyView,
           totalReplyCount: threadCtx.totalReplyCount,
         },

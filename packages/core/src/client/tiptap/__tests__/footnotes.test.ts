@@ -132,6 +132,89 @@ function pressDelete(editor: Editor): boolean {
   return pressKey(editor, "Delete");
 }
 
+function findFootnoteReferencePos(editor: Editor, label: string): number {
+  let referencePos: number | null = null;
+
+  editor.state.doc.descendants((node, pos) => {
+    if (
+      referencePos === null &&
+      node.type.name === "footnoteReference" &&
+      node.attrs.label === label
+    ) {
+      referencePos = pos;
+    }
+
+    return true;
+  });
+
+  if (referencePos === null) {
+    throw new Error(`expected footnote reference ${label}`);
+  }
+
+  return referencePos;
+}
+
+function clickFootnoteReference(editor: Editor, label: string): boolean {
+  const pos = findFootnoteReferencePos(editor, label);
+  const node = editor.state.doc.nodeAt(pos);
+  if (!node) {
+    throw new Error(`expected footnote reference node ${label}`);
+  }
+
+  const event = new window.MouseEvent("click", {
+    bubbles: true,
+    button: 0,
+  });
+  let handled = false;
+
+  editor.view.someProp("handleClickOn", (handleClickOn) => {
+    if (handleClickOn(editor.view, pos, node, pos, event, true)) {
+      handled = true;
+      return true;
+    }
+
+    return false;
+  });
+
+  return handled;
+}
+
+function clickBeforeFootnoteDefinition(editor: Editor, label: string): boolean {
+  let definitionPos: number | null = null;
+
+  editor.state.doc.forEach((node, offset) => {
+    if (
+      definitionPos === null &&
+      node.type.name === "footnoteDefinition" &&
+      node.attrs.label === label
+    ) {
+      definitionPos = offset;
+    }
+  });
+
+  if (definitionPos === null) {
+    throw new Error(`expected footnote definition ${label}`);
+  }
+  const targetPos = definitionPos;
+
+  const event = new window.MouseEvent("click", {
+    bubbles: true,
+    button: 0,
+  });
+  let handled = false;
+
+  editor.view.someProp("handleClick", (handleClick) => {
+    if (handleClick(editor.view, targetPos, event)) {
+      handled = true;
+      return true;
+    }
+
+    return false;
+  });
+
+  return handled;
+}
+
 afterEach(() => {
   while (editors.length > 0) {
     editors.pop()?.destroy();
@@ -140,6 +223,108 @@ afterEach(() => {
 });
 
 describe("Footnotes editor extension", () => {
+  it("adds an empty definition when initial content has only a reference", async () => {
+    const editor = createEditor({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Body" },
+            { type: "footnoteReference", attrs: { label: "1" } },
+          ],
+        },
+      ],
+    });
+
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(normalizeFootnoteArtifacts(editor.getJSON()).content?.[1]).toEqual({
+      type: "footnoteDefinition",
+      attrs: { label: "1" },
+      content: [{ type: "paragraph" }],
+    });
+  });
+
+  it("adds empty definitions for missing references after a document change", () => {
+    const editor = createEditor();
+
+    editor.commands.setContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Body" },
+            { type: "footnoteReference", attrs: { label: "Note" } },
+            { type: "text", text: " and again" },
+            { type: "footnoteReference", attrs: { label: "note" } },
+          ],
+        },
+        {
+          type: "blockquote",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                { type: "text", text: "Nested" },
+                { type: "footnoteReference", attrs: { label: "2" } },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      normalizeFootnoteArtifacts(editor.getJSON()).content?.slice(-2),
+    ).toEqual([
+      {
+        type: "footnoteDefinition",
+        attrs: { label: "Note" },
+        content: [{ type: "paragraph" }],
+      },
+      {
+        type: "footnoteDefinition",
+        attrs: { label: "2" },
+        content: [{ type: "paragraph" }],
+      },
+    ]);
+  });
+
+  it("does not duplicate an existing case-insensitive definition", () => {
+    const editor = createEditor();
+
+    editor.commands.setContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Body" },
+            { type: "footnoteReference", attrs: { label: "Note" } },
+          ],
+        },
+        {
+          type: "footnoteDefinition",
+          attrs: { label: "note" },
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "Existing note" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      editor
+        .getJSON()
+        .content?.filter((node) => node.type === "footnoteDefinition"),
+    ).toHaveLength(1);
+  });
+
   it("insertFootnote inserts a reference, appends a definition, and moves selection into the definition", () => {
     const editor = createEditor({
       type: "doc",
@@ -176,6 +361,105 @@ describe("Footnotes editor extension", () => {
       editor.state.selection.$from.node(editor.state.selection.$from.depth - 1)
         .type.name,
     ).toBe("footnoteDefinition");
+  });
+
+  it("clicking an orphan reference creates and focuses its definition", () => {
+    const editor = createEditor({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Body" },
+            { type: "footnoteReference", attrs: { label: "1" } },
+          ],
+        },
+      ],
+    });
+    expect(clickFootnoteReference(editor, "1")).toBe(true);
+
+    expect(normalizeFootnoteArtifacts(editor.getJSON()).content?.[1]).toEqual({
+      type: "footnoteDefinition",
+      attrs: { label: "1" },
+      content: [{ type: "paragraph" }],
+    });
+    expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(
+      editor.state.selection.$from.node(editor.state.selection.$from.depth - 1)
+        .type.name,
+    ).toBe("footnoteDefinition");
+  });
+
+  it("pressing Enter on a selected reference focuses its definition", () => {
+    const editor = createEditor({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Body" },
+            { type: "footnoteReference", attrs: { label: "1" } },
+          ],
+        },
+        {
+          type: "footnoteDefinition",
+          attrs: { label: "1" },
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "Existing note" }],
+            },
+          ],
+        },
+      ],
+    });
+    editor.commands.setNodeSelection(findFootnoteReferencePos(editor, "1"));
+
+    expect(pressEnter(editor)).toBe(true);
+    expect(
+      editor.state.selection.$from.node(editor.state.selection.$from.depth - 1)
+        .type.name,
+    ).toBe("footnoteDefinition");
+  });
+
+  it("clicking between adjacent definitions focuses the next definition", () => {
+    const editor = createEditor({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Body" }],
+        },
+        {
+          type: "footnoteDefinition",
+          attrs: { label: "1" },
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "First note" }],
+            },
+          ],
+        },
+        {
+          type: "footnoteDefinition",
+          attrs: { label: "2" },
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "Second note" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(clickBeforeFootnoteDefinition(editor, "2")).toBe(true);
+
+    const definitionNode = editor.state.selection.$from.node(
+      editor.state.selection.$from.depth - 1,
+    );
+    expect(definitionNode.type.name).toBe("footnoteDefinition");
+    expect(definitionNode.attrs.label).toBe("2");
   });
 
   it("assigns the next numeric label when a footnote already exists", () => {

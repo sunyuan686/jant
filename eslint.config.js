@@ -80,6 +80,7 @@ export default [
         Request: "readonly",
         Response: "readonly",
         Headers: "readonly",
+        AbortController: "readonly",
         URL: "readonly",
         URLSearchParams: "readonly",
         FormData: "readonly",

@@ -22,6 +22,7 @@ function renderNavigationContent(
     NavigationContent({
       navItems: [],
       directoryData: { collections: [], items: [], directoryItems: [] },
+      suggestedLinks: [],
       mainRssFeed: "latest",
       siteName: "Test Site",
       ...props,
@@ -50,5 +51,23 @@ describe("NavigationContent", () => {
     const html = renderNavigationContent();
 
     expect(html).toContain("Built-in links");
+  });
+
+  it("serializes suggested links with translated target labels", () => {
+    const html = renderNavigationContent({
+      suggestedLinks: [
+        {
+          key: "now",
+          label: "Now",
+          url: "/now",
+          targetType: "collection",
+          navItemType: "collection",
+          collectionId: "col_now",
+        },
+      ],
+    });
+
+    expect(html).toContain("suggested-links=");
+    expect(html).toContain("&quot;targetLabel&quot;:&quot;Collection&quot;");
   });
 });

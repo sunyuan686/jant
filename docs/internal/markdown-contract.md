@@ -91,10 +91,10 @@ Supported source forms:
 
 HTML rendering behavior:
 
-- Inline references render as linked `<sup>` anchors
-- Definitions render once in a trailing `<section class="footnotes">`
-- The rendered footnote section starts with an `<hr>` separator
-- Back references are emitted automatically
+- References render as Tufte-style margin sidenotes, not a trailing footnote section
+- Each reference emits the trio `label.margin-toggle.sidenote-number.footref` + `input.margin-toggle.footref-toggle` + `span.sidenote`, with the definition body inlined into the `span.sidenote`
+- The visible number is supplied by a CSS counter (`sidenote-counter`), so it is not present in the DOM text
+- The `footref` / `footref-toggle` classes carry no styling of their own. They exist so HTML-to-Markdown readers (Defuddle, which powers Obsidian Web Clipper) recognize the trio as Org-mode-style CSS sidenotes and recover `[^n]` footnotes. Without them, Defuddle treats a standalone `span.sidenote` as a duplicate and deletes it, dropping the footnote entirely. Keep both classes whenever this markup changes.
 
 Serialization behavior:
 

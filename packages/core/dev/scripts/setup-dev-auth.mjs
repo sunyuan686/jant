@@ -50,9 +50,7 @@ function upsertEnvValue(lines, key, value) {
 
 const cliPassword = process.argv.find(
   (arg) =>
-    !arg.startsWith("-") &&
-    arg !== process.argv[0] &&
-    arg !== process.argv[1],
+    !arg.startsWith("-") && arg !== process.argv[0] && arg !== process.argv[1],
 );
 const debugPort = Number(process.env.DEBUG_PORT || "19020");
 const localPort = Number(process.env.PORT || "3000");

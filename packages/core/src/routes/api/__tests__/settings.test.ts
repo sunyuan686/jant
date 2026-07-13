@@ -623,7 +623,7 @@ describe("Settings API Routes", () => {
       expect(res.status).toBe(401);
     });
 
-    it("removes avatar-related settings and deletes the apple-touch icon", async () => {
+    it("removes avatar-related settings", async () => {
       const storage = createMockStorage();
       const { app, services } = createTestApp({
         authenticated: true,
@@ -658,9 +658,6 @@ describe("Settings API Routes", () => {
         await services.settings.get("SITE_FAVICON_APPLE_TOUCH"),
       ).toBeNull();
       expect(await services.settings.get("SITE_FAVICON_VERSION")).toBeNull();
-      expect(storage.delete).toHaveBeenCalledWith(
-        "media/sit_test00000000000000000000000/assets/favicon/apple-touch-icon.png",
-      );
     });
   });
 });

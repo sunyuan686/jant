@@ -122,4 +122,50 @@ describe("i18nMiddleware", () => {
 
     expect(await res.text()).toBe("en|en");
   });
+
+  it("DASHBOARD_LANGUAGE drives the admin catalog independently of content", async () => {
+    const app = createApp({
+      ONBOARDING_STATUS: "completed",
+      SITE_LANGUAGE: "fr",
+      DASHBOARD_LANGUAGE: "zh-Hans",
+    });
+    const res = await app.request("/settings");
+
+    // Content stays French; the dashboard renders in the explicit zh-Hans.
+    expect(await res.text()).toBe("fr|zh-Hans");
+  });
+
+  it("ignores DASHBOARD_LANGUAGE on public routes", async () => {
+    const app = createApp({
+      ONBOARDING_STATUS: "completed",
+      SITE_LANGUAGE: "fr",
+      DASHBOARD_LANGUAGE: "zh-Hans",
+    });
+    const res = await app.request("/");
+
+    expect(await res.text()).toBe("fr|en");
+  });
+
+  it("derives the admin catalog from content when DASHBOARD_LANGUAGE is empty", async () => {
+    const app = createApp({
+      ONBOARDING_STATUS: "completed",
+      SITE_LANGUAGE: "zh-TW",
+      DASHBOARD_LANGUAGE: "",
+    });
+    const res = await app.request("/settings");
+
+    expect(await res.text()).toBe("zh-TW|zh-Hant");
+  });
+
+  it("ignores a DASHBOARD_LANGUAGE that is not a translated catalog locale", async () => {
+    const app = createApp({
+      ONBOARDING_STATUS: "completed",
+      SITE_LANGUAGE: "zh-Hans",
+      DASHBOARD_LANGUAGE: "fr",
+    });
+    const res = await app.request("/settings");
+
+    // "fr" is not one of the 3 catalog locales, so we derive from content.
+    expect(await res.text()).toBe("zh-Hans|zh-Hans");
+  });
 });

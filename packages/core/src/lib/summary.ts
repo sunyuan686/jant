@@ -214,6 +214,12 @@ export function extractSummary(
  * @param bodyJson - Tiptap JSON string
  * @param maxBlocks - Maximum number of top-level blocks to include
  * @param maxChars - Maximum total plain-text character count
+ * @param minHiddenChars - Tolerance for limit-based truncation: when > 0 and a
+ *   block/char limit would hide a tail shorter than this many plain-text
+ *   characters, the truncation is cancelled — all remaining content blocks are
+ *   included and `hasMore` is `false`. Avoids a "read more" that reveals only a
+ *   sliver of text. Explicit `moreBreak` markers reflect author intent and are
+ *   never subject to this tolerance.
  * @returns HTML summary, whether content was truncated, and the index in
  *   `doc.content` where the content after the summary boundary begins, or null.
  *   `breakAtIndex` lets callers align the summary with the full-body rendering
@@ -229,6 +235,7 @@ export function extractSummaryHtml(
   bodyJson: string,
   maxBlocks: number = 5,
   maxChars: number = 500,
+  minHiddenChars: number = 0,
 ): { html: string; hasMore: boolean; breakAtIndex: number } | null {
   let doc: TiptapNode;
   try {
@@ -265,7 +272,19 @@ export function extractSummaryHtml(
     };
   }
 
-  // No moreBreak — accumulate blocks up to limits
+  // No moreBreak — accumulate blocks up to limits.
+  // Pre-extract plain text per content node so the tolerance check below can
+  // measure the hidden tail without a second extraction pass.
+  const contentText = new Map<number, string>();
+  let totalContentChars = 0;
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (!node || !SUMMARY_BLOCK_TYPES.has(node.type)) continue;
+    const text = extractPlainText(node).trim();
+    contentText.set(i, text);
+    totalContentChars += text.length;
+  }
+
   const selected: TiptapNode[] = [];
   let totalChars = 0;
   let lastSelectedIdx = -1;
@@ -274,7 +293,7 @@ export function extractSummaryHtml(
     const node = nodes[i];
     if (!node || !SUMMARY_BLOCK_TYPES.has(node.type)) continue;
 
-    const text = extractPlainText(node).trim();
+    const text = contentText.get(i) ?? "";
     if (
       (selected.length >= maxBlocks || totalChars + text.length > maxChars) &&
       selected.length > 0
@@ -288,13 +307,33 @@ export function extractSummaryHtml(
 
   if (selected.length === 0) return null;
 
+  let hasMore = selected.length < totalContentNodes;
+
+  // Tolerance: don't truncate just to hide a tiny tail. When a block/char limit
+  // triggered the cut and the hidden content is shorter than `minHiddenChars`,
+  // include the remaining content blocks instead. `moreBreak` is handled above
+  // and never reaches this path.
+  if (
+    hasMore &&
+    minHiddenChars > 0 &&
+    totalContentChars - totalChars < minHiddenChars
+  ) {
+    for (let i = lastSelectedIdx + 1; i < nodes.length; i++) {
+      const node = nodes[i];
+      if (!node || !SUMMARY_BLOCK_TYPES.has(node.type)) continue;
+      selected.push(node);
+      lastSelectedIdx = i;
+    }
+    hasMore = false;
+  }
+
   const subDoc: JSONContent = {
     type: "doc",
     content: selected as JSONContent[],
   };
   return {
     html: renderTiptapDocument(subDoc),
-    hasMore: selected.length < totalContentNodes,
+    hasMore,
     breakAtIndex: lastSelectedIdx + 1,
   };
 }

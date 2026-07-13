@@ -8,7 +8,7 @@
  * Run via `pnpm i18n:coverage` (also chained from `pnpm i18n:build`).
  */
 
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -138,9 +138,13 @@ ${entries}
 } as const;
 `;
 
-writeFileSync(OUT_FILE, output);
+if (existsSync(OUT_FILE) && readFileSync(OUT_FILE, "utf8") === output) {
+  console.log(`Unchanged ${OUT_FILE}`);
+} else {
+  writeFileSync(OUT_FILE, output);
+  console.log(`Wrote ${OUT_FILE}`);
+}
 
-console.log(`Wrote ${OUT_FILE}`);
 for (const [locale, ratio] of Object.entries(coverage)) {
   console.log(`  ${locale}: ${(ratio * 100).toFixed(1)}%`);
 }

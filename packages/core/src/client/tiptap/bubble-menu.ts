@@ -7,7 +7,7 @@
  */
 
 import { Extension, type Editor } from "@tiptap/core";
-import { Plugin, PluginKey, Selection } from "@tiptap/pm/state";
+import { Plugin, PluginKey, Selection, TextSelection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 import { isLinkToolbarInputActive } from "./link-toolbar.js";
 import type { FormattingToolbarMode } from "./toolbar-mode.js";
@@ -37,6 +37,58 @@ interface BubbleBtn {
   isActive: (view: EditorView) => boolean;
 }
 
+/**
+ * Toggle an inline mark on the current selection, then drop out of it.
+ *
+ * The toolbar mark buttons (bold, italic) format the *selection* — the same
+ * intent as the `**x**` / `~~x~~` markdown shortcuts, which auto-exit once you
+ * type the closing delimiter. These marks are inclusive, so a collapsed cursor
+ * sitting at the end of the formatted word stays "inside" the mark and keeps
+ * extending as the user types, with no obvious way to stop (the bubble menu is
+ * hidden once the selection collapses). After toggling, we collapse the cursor
+ * to the end of the selection and remove the just-applied mark from the stored
+ * set so the next character is plain. Use the keyboard shortcuts (Mod-B /
+ * Mod-I) for mode-style "keep typing in this format".
+ */
+export function toggleMarkAndExit(editor: Editor, markName: string): void {
+  const { to, empty } = editor.state.selection;
+  if (empty) {
+    // No selection (e.g. shortcut-driven): behave as a plain mode toggle.
+    editor.chain().focus().toggleMark(markName).run();
+    return;
+  }
+  const markType = editor.schema.marks[markName];
+  editor
+    .chain()
+    .focus()
+    .toggleMark(markName)
+    .setTextSelection(to)
+    .command(({ tr }) => {
+      if (markType) tr.removeStoredMark(markType);
+      return true;
+    })
+    .run();
+}
+
+/**
+ * Clears presentational inline marks without changing links or document structure.
+ *
+ * TipTap treats marks (bold, italic, links, and similar text formatting) and
+ * nodes (headings, blockquotes, lists, and similar document structure) as
+ * separate concerns. Links are semantic content and have their own explicit
+ * unlink action, so the formatting reset preserves them as well. Structural
+ * nodes are changed through their own toggle or conversion commands.
+ *
+ * @param editor - Editor whose current selection should be cleared
+ * @returns Nothing
+ */
+export function clearFormatting(editor: Editor): void {
+  editor.chain().focus().unsetAllMarks().run();
+
+  const { to } = editor.state.selection;
+  editor.commands.setTextSelection(to);
+}
+
 function getButtons(
   editor: Editor,
   toolbarMode: FormattingToolbarMode,
@@ -47,14 +99,14 @@ function getButtons(
         key: "bold",
         icon: ICONS.bold,
         title: "Bold",
-        action: () => editor.chain().focus().toggleBold().run(),
+        action: () => toggleMarkAndExit(editor, "bold"),
         isActive: () => editor.isActive("bold"),
       },
       {
         key: "italic",
         icon: ICONS.italic,
         title: "Italic",
-        action: () => editor.chain().focus().toggleItalic().run(),
+        action: () => toggleMarkAndExit(editor, "italic"),
         isActive: () => editor.isActive("italic"),
       },
       {
@@ -81,16 +133,7 @@ function getButtons(
         key: "clear",
         icon: ICONS.clear,
         title: "Clear formatting",
-        action: () => {
-          const { to } = editor.state.selection;
-          editor
-            .chain()
-            .focus()
-            .unsetAllMarks()
-            .clearNodes()
-            .setTextSelection(to)
-            .run();
-        },
+        action: () => clearFormatting(editor),
         isActive: () => false,
       },
     ];
@@ -101,14 +144,14 @@ function getButtons(
       key: "bold",
       icon: ICONS.bold,
       title: "Bold",
-      action: () => editor.chain().focus().toggleBold().run(),
+      action: () => toggleMarkAndExit(editor, "bold"),
       isActive: () => editor.isActive("bold"),
     },
     {
       key: "italic",
       icon: ICONS.italic,
       title: "Italic",
-      action: () => editor.chain().focus().toggleItalic().run(),
+      action: () => toggleMarkAndExit(editor, "italic"),
       isActive: () => editor.isActive("italic"),
     },
     {
@@ -247,9 +290,9 @@ export const BubbleMenu = Extension.create({
     function shouldShow(view: EditorView): boolean {
       const { state } = view;
       const { selection } = state;
-      const { empty } = selection;
       // Only show for non-empty text selections (not node selections)
-      if (empty) return false;
+      if (!(selection instanceof TextSelection) || selection.empty)
+        return false;
       if (!selection.$from.parent.isTextblock) return false;
       // Hide when link input popup is open
       if (isLinkToolbarInputActive()) return false;

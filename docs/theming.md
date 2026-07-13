@@ -136,6 +136,21 @@ To use external font sources like Google Fonts, load the font files first via [c
 }
 ```
 
+### Sidenotes and indented blocks
+
+Footnotes render as Tufte-style margin notes that float into the right gutter. A floated note anchors to the right edge of whatever block contains its `[^n]` reference, so if you give a block **inline-end (right) padding** — most commonly a padded blockquote card — that note drifts left by the padding amount.
+
+Tell the note how far the edge is inset with `--sidenote-anchor-inset` (default `0`). Derive it from the same value you use for the padding so the two never drift apart:
+
+```css
+[data-page="post"] .post-detail-body.prose blockquote {
+  --blockquote-pad-x: 1rem;
+  padding-inline: var(--blockquote-pad-x);
+  /* keep notes aligned with the gutter regardless of the padding above */
+  --sidenote-anchor-inset: var(--blockquote-pad-x);
+}
+```
+
 ## Cards and media
 
 | Variable              | Default  | What it controls            |
@@ -165,6 +180,8 @@ You can target specific pages or elements with these data attributes when writin
 
 | Attribute            | Where it appears | Values                                                                       |
 | -------------------- | ---------------- | ---------------------------------------------------------------------------- |
+| `data-theme`         | `<html>`         | Active color theme id (`tufte`, `linen`, `frost`, …)                         |
+| `data-theme-mode`    | `<html>`         | `auto`, `light`, `dark`                                                      |
 | `data-page`          | Page wrapper     | `home`, `post`, `search`, `archive`, `collection`, `collections`, `featured` |
 | `data-post`          | `<article>`      | Present on every post                                                        |
 | `data-format`        | `<article>`      | `note`, `link`, `quote`                                                      |

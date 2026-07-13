@@ -4,7 +4,18 @@
  * Handles media upload and management with pluggable storage backends.
  */
 
-import { eq, desc, inArray, asc, sql, and, or } from "drizzle-orm";
+import {
+  eq,
+  desc,
+  inArray,
+  asc,
+  sql,
+  and,
+  or,
+  isNull,
+  lt,
+  lte,
+} from "drizzle-orm";
 import { generateKeyBetween } from "fractional-indexing";
 import { type Database, supportsDrizzleTransaction } from "../db/index.js";
 import type { DatabaseDialect } from "../db/dialect.js";
@@ -16,14 +27,23 @@ import { createEntityId } from "../lib/ids.js";
 import { markdownToTiptapJson } from "../lib/markdown-to-tiptap.js";
 import { extractBodyText } from "../lib/summary.js";
 import { now } from "../lib/time.js";
-import type { StorageDriver } from "../lib/storage.js";
+import { supportsCopy, type StorageDriver } from "../lib/storage.js";
 import { renderTiptapJson } from "../lib/tiptap-render.js";
 import { tiptapJsonToMarkdown } from "../lib/tiptap-to-markdown.js";
 import {
   generateStorageKey,
+  imageExtensionForMimeType,
+  isAllowedSideloadImageType,
+  SITE_ASSET_STORAGE_KEY_LIKE_PATTERN,
+  sniffImageMimeType,
   toMediaKind,
   validateUploadFileMetadata,
 } from "../lib/upload.js";
+import {
+  IMAGE_DIMENSION_PEEK_BYTES,
+  parseImageDimensions,
+} from "../lib/image-dimensions.js";
+import { assertPublicHttpUrl, fetchImageBytes } from "../lib/url-fetch.js";
 import type {
   Media,
   MediaKind,
@@ -44,6 +64,35 @@ import {
 import type { HostedControlPlaneClient } from "../lib/hosted-control-plane.js";
 
 const DEFAULT_MEDIA_POSITION = "a0";
+
+/**
+ * Derive a display filename from a remote image URL, falling back to
+ * `image.<ext>` when the path has no usable basename.
+ *
+ * @param url - The remote image URL
+ * @param ext - Extension to use when the URL path lacks one
+ * @returns A sanitized original filename
+ */
+function remoteImageName(url: URL, ext: string): string {
+  let base: string;
+  try {
+    base = decodeURIComponent(url.pathname.split("/").pop() ?? "");
+  } catch {
+    base = url.pathname.split("/").pop() ?? "";
+  }
+  base = base.trim().replace(/[\r\n"\\]+/g, "");
+  if (!base) return `image.${ext}`;
+  return base.includes(".") ? base : `${base}.${ext}`;
+}
+
+/**
+ * Recycle-window length for deleted media storage objects. On delete we
+ * hard-remove the DB row but defer deleting the underlying storage object
+ * until this long afterwards (recorded in `storage_purge`), so an accidental
+ * delete is recoverable. R2 has no versioning/undelete, so this is our only
+ * safety net for the bytes.
+ */
+const STORAGE_PURGE_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 
 /**
  * MIME type stored on disk and on the `media` row for a Jant-composed text
@@ -166,6 +215,12 @@ export interface TextAttachmentDeps {
   maxFileSizeMB: number;
 }
 
+export interface IngestFromUrlDeps {
+  storage: StorageDriver;
+  storageDriver: string;
+  maxFileSizeMB: number;
+}
+
 export interface MediaService {
   assertCanWriteBytes(additionalBytes: number): Promise<void>;
   getById(id: string): Promise<Media | null>;
@@ -175,6 +230,24 @@ export interface MediaService {
   list(filters?: MediaFilters): Promise<Media[]>;
   create(data: CreateMediaData): Promise<Media>;
   /**
+   * Fetch a remote image URL server-side and store it as the site's own media.
+   *
+   * Used to rehost images pasted from external articles: the server downloads
+   * the bytes (bypassing browser CORS), verifies they are a real image format,
+   * and stores them. The created row has `postId = null` like other compose
+   * uploads (reaped by the orphan sweep if the post is never published).
+   *
+   * @param input.url - The remote http(s) image URL
+   * @param input.alt - Optional alt text
+   * @param deps - Storage driver, provider name, and the max file size
+   * @returns The created media row
+   * @throws {ValidationError} For unsafe URLs, non-image content, or oversize files
+   */
+  ingestFromUrl(
+    input: { url: string; alt?: string },
+    deps: IngestFromUrlDeps,
+  ): Promise<Media>;
+  /**
    * Validate media IDs: checks count limit and verifies all IDs exist in the database.
    * No-op when the array is empty.
    *
@@ -183,21 +256,52 @@ export interface MediaService {
    */
   validateIds(ids: string[]): Promise<void>;
   /**
-   * Delete a media record and its storage file.
+   * Delete a media record. The DB row is removed immediately. When `storage` is
+   * provided and supports server-side copy, the object is moved to a `trash/`
+   * key and its original key is deleted now (original URL 404s immediately,
+   * bytes recoverable until purge); otherwise the object is deleted immediately.
    *
    * @param id - Media record ID
-   * @param storage - Optional storage driver; when provided the file is deleted from storage
+   * @param storage - Storage driver used to retire the object
    * @returns true if the record existed and was deleted
    */
   delete(id: string, storage?: StorageDriver | null): Promise<boolean>;
   /**
-   * Delete multiple media records and their storage files.
+   * Delete multiple media records. Rows are removed immediately; their storage
+   * objects are retired (moved to trash, or deleted) via `storage`.
    *
    * @param ids - Media record IDs
-   * @param storage - Optional storage driver; when provided the files are deleted from storage
+   * @param storage - Storage driver used to retire the objects
    */
   deleteByIds(ids: string[], storage?: StorageDriver | null): Promise<void>;
+  /**
+   * Physically delete trashed storage objects whose recycle window has elapsed.
+   * Called by the upload cleanup sweep; removes the queue entry for each.
+   *
+   * @param input.before - Unix-seconds cutoff; only entries with `purgeAfter <= before` are processed
+   * @param input.limit - Maximum number of queue entries to process (batch bound)
+   * @param input.provider - Only process entries for this storage provider (the active driver)
+   * @param storage - Storage driver used to delete the objects
+   * @returns Number of storage objects actually deleted
+   */
+  purgeDueStorageObjects(
+    input: { before: number; limit: number; provider: string },
+    storage: StorageDriver,
+  ): Promise<number>;
   getByStorageKey(storageKey: string, provider: string): Promise<Media | null>;
+  /**
+   * Return IDs of orphaned media — rows never attached to a post
+   * (`postId IS NULL`) created before the given cutoff. Used by the upload
+   * cleanup sweep to reap media uploaded during compose but never published.
+   *
+   * @param input.before - Unix-seconds cutoff; only rows with `createdAt < before` are returned
+   * @param input.limit - Maximum number of IDs to return (batch bound)
+   * @returns Orphaned media IDs, oldest first
+   */
+  listOrphanedMediaIds(input: {
+    before: number;
+    limit: number;
+  }): Promise<string[]>;
   createTextAttachment(
     data: CreateTextAttachmentData,
     deps: TextAttachmentDeps,
@@ -278,7 +382,91 @@ export function createMediaService(
     hostedControlPlane?: HostedControlPlaneClient | null;
   },
 ): MediaService {
-  const { media } = databaseSchema;
+  const { media, storagePurge } = databaseSchema;
+
+  /**
+   * Build the recycle-bin key for a deleted object. Each retired object gets a
+   * unique `trash/<siteId>/<id>/<basename>` key so trash entries never collide
+   * and the original (public) key can be freed immediately.
+   */
+  function trashStorageKey(id: string, originalKey: string): string {
+    const basename = originalKey.split("/").pop() || "object";
+    return `trash/${siteId}/${id}/${basename}`;
+  }
+
+  /**
+   * Retire the storage object(s) backing the given media rows. When the driver
+   * supports server-side copy, each object is moved to a `trash/` key (recorded
+   * in `storage_purge`) and its original key is deleted immediately — so the
+   * original public URL 404s right away while the bytes stay recoverable until
+   * `purge_after`. Drivers without server-side copy (e.g. the R2 Workers
+   * binding) fall back to immediate deletion with no recycle window. All
+   * storage ops are best-effort so a backend hiccup never blocks the row delete.
+   */
+  async function retireStorageObjects(
+    records: Media[],
+    storage: StorageDriver | null | undefined,
+    reason: string,
+  ): Promise<void> {
+    if (!storage || records.length === 0) return;
+
+    const objects = records.flatMap((record) => {
+      const keys = [record.storageKey];
+      if (record.posterKey) keys.push(record.posterKey);
+      return keys.map((key) => ({ provider: record.provider, key }));
+    });
+
+    if (!supportsCopy(storage)) {
+      // No server-side copy: delete immediately (no recycle window).
+      await Promise.all(
+        objects.map((o) =>
+          storage.delete(o.key).catch((err) => {
+            // eslint-disable-next-line no-console -- Error logging is intentional
+            console.error("Storage delete error:", err);
+          }),
+        ),
+      );
+      return;
+    }
+
+    const purgeAfter = now() + STORAGE_PURGE_RETENTION_SECONDS;
+    const createdAt = now();
+    const entries: Array<typeof storagePurge.$inferInsert> = [];
+    for (const o of objects) {
+      const id = createEntityId("storagePurge");
+      const trashKey = trashStorageKey(id, o.key);
+      try {
+        await storage.copy(o.key, trashKey);
+      } catch (err) {
+        // Copy failed: delete the original anyway rather than leave it stranded
+        // at its public URL. No recycle entry for this object.
+        // eslint-disable-next-line no-console -- Error logging is intentional
+        console.error("Storage trash copy error:", err);
+        await storage.delete(o.key).catch((e) => {
+          // eslint-disable-next-line no-console -- Error logging is intentional
+          console.error("Storage delete error:", e);
+        });
+        continue;
+      }
+      await storage.delete(o.key).catch((err) => {
+        // eslint-disable-next-line no-console -- Error logging is intentional
+        console.error("Storage delete error:", err);
+      });
+      entries.push({
+        id,
+        siteId,
+        provider: o.provider,
+        storageKey: trashKey,
+        originalKey: o.key,
+        reason,
+        purgeAfter,
+        createdAt,
+      });
+    }
+    if (entries.length > 0) {
+      await db.insert(storagePurge).values(entries);
+    }
+  }
 
   async function getLastPosition(postId: string): Promise<string | null> {
     const rows = await db
@@ -501,6 +689,27 @@ export function createMediaService(
       return rows.map(toMedia);
     },
 
+    async listOrphanedMediaIds({ before, limit }) {
+      if (limit <= 0) return [];
+      const rows = await db
+        .select({ id: media.id })
+        .from(media)
+        .where(
+          and(
+            eq(media.siteId, siteId),
+            isNull(media.postId),
+            lt(media.createdAt, before),
+            // Site assets (avatars, favicons) are stored with postId = null and
+            // referenced from site settings, not posts. Exclude them so the
+            // reaper never deletes them as abandoned compose uploads.
+            sql`${media.storageKey} NOT LIKE ${SITE_ASSET_STORAGE_KEY_LIKE_PATTERN}`,
+          ),
+        )
+        .orderBy(asc(media.createdAt), asc(media.id))
+        .limit(limit);
+      return rows.map((r) => r.id);
+    },
+
     async getByPostId(postId) {
       const rows = await db
         .select()
@@ -629,6 +838,65 @@ export function createMediaService(
 
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- DB insert with .returning() always returns inserted row
       return toMedia(result[0]!);
+    },
+
+    async ingestFromUrl(input, deps) {
+      const url = assertPublicHttpUrl(input.url);
+      const maxBytes = deps.maxFileSizeMB * 1024 * 1024;
+
+      const { bytes } = await fetchImageBytes(url, {
+        maxBytes,
+        timeoutMs: 15000,
+      });
+
+      // Trust the bytes, not the server's content-type header: only store data
+      // we can positively identify as a supported image format. This blocks
+      // content-type spoofing (e.g. an HTML/script payload served as an image).
+      const sniffed = sniffImageMimeType(bytes);
+      const mimeType =
+        sniffed && isAllowedSideloadImageType(sniffed) ? sniffed : null;
+      if (!mimeType) {
+        throw new ValidationError(
+          "That URL didn't return a supported image. Try a different image.",
+        );
+      }
+
+      await assertCanWriteBytes(bytes.byteLength);
+
+      const dimensions = parseImageDimensions(
+        mimeType,
+        bytes.subarray(0, IMAGE_DIMENSION_PEEK_BYTES),
+      );
+      const ext = imageExtensionForMimeType(mimeType) ?? "bin";
+      const { id, filename, storageKey } = generateStorageKey(
+        siteId,
+        `image.${ext}`,
+      );
+      const originalName = remoteImageName(url, ext);
+
+      // SVG can carry scripts. Display still works via <img> (browsers disable
+      // scripting there), and attachment disposition makes direct navigation to
+      // the raw object download instead of render — neutralizing the XSS vector.
+      await deps.storage.put(storageKey, bytes, {
+        contentType: mimeType,
+        contentDisposition:
+          mimeType === "image/svg+xml" ? "attachment" : "inline",
+        cacheControl: "public, max-age=31536000, immutable",
+      });
+
+      return this.create({
+        id,
+        filename,
+        originalName,
+        mimeType,
+        size: bytes.byteLength,
+        storageKey,
+        provider: deps.storageDriver,
+        mediaKind: "image",
+        width: dimensions?.width,
+        height: dimensions?.height,
+        alt: input.alt?.trim() || undefined,
+      });
     },
 
     async createTextAttachment(data, deps) {
@@ -890,22 +1158,9 @@ export function createMediaService(
       const record = await this.getById(id);
       if (!record) return false;
 
-      if (storage) {
-        // Text attachments have a single `.md` object — same shape as any
-        // other media — so no sibling cleanup is needed. Only video/image
-        // rows carry a companion poster.
-        await storage.delete(record.storageKey).catch((err) => {
-          // eslint-disable-next-line no-console -- Error logging is intentional
-          console.error("Storage delete error:", err);
-        });
-        if (record.posterKey) {
-          await storage.delete(record.posterKey).catch((err) => {
-            // eslint-disable-next-line no-console -- Error logging is intentional
-            console.error("Storage delete poster error:", err);
-          });
-        }
-      }
-
+      // Move the bytes to trash (recoverable) and free the original key now, so
+      // the original public URL 404s immediately. Then remove the row.
+      await retireStorageObjects([record], storage, "media-delete");
       await db
         .delete(media)
         .where(and(eq(media.siteId, siteId), eq(media.id, id)));
@@ -915,28 +1170,41 @@ export function createMediaService(
     async deleteByIds(ids, storage) {
       if (ids.length === 0) return;
 
-      if (storage) {
-        const records = await this.getByIds(ids);
-        const keys: string[] = [];
-        for (const record of records) {
-          keys.push(record.storageKey);
-          if (record.posterKey) {
-            keys.push(record.posterKey);
-          }
-        }
-        await Promise.all(
-          keys.map((key) =>
-            storage.delete(key).catch((err) => {
-              // eslint-disable-next-line no-console -- Error logging is intentional
-              console.error("Storage delete error:", err);
-            }),
-          ),
-        );
-      }
-
+      const records = await this.getByIds(ids);
+      await retireStorageObjects(records, storage, "media-delete");
       await db
         .delete(media)
         .where(and(eq(media.siteId, siteId), inArray(media.id, ids)));
+    },
+
+    async purgeDueStorageObjects({ before, limit, provider }, storage) {
+      if (limit <= 0) return 0;
+      const dueRows = await db
+        .select()
+        .from(storagePurge)
+        .where(
+          and(
+            eq(storagePurge.siteId, siteId),
+            eq(storagePurge.provider, provider),
+            lte(storagePurge.purgeAfter, before),
+          ),
+        )
+        .orderBy(asc(storagePurge.purgeAfter), asc(storagePurge.id))
+        .limit(limit);
+
+      let purged = 0;
+      for (const row of dueRows) {
+        // `storageKey` is the trash key; it is never referenced by a live media
+        // row, so no liveness check is needed — just delete it and drop the entry.
+        await storage.delete(row.storageKey).catch((err) => {
+          // eslint-disable-next-line no-console -- Error logging is intentional
+          console.error("Storage purge delete error:", err);
+        });
+        await db.delete(storagePurge).where(eq(storagePurge.id, row.id));
+        purged += 1;
+      }
+
+      return purged;
     },
   };
 }

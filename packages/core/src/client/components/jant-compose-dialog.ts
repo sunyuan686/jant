@@ -36,6 +36,7 @@ import {
   getSelectedFirstOrder,
 } from "../collection-picker-order.js";
 import type { JantComposeEditor } from "./jant-compose-editor.js";
+import { convertComposeFormat } from "./compose-format-convert.js";
 import { getMediaCategory } from "../../lib/upload.js";
 import { getSlugValidationIssue } from "../../lib/slug-format.js";
 import { createTiptapEditor } from "../tiptap/create-editor.js";
@@ -743,13 +744,14 @@ export class JantComposeDialog extends LitElement {
       this._scheduleCollectionPickerAutofocus();
     }
     if (
-      changed.has("_format") ||
       changed.has("_collectionIds") ||
       changed.has("_slug") ||
       changed.has("_publishedAtInput") ||
       changed.has("_visibility")
     ) {
-      // Schedule draft auto-save (new-post and edit modes, not draft-load)
+      // Schedule draft auto-save (new-post and edit modes, not draft-load).
+      // `_format` is intentionally excluded: a bare format switch is exploratory
+      // and shouldn't persist a draft on its own (see `_switchFormat`).
       if (!this._draftSourceId) {
         this._scheduleDraftSave();
       }
@@ -1319,6 +1321,7 @@ export class JantComposeDialog extends LitElement {
     index: number,
     status: "published" | "draft",
   ): ComposeSubmitDetail {
+    editor.promoteLeadingH1Title({ force: true });
     const editorData = editor.getData();
     const mediaAttachments = new Map(
       (editorData.attachments ?? []).map((a) => [a.clientId, a]),
@@ -1387,6 +1390,7 @@ export class JantComposeDialog extends LitElement {
     const editor = this._editor;
     if (!editor) return null;
 
+    editor.promoteLeadingH1Title({ force: true });
     const editorData = editor.getData();
     const mediaAttachments = new Map(
       (editorData.attachments ?? []).map((attachment) => [
@@ -2456,7 +2460,7 @@ export class JantComposeDialog extends LitElement {
           "jant-compose-editor",
         )[this._focusedThreadIndex];
         editor?.dispatchEvent(
-          new CustomEvent("jant:thread-format-change", {
+          new CustomEvent("jant:format-change", {
             detail: { format: target },
             bubbles: true,
           }),
@@ -2547,6 +2551,7 @@ export class JantComposeDialog extends LitElement {
         placeholder: this.labels.attachedTextPlaceholder,
         content,
         toolbarMode: "compose",
+        tableControlLabels: this.labels.tableControls,
       });
       this._focusAttachedEditorBoundary(content);
     });
@@ -3052,6 +3057,14 @@ export class JantComposeDialog extends LitElement {
     const editor = this._editor;
     if (!editor) return;
 
+    // Only persist genuine unsaved changes. Without this, merely opening a post
+    // for edit (or restoring a draft) would write a local draft of the
+    // unchanged content, since loading fires content-change events.
+    if (!this._hasUnsavedChanges()) {
+      globalThis.localStorage.removeItem(this._currentDraftStorageKey());
+      return;
+    }
+
     const data = editor.getData();
     const hasContent =
       !!data.body ||
@@ -3063,7 +3076,7 @@ export class JantComposeDialog extends LitElement {
       data.attachedTexts.length > 0;
 
     if (!hasContent) {
-      globalThis.localStorage.removeItem(JantComposeDialog._DRAFT_KEY);
+      globalThis.localStorage.removeItem(this._currentDraftStorageKey());
       return;
     }
 
@@ -3098,7 +3111,7 @@ export class JantComposeDialog extends LitElement {
 
     try {
       globalThis.localStorage.setItem(
-        JantComposeDialog._DRAFT_KEY,
+        this._currentDraftStorageKey(),
         JSON.stringify(draft),
       );
     } catch {
@@ -3549,10 +3562,43 @@ export class JantComposeDialog extends LitElement {
 
   private static readonly _FORMATS: ComposeFormat[] = ["note", "link", "quote"];
 
+  /**
+   * Whether a format switch should convert fields (fold/extract). Only when
+   * editing an existing post or a server draft — for a brand-new post, switching
+   * just hides/shows fields and nothing is persisted yet, so conversion would
+   * pollute the body for no benefit.
+   */
+  private _shouldConvertOnFormatSwitch(): boolean {
+    return !!(this._editPostId || this._draftSourceId);
+  }
+
   private _switchFormat(target: ComposeFormat) {
     if (this._format === target) return;
-    if (this._editPostId) return;
+    const editor = this._editor;
+    if (editor && this._shouldConvertOnFormatSwitch()) {
+      // Fold fields the target can't hold into the body before the format
+      // change recreates the editor from `_bodyJson`. Synchronous, so the old
+      // Tiptap instance can't fire onUpdate and clobber what we just wrote.
+      // `applyConvertedFields` suppresses the one content-change event the
+      // conversion emits, so the switch itself never schedules a draft save.
+      editor.applyConvertedFields(
+        convertComposeFormat(
+          this._format,
+          target,
+          editor.getConvertibleFields(),
+        ),
+      );
+    }
+    // A bare format switch shouldn't persist a local draft, so drop any save
+    // already pending from loading the post.
+    this._cancelDraftSaveTimer();
     this._format = target;
+    // Sync the editor's format this tick. Lit commits the `.format` binding
+    // only after this render returns, so `_canPublish()` (which reads
+    // `editor.getData()`, keyed on the editor's format) would otherwise compute
+    // against the stale format for one render and leave the submit button
+    // wrongly disabled.
+    if (editor) editor.format = target;
     this._showPublishPanel = false;
     if (this._shouldAutofocusFormatInput()) {
       globalThis.requestAnimationFrame(() => this._editor?.focusInput());
@@ -3571,6 +3617,16 @@ export class JantComposeDialog extends LitElement {
     const draftButtonLabel = this._hasContent()
       ? this.labels.saveAsDraft
       : this.labels.drafts;
+    // Format selector sits inline (above each post) whenever more than one post
+    // is on screen — a reply (parent shown above) or a multi-post thread. The
+    // header then shows a plain title instead of the format selector.
+    const isReply = !!(this._replyToId && this._replyToData);
+    const showTitle = isReply || this._threadItems.length > 0;
+    const headerTitle = this._editPostId
+      ? this.labels.editTitle
+      : isReply
+        ? this.labels.replyTitle
+        : this.labels.newThread;
 
     return html`
       <header class="compose-dialog-header">
@@ -3583,39 +3639,33 @@ export class JantComposeDialog extends LitElement {
         </button>
 
         <div class="compose-dialog-header-center">
-          ${this._editPostId
-            ? html`<span class="compose-dialog-title"
-                >${this.labels.editPost}</span
-              >`
-            : this._threadItems.length > 0
-              ? html`<span class="compose-dialog-title"
-                  >${this.labels.newThread}</span
-                >`
-              : html`
-                  <div class="compose-segmented">
-                    <div
-                      class=${classMap({
-                        "compose-format-pill": true,
-                        "compose-format-pill-link": this._format === "link",
-                        "compose-format-pill-quote": this._format === "quote",
-                      })}
-                    ></div>
-                    ${formats.map(
-                      (f) => html`
-                        <button
-                          type="button"
-                          class=${classMap({
-                            "compose-segmented-item": true,
-                            "compose-segmented-item-active": this._format === f,
-                          })}
-                          @click=${() => this._switchFormat(f)}
-                        >
-                          ${formatLabels[f]}
-                        </button>
-                      `,
-                    )}
-                  </div>
-                `}
+          ${showTitle
+            ? html`<span class="compose-dialog-title">${headerTitle}</span>`
+            : html`
+                <div class="compose-segmented">
+                  <div
+                    class=${classMap({
+                      "compose-format-pill": true,
+                      "compose-format-pill-link": this._format === "link",
+                      "compose-format-pill-quote": this._format === "quote",
+                    })}
+                  ></div>
+                  ${formats.map(
+                    (f) => html`
+                      <button
+                        type="button"
+                        class=${classMap({
+                          "compose-segmented-item": true,
+                          "compose-segmented-item-active": this._format === f,
+                        })}
+                        @click=${() => this._switchFormat(f)}
+                      >
+                        ${formatLabels[f]}
+                      </button>
+                    `,
+                  )}
+                </div>
+              `}
         </div>
 
         <div class="compose-dialog-header-actions">
@@ -3984,7 +4034,7 @@ export class JantComposeDialog extends LitElement {
           <span class="compose-alt-title">${this.labels.attachedText}</span>
           <button
             type="button"
-            class="compose-post-btn ml-auto"
+            class="compose-attached-done"
             @click=${() => this._doneAttachedPanel()}
           >
             ${this.labels.done}
@@ -5205,6 +5255,12 @@ export class JantComposeDialog extends LitElement {
         "jant-compose-editor",
       );
       editors[this._focusedThreadIndex]?.focusInput();
+      const threadLayout = this.querySelector<HTMLElement>(
+        ".compose-thread-compose-layout",
+      );
+      if (threadLayout) {
+        threadLayout.scrollTop = threadLayout.scrollHeight;
+      }
     });
   }
 
@@ -5297,14 +5353,24 @@ export class JantComposeDialog extends LitElement {
         @focusin=${() => {
           this._focusedThreadIndex = index;
         }}
-        @jant:thread-format-change=${(
-          e: CustomEvent<{ format: ComposeFormat }>,
-        ) => {
+        @jant:format-change=${(e: CustomEvent<{ format: ComposeFormat }>) => {
           e.stopPropagation();
           this._threadItems = this._threadItems.map((it, i) =>
             i === index ? { ...it, format: e.detail.format } : it,
           );
           this._format = e.detail.format;
+          // Move focus to the new format's input, mirroring the single-post
+          // composer's `_switchFormat`. The editor re-renders its fields only
+          // after both this dialog and the editor itself finish updating, so
+          // wait for both before routing focus to the now-visible control.
+          if (this._shouldAutofocusFormatInput()) {
+            this.updateComplete.then(() => {
+              const editor = this.querySelectorAll<JantComposeEditor>(
+                "jant-compose-editor",
+              )[index];
+              editor?.updateComplete.then(() => editor.focusInput());
+            });
+          }
         }}
         @jant:thread-remove=${(e: Event) => {
           e.stopPropagation();
@@ -5375,7 +5441,11 @@ export class JantComposeDialog extends LitElement {
 
     return html`
       <div
-        class="compose-thread-layout compose-thread-compose-layout"
+        class=${classMap({
+          "compose-thread-layout": true,
+          "compose-thread-compose-layout": true,
+          "compose-reply-compose-layout": isReply,
+        })}
         @jant:compose-content-changed=${() => this._scheduleDraftSave()}
       >
         ${isReply ? this._renderReplyContext() : nothing}
@@ -5423,6 +5493,7 @@ export class JantComposeDialog extends LitElement {
       .format=${this._format}
       .labels=${this.labels}
       .uploadMaxFileSize=${this.uploadMaxFileSize}
+      .inlineFormat=${isReply}
       .slashCommandDiscovered=${this.slashCommandDiscovered}
     ></jant-compose-editor>`;
 
@@ -5444,9 +5515,19 @@ export class JantComposeDialog extends LitElement {
             ? this._renderThreadComposeLayout()
             : isReply
               ? html`
-                  <div class="compose-thread-layout">
+                  <div
+                    class="compose-thread-layout compose-reply-compose-layout"
+                  >
                     ${this._renderReplyContext()}
-                    <div class="compose-editor-row">
+                    <div
+                      class="compose-editor-row"
+                      @jant:format-change=${(
+                        e: CustomEvent<{ format: ComposeFormat }>,
+                      ) => {
+                        e.stopPropagation();
+                        this._switchFormat(e.detail.format);
+                      }}
+                    >
                       <div class="compose-thread-dot"></div>
                       ${editor}
                     </div>

@@ -143,6 +143,8 @@ export interface UploadSessionService {
   }): Promise<{
     abortedMultipartUploads: number;
     deletedSessions: number;
+    deletedOrphanMedia: number;
+    purgedStorageObjects: number;
   }>;
   abort(id: string, deps: { storage: StorageDriver }): Promise<void>;
 }
@@ -760,9 +762,21 @@ export function createUploadSessionService(
         deletedSessions += 1;
       }
 
+      // Physically delete storage objects whose recycle window has elapsed.
+      // Skips any object a live media row still references (re-uploads).
+      const purgedStorageObjects = await media.purgeDueStorageObjects(
+        { before: now(), limit, provider: deps.storageDriver },
+        deps.storage,
+      );
+
       return {
         abortedMultipartUploads,
         deletedSessions,
+        // Retained for response compatibility. Finalized media may be referenced
+        // from post bodies without a `media.post_id`, so upload cleanup must not
+        // infer liveness from attachment state.
+        deletedOrphanMedia: 0,
+        purgedStorageObjects,
       };
     },
   };

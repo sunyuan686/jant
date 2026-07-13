@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   TIMEZONES,
+  getTimeZoneOptions,
   isSupportedTimeZone,
   mapIanaToTimezone,
   normalizeTimeZone,
@@ -69,8 +70,15 @@ describe("normalizeTimeZone", () => {
     expect(normalizeTimeZone("London")).toBe("Europe/London");
   });
 
-  it("normalizes accepted IANA aliases to the curated canonical value", () => {
-    expect(normalizeTimeZone("Asia/Calcutta")).toBe("Asia/Kolkata");
+  it("preserves runtime-supported zones instead of collapsing their rules", () => {
+    expect(normalizeTimeZone("America/Phoenix")).toBe("America/Phoenix");
+    expect(normalizeTimeZone("Australia/Darwin")).toBe("Australia/Darwin");
+    expect(normalizeTimeZone("Etc/GMT-8")).toBe("Etc/GMT-8");
+  });
+
+  it("normalizes fixed offsets and UTC aliases through Intl", () => {
+    expect(normalizeTimeZone("+08")).toBe("+08:00");
+    expect(normalizeTimeZone("+08:00")).toBe("+08:00");
     expect(normalizeTimeZone("Etc/UTC")).toBe("UTC");
   });
 
@@ -81,14 +89,34 @@ describe("normalizeTimeZone", () => {
 });
 
 describe("isSupportedTimeZone", () => {
-  it("accepts canonical, aliased, and legacy values", () => {
+  it("accepts runtime zones, fixed offsets, and legacy values", () => {
     expect(isSupportedTimeZone("Asia/Shanghai")).toBe(true);
     expect(isSupportedTimeZone("Asia/Calcutta")).toBe(true);
+    expect(isSupportedTimeZone("America/Phoenix")).toBe(true);
+    expect(isSupportedTimeZone("Australia/Darwin")).toBe(true);
+    expect(isSupportedTimeZone("Etc/GMT-8")).toBe(true);
+    expect(isSupportedTimeZone("+08:00")).toBe(true);
     expect(isSupportedTimeZone("Beijing")).toBe(true);
   });
 
   it("rejects empty and unknown values", () => {
     expect(isSupportedTimeZone("")).toBe(false);
     expect(isSupportedTimeZone("Unknown/Zone")).toBe(false);
+  });
+});
+
+describe("getTimeZoneOptions", () => {
+  it("adds an unlisted current timezone without expanding the curated list", () => {
+    const options = getTimeZoneOptions("America/Phoenix");
+
+    expect(options).toHaveLength(TIMEZONES.length + 1);
+    expect(options.at(-1)).toMatchObject({
+      label: "America/Phoenix",
+      value: "America/Phoenix",
+    });
+  });
+
+  it("does not duplicate a curated timezone", () => {
+    expect(getTimeZoneOptions("Asia/Shanghai")).toBe(TIMEZONES);
   });
 });

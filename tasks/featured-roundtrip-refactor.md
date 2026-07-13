@@ -183,19 +183,19 @@ all intentional.
 
 ### URL scheme
 
-| URL                           | Rendered by                                                                                                    |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `/`                           | `index.html` — pinned + first page of `feed=public` (or `feed=featured` when `home_default_view = "featured"`) |
-| `/feed/public/page/N/`        | Zola native paginator (N ≥ 2)                                                                                  |
-| `/featured/`                  | `featured.html` — manual render of first page of `feed=featured`                                               |
-| `/feed/featured/page/N/`      | Zola native paginator (N ≥ 2)                                                                                  |
-| `/archive/`                   | `archive.html` — manual render of first page of `feed=archive`                                                 |
-| `/feed/archive/page/N/`       | Zola native paginator (N ≥ 2)                                                                                  |
-| `/feed/pinned/`               | taxonomy_single (rarely browsed directly)                                                                      |
-| `/feed/unlisted/`             | taxonomy_single with `<meta robots=noindex>`                                                                   |
-| `/{post-slug}/`               | `page.html`                                                                                                    |
-| `/{collection-slug}/`         | collection taxonomy term page                                                                                  |
-| `/collections/{slug}/page/N/` | collection paginator                                                                                           |
+| URL                           | Rendered by                                                      |
+| ----------------------------- | ---------------------------------------------------------------- |
+| `/`                           | `index.html` — pinned + first page of `feed=public`              |
+| `/feed/public/page/N/`        | Zola native paginator (N ≥ 2)                                    |
+| `/featured/`                  | `featured.html` — manual render of first page of `feed=featured` |
+| `/feed/featured/page/N/`      | Zola native paginator (N ≥ 2)                                    |
+| `/archive/`                   | `archive.html` — manual render of first page of `feed=archive`   |
+| `/feed/archive/page/N/`       | Zola native paginator (N ≥ 2)                                    |
+| `/feed/pinned/`               | taxonomy_single (rarely browsed directly)                        |
+| `/feed/unlisted/`             | taxonomy_single with `<meta robots=noindex>`                     |
+| `/{post-slug}/`               | `page.html`                                                      |
+| `/{collection-slug}/`         | collection taxonomy term page                                    |
+| `/collections/{slug}/page/N/` | collection paginator                                             |
 
 `/featured/` URL is preserved for nav item parity with the existing
 `systemKey === "featured"` mapping in `export.ts:1000`.
@@ -233,8 +233,8 @@ all intentional.
     per-reply structured entries the same way root does.
   - `featured.html` template: manual render of first page of
     `feed=featured`, links to `/feed/featured/page/N/` for N ≥ 2.
-  - `index.html` template: when `home_default_view == "featured"`, pull
-    from `feed=featured` instead of `feed=public`.
+  - `index.html` template: always pull from `feed=public`; featured stays on
+    its dedicated page.
   - `taxonomy_single.html`: add `featured` case for the page title.
   - Templates that used `extra.pinned` / `extra.featured` /
     `extra.collection_pins` switch to `extra.jant.pinned_at` /
@@ -357,10 +357,11 @@ all intentional.
 5. **Theme: `/featured/` pagination + new frontmatter reads.**
    - Rewrite `featured.html` as manual-first-page + paginator (mirror
      `archive.html`).
-   - Rewrite `index.html` branch for `home_default_view = "featured"`.
-   - Update `taxonomy_single.html` title switch.
-   - Update `macros.html` / anywhere else that read the old `extra.*`
-     fields.
+
+- Keep `index.html` fixed to the public latest feed.
+- Update `taxonomy_single.html` title switch.
+- Update `macros.html` / anywhere else that read the old `extra.*`
+  fields.
 
 6. **Regenerate canonical fixture.** Run the mise task, commit diff.
 
@@ -381,7 +382,7 @@ all intentional.
   - `featured_at` / `pinned_at` timestamps in DB match the original.
   - `post_collection.createdAt` / `position` / `pinnedAt` for the reply
     match the original.
-  - `home_default_view = "featured"` renders correctly.
+  - `/` renders Latest and `/featured/` renders Featured.
 
 ## Risks & open questions
 

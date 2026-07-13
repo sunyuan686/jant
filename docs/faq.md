@@ -86,7 +86,7 @@ No. Multi-author needs roles, review, attribution, notifications — a full set 
 
 ## Why does `/feed` default to Featured instead of Latest?
 
-Jant treats "publish to the site" and "broadcast to subscribers" as two separate things. The default `/feed` points at Featured so you can write small everyday notes without spamming subscribers. To switch back to traditional behavior, change **Settings → General → Feeds → Main RSS feed** to Latest. The three feeds (`/feed/featured`, `/feed/latest`, `/archive/feed`) each cover a different slice. See [Writing and organizing § Why the default feed is Featured](writing-and-organizing.md#why-the-default-feed-is-featured).
+Jant treats "publish to the site" and "broadcast to subscribers" as two separate things. The default `/feed` points at Featured so you can write small everyday notes without spamming subscribers. To switch back to traditional behavior, change **Settings → General → Feeds → Main RSS feed** to Latest. The three feeds (`/featured/feed`, `/latest/feed`, `/archive/feed`) each cover a different slice. See [Writing and organizing § Why the default feed is Featured](writing-and-organizing.md#why-the-default-feed-is-featured).
 
 ## Can I host under a subpath (e.g., `example.com/blog`)?
 

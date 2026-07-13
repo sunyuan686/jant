@@ -1,6 +1,21 @@
 import { exec } from "child_process";
 import type { Plugin } from "vite";
 
+export function shouldRunLinguiBuildForFile(file: string): boolean {
+  const normalized = file.replaceAll("\\", "/");
+  if (!normalized.endsWith(".ts") && !normalized.endsWith(".tsx")) {
+    return false;
+  }
+  if (normalized.includes("/i18n/locales/")) return false;
+  if (
+    normalized.endsWith(".generated.ts") ||
+    normalized.endsWith(".generated.tsx")
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Auto-extract and compile i18n catalogs when source files change.
  * Debounced to 500ms so rapid saves don't spawn multiple processes.
@@ -23,8 +38,7 @@ export function linguiAutoExtract(): Plugin {
     name: "lingui-auto-extract",
     apply: "serve",
     hotUpdate({ file }) {
-      if (!file.endsWith(".ts") && !file.endsWith(".tsx")) return;
-      if (file.includes("/i18n/locales/")) return;
+      if (!shouldRunLinguiBuildForFile(file)) return;
       clearTimeout(timer);
       timer = setTimeout(run, 500);
     },

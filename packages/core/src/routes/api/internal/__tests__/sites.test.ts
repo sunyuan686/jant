@@ -120,7 +120,7 @@ describe("Internal site admin routes", () => {
         primaryHost: "locale-demo.example.com",
         siteName: "Locale Demo",
         siteLanguage: "en-US",
-        timeZone: "Asia/Shanghai",
+        timeZone: "Etc/GMT-8",
       }),
     });
 
@@ -139,8 +139,41 @@ describe("Internal site admin routes", () => {
       { key: "ONBOARDING_STATUS", value: "completed" },
       { key: "SITE_LANGUAGE", value: "en" },
       { key: "SITE_NAME", value: "Locale Demo" },
-      { key: "TIME_ZONE", value: "Asia/Shanghai" },
+      { key: "TIME_ZONE", value: "Etc/GMT-8" },
     ]);
+  });
+
+  it("falls back to UTC instead of rejecting invalid browser timezone metadata", async () => {
+    const { app, sqlite } = createTestApp({
+      authenticated: false,
+      internalAdminToken: "internal-secret",
+      siteResolutionMode: "host-based",
+    });
+    app.route("/api/internal/sites", internalSitesRoutes);
+
+    const res = await app.request("/api/internal/sites", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer internal-secret",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        key: "timezone-fallback",
+        primaryHost: "timezone-fallback.example.com",
+        siteName: "Timezone Fallback",
+        timeZone: "Unknown/Zone",
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { siteId: string };
+    const timeZone = sqlite
+      .prepare(
+        'SELECT "value" FROM "site_setting" WHERE "site_id" = ? AND "key" = \'TIME_ZONE\'',
+      )
+      .get(body.siteId);
+
+    expect(timeZone).toBeUndefined();
   });
 
   it("reports an unused key as available", async () => {

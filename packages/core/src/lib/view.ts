@@ -23,7 +23,6 @@ import type {
   NavItemType,
   NavItemPlacement,
   AppConfig,
-  FeedKind,
   SystemNavKey,
 } from "../types.js";
 import { SYSTEM_NAV_KEYS } from "../types/constants.js";
@@ -140,6 +139,59 @@ export function toMediaView(media: Media, ctx: MediaContext): MediaView {
 // Post Conversions
 // =============================================================================
 
+/** Feed summary limits for titled, article-style posts (the excerpt is a teaser). */
+const ARTICLE_SUMMARY_MAX_BLOCKS = 5;
+const ARTICLE_SUMMARY_MAX_CHARS = 500;
+/** Larger feed summary limits for untitled notes — the body itself is the content. */
+const NOTE_SUMMARY_MAX_BLOCKS = 10;
+const NOTE_SUMMARY_MAX_CHARS = 1500;
+/** Don't truncate an untitled note just to hide a tail under this many chars. */
+const NOTE_SUMMARY_MIN_HIDDEN_CHARS = 200;
+
+/**
+ * Splice a zero-width marker into rendered body HTML at a summary boundary.
+ *
+ * The summary HTML is not a byte-prefix of `bodyHtml` — structural nodes
+ * (horizontalRule, moreBreak, image) appear in `bodyHtml` but are excluded from
+ * the summary, so slicing `bodyHtml` by summary length lands mid-tag and
+ * corrupts the markup. Instead we render the pre-boundary doc slice and splice
+ * the marker at that exact block boundary.
+ *
+ * @param bodyJson - Tiptap JSON string for the post body
+ * @param bodyHtml - Rendered body HTML to splice the marker into
+ * @param breakAtIndex - Index in `doc.content` where the post-summary content begins
+ * @param markerHtml - Inert marker to insert at the boundary (e.g. an anchor span)
+ * @returns `bodyHtml` with the marker inserted, or null when the split can't be
+ *   computed safely (caller should fall back to the untouched body)
+ */
+function spliceAtSummaryBoundary(
+  bodyJson: string,
+  bodyHtml: string,
+  breakAtIndex: number,
+  markerHtml: string,
+): string | null {
+  try {
+    const doc = JSON.parse(bodyJson) as { type?: string; content?: unknown[] };
+    if (
+      doc.type !== "doc" ||
+      !Array.isArray(doc.content) ||
+      breakAtIndex <= 0 ||
+      breakAtIndex > doc.content.length
+    ) {
+      return null;
+    }
+    const beforeHtml = renderTiptapDocument({
+      type: "doc",
+      content: doc.content.slice(0, breakAtIndex) as never[],
+    });
+    if (!bodyHtml.startsWith(beforeHtml)) return null;
+    return beforeHtml + markerHtml + bodyHtml.slice(beforeHtml.length);
+  } catch {
+    // Better an untouched body than corrupted markup.
+    return null;
+  }
+}
+
 function normalizePreviewText(
   text: string | null | undefined,
 ): string | undefined {
@@ -215,49 +267,50 @@ export function toPostView(
   // Pre-compute excerpt from the unified plain-text summary.
   const excerpt = clipPreviewText(summary, 160);
 
-  // Pre-compute HTML summary for article-style posts (with title)
+  // Pre-compute feed/list truncation. The two formats differ:
+  //
+  // - Titled (article-style) posts get an excerpt teaser (`summaryHtml`) and a
+  //   "Continue" link to the full page; a `#continue` anchor is spliced into the
+  //   body for scroll targeting on that page.
+  // - Untitled notes render their body in full and expand in place. When the
+  //   body is long enough to truncate (larger limit + tolerance guard) we splice
+  //   a `data-note-break` marker at the boundary so the feed can clamp the tail
+  //   with CSS and reveal it on click — no excerpt, no extra fetch. We do NOT
+  //   set `summaryHtml` for notes (the card renders the full marked body), and
+  //   only flag `summaryHasMore` when the split actually succeeds.
   let summaryHtml: string | undefined;
   let summaryHasMore: boolean | undefined;
   let bodyHtmlWithAnchor = post.bodyHtml;
-  if (post.title && post.body) {
-    const result = extractSummaryHtml(post.body);
-    if (result) {
+  if (post.body) {
+    const isArticle = !!post.title;
+    const result = extractSummaryHtml(
+      post.body,
+      isArticle ? ARTICLE_SUMMARY_MAX_BLOCKS : NOTE_SUMMARY_MAX_BLOCKS,
+      isArticle ? ARTICLE_SUMMARY_MAX_CHARS : NOTE_SUMMARY_MAX_CHARS,
+      isArticle ? 0 : NOTE_SUMMARY_MIN_HIDDEN_CHARS,
+    );
+    if (result && isArticle) {
       summaryHtml = result.html;
       summaryHasMore = result.hasMore;
-
-      // Inject #continue anchor at the excerpt boundary for scroll targeting.
-      // The summary HTML is NOT a byte-prefix of bodyHtml — structural nodes
-      // like `horizontalRule` and `moreBreak` appear in bodyHtml but are
-      // excluded from the summary, so slicing bodyHtml by summary.length lands
-      // mid-tag and corrupts the markup. Instead, render the pre-boundary
-      // doc slice and splice the anchor at that exact block boundary.
       if (result.hasMore && post.bodyHtml) {
-        try {
-          const doc = JSON.parse(post.body) as {
-            type?: string;
-            content?: unknown[];
-          };
-          if (
-            doc.type === "doc" &&
-            Array.isArray(doc.content) &&
-            result.breakAtIndex > 0 &&
-            result.breakAtIndex <= doc.content.length
-          ) {
-            const beforeHtml = renderTiptapDocument({
-              type: "doc",
-              content: doc.content.slice(0, result.breakAtIndex) as never[],
-            });
-            if (post.bodyHtml.startsWith(beforeHtml)) {
-              bodyHtmlWithAnchor =
-                beforeHtml +
-                '<span id="continue"></span>' +
-                post.bodyHtml.slice(beforeHtml.length);
-            }
-          }
-        } catch {
-          // Fallback: leave bodyHtml untouched if the split can't be computed
-          // safely. Better no anchor than a broken document.
-        }
+        const spliced = spliceAtSummaryBoundary(
+          post.body,
+          post.bodyHtml,
+          result.breakAtIndex,
+          '<span id="continue"></span>',
+        );
+        if (spliced) bodyHtmlWithAnchor = spliced;
+      }
+    } else if (result && result.hasMore && post.bodyHtml) {
+      const spliced = spliceAtSummaryBoundary(
+        post.body,
+        post.bodyHtml,
+        result.breakAtIndex,
+        "<span data-note-break></span>",
+      );
+      if (spliced) {
+        bodyHtmlWithAnchor = spliced;
+        summaryHasMore = true;
       }
     }
   }
@@ -420,7 +473,6 @@ export function toPostViewsFromPosts(
 export function toNavItemView(
   item: NavItem,
   currentPath: string,
-  homeDefaultView: FeedKind = "latest",
   isAuthenticated = false,
   sitePathPrefix = "",
   collectionFreshness?: Map<string, number>,
@@ -437,13 +489,12 @@ export function toNavItemView(
       url = config.url;
     }
 
-    // Special overrides for conditional system URLs
     if (item.systemKey === "latest") {
-      url = homeDefaultView === "latest" ? "/" : "/latest";
+      url = "/";
     }
 
     if (item.systemKey === "featured") {
-      url = homeDefaultView === "featured" ? "/" : "/featured";
+      url = "/featured";
     }
 
     if (item.systemKey === "settings") {
@@ -503,7 +554,6 @@ export function toNavItemView(
 export function toNavItemViews(
   items: NavItem[],
   currentPath: string,
-  homeDefaultView: FeedKind = "latest",
   isAuthenticated = false,
   sitePathPrefix = "",
   collectionFreshness?: Map<string, number>,
@@ -513,7 +563,6 @@ export function toNavItemViews(
     toNavItemView(
       item,
       currentPath,
-      homeDefaultView,
       isAuthenticated,
       sitePathPrefix,
       collectionFreshness,

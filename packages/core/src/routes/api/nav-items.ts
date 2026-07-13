@@ -3,6 +3,7 @@
  */
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { z } from "zod";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
@@ -16,15 +17,35 @@ import {
 import { assertFound, parseIdParam, NotFoundError } from "../../lib/errors.js";
 import { ID_PREFIX } from "../../lib/ids.js";
 import { getCollectionPagePath } from "../../lib/collection-paths.js";
+import { renderSiteHeaderHtml } from "../../lib/site-header-fragment.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
 export const navItemsApiRoutes = new Hono<Env>();
 
+const INCLUDE_SITE_HEADER_RESPONSE = "include";
+const SITE_HEADER_RESPONSE_HEADER = "x-jant-site-header";
+
 const MoveSchema = z.object({
   after: NavItemIdSchema.nullable().optional(),
   before: NavItemIdSchema.nullable().optional(),
 });
+
+async function withSiteHeaderHtml<T extends object>(
+  c: Context<Env>,
+  body: T,
+): Promise<T | (T & { headerHtml: string })> {
+  if (
+    c.req.header(SITE_HEADER_RESPONSE_HEADER) !== INCLUDE_SITE_HEADER_RESPONSE
+  ) {
+    return body;
+  }
+
+  return {
+    ...body,
+    headerHtml: await renderSiteHeaderHtml(c),
+  };
+}
 
 // List nav items
 navItemsApiRoutes.get("/", async (c) => {
@@ -46,7 +67,7 @@ navItemsApiRoutes.put("/:id/move", requireAuthApi(), async (c) => {
     "Nav item",
   );
 
-  return c.json(item);
+  return c.json(await withSiteHeaderHtml(c, item));
 });
 
 // Create nav item (requires auth)
@@ -82,7 +103,7 @@ navItemsApiRoutes.post("/", requireAuthApi(), async (c) => {
     });
   }
 
-  return c.json(item, 201);
+  return c.json(await withSiteHeaderHtml(c, item), 201);
 });
 
 // Update nav item (requires auth)
@@ -95,7 +116,7 @@ navItemsApiRoutes.put("/:id", requireAuthApi(), async (c) => {
     "Nav item",
   );
 
-  return c.json(item);
+  return c.json(await withSiteHeaderHtml(c, item));
 });
 
 // Delete nav item (requires auth)
@@ -105,5 +126,5 @@ navItemsApiRoutes.delete("/:id", requireAuthApi(), async (c) => {
   const success = await c.var.services.navItems.delete(id);
   if (!success) throw new NotFoundError("Nav item");
 
-  return c.json({ success: true });
+  return c.json(await withSiteHeaderHtml(c, { success: true }));
 });

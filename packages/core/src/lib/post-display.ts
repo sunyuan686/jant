@@ -79,9 +79,17 @@ function resolvePostSocialImage(
   return undefined;
 }
 
-function canViewPost(post: Post, isAuthenticated: boolean): boolean {
+interface PostDisplayOptions {
+  isAuthenticated?: boolean;
+  allowDraft?: boolean;
+}
+
+function canViewPost(post: Post, options: PostDisplayOptions = {}): boolean {
+  const isAuthenticated = options.isAuthenticated ?? false;
   if (post.status !== "published") {
-    return false;
+    return Boolean(
+      post.status === "draft" && isAuthenticated && options.allowDraft,
+    );
   }
 
   if (post.visibility === "private" && !isAuthenticated) {
@@ -102,11 +110,10 @@ function canViewPost(post: Post, isAuthenticated: boolean): boolean {
 export async function assemblePostCardView(
   c: Context<Env>,
   postId: string,
-  options?: { isAuthenticated?: boolean },
+  options?: PostDisplayOptions,
 ): Promise<PostView | null> {
   const post = await c.var.services.posts.getById(postId);
-  const isAuthenticated = options?.isAuthenticated ?? false;
-  if (!post || !canViewPost(post, isAuthenticated)) {
+  if (!post || !canViewPost(post, options)) {
     return null;
   }
 
@@ -149,15 +156,14 @@ export async function assemblePostCardView(
 export async function assemblePostPageDisplay(
   c: Context<Env>,
   postOrId: string | Post,
-  options?: { isAuthenticated?: boolean },
+  options?: PostDisplayOptions,
 ): Promise<PostPageDisplayData | null> {
   const post =
     typeof postOrId === "string"
       ? await c.var.services.posts.getById(postOrId)
       : postOrId;
-  const isAuthenticated = options?.isAuthenticated ?? false;
 
-  if (!post || !canViewPost(post, isAuthenticated)) {
+  if (!post || !canViewPost(post, options)) {
     return null;
   }
 

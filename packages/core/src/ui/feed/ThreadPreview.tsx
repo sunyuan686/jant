@@ -33,15 +33,15 @@ const HERO_DISPLAY = {} as const;
 
 export const ThreadPreview: FC<ThreadPreviewProps> = ({
   rootPost,
-  secondReply,
-  penultimateReply,
+  leadingReplies,
+  trailingReplies,
   latestReply,
   totalReplyCount,
 }) => {
   const { i18n } = useLingui();
   const { hiddenCount } = getThreadPreviewState({
-    secondReply,
-    penultimateReply,
+    leadingReplies,
+    trailingReplies,
     latestReply,
     totalReplyCount,
   });
@@ -72,15 +72,16 @@ export const ThreadPreview: FC<ThreadPreviewProps> = ({
         "@context: Collapse expanded thread ancestor context in the feed",
     }),
   );
-  const renderedSecondReply =
-    secondReply && secondReply.id !== latestReply.id ? secondReply : undefined;
-  const renderedPenultimateReply =
-    penultimateReply &&
-    penultimateReply.id !== latestReply.id &&
-    penultimateReply.id !== secondReply?.id
-      ? penultimateReply
-      : undefined;
-  const gapHref = renderedSecondReply?.permalink ?? latestReply.permalink;
+  const visibleReplyIds = new Set([latestReply.id]);
+  const dedupeReplies = (replies: typeof leadingReplies) =>
+    replies.filter((reply) => {
+      if (visibleReplyIds.has(reply.id)) return false;
+      visibleReplyIds.add(reply.id);
+      return true;
+    });
+  const renderedLeadingReplies = dedupeReplies(leadingReplies);
+  const renderedTrailingReplies = dedupeReplies(trailingReplies);
+  const gapHref = renderedLeadingReplies[0]?.permalink ?? latestReply.permalink;
 
   // Always render the collapsible shell + toggle: the cap and fade are a
   // constant "this is context" affordance. The toggle's *initial* visibility
@@ -101,15 +102,16 @@ export const ThreadPreview: FC<ThreadPreviewProps> = ({
     </div>
   );
 
-  const secondReplyItem = renderedSecondReply ? (
-    <div class="thread-item thread-item-context">
-      <TimelineItemFromPost
-        post={renderedSecondReply}
-        mode="feed"
-        display={CONTEXT_DISPLAY}
-      />
-    </div>
-  ) : null;
+  const renderContextReplies = (replies: typeof leadingReplies) =>
+    replies.map((reply) => (
+      <div class="thread-item thread-item-context">
+        <TimelineItemFromPost
+          post={reply}
+          mode="feed"
+          display={CONTEXT_DISPLAY}
+        />
+      </div>
+    ));
 
   const gapItem =
     hiddenCount > 0 ? (
@@ -120,23 +122,13 @@ export const ThreadPreview: FC<ThreadPreviewProps> = ({
       </div>
     ) : null;
 
-  const penultimateItem = renderedPenultimateReply ? (
-    <div class="thread-item thread-item-context">
-      <TimelineItemFromPost
-        post={renderedPenultimateReply}
-        mode="feed"
-        display={CONTEXT_DISPLAY}
-      />
-    </div>
-  ) : null;
-
   return (
     <div class="thread-group thread-group-preview">
       <div class="thread-context-shell" data-thread-context data-collapsed="">
         {rootItem}
-        {secondReplyItem}
+        {renderContextReplies(renderedLeadingReplies)}
         {gapItem}
-        {penultimateItem}
+        {renderContextReplies(renderedTrailingReplies)}
       </div>
       <button
         type="button"

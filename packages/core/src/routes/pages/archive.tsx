@@ -630,6 +630,7 @@ async function buildArchiveFeedData(
     hasMedia: params.hasMedia,
     hasTitle: params.hasTitle,
     hasReplies: params.hasReplies,
+    ignorePinnedSort: true,
     ...(params.validYear
       ? {
           publishedAfter: Date.UTC(params.validYear, 0, 1) / 1000,

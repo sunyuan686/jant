@@ -14,7 +14,9 @@ import {
 const SECOND_SITE_ID = "sit_second00000000000000000000000";
 const SECOND_SITE_KEY = "second";
 
-function insertSecondSite(sqlite: ReturnType<typeof createTestDatabase>["sqlite"]) {
+function insertSecondSite(
+  sqlite: ReturnType<typeof createTestDatabase>["sqlite"],
+) {
   const timestamp = Math.floor(Date.now() / 1000);
   sqlite
     .prepare(
@@ -48,9 +50,9 @@ describe("GitHubAppInstallationsService", () => {
   });
 
   it("returns empty list for an unknown site", async () => {
-    expect(await service.listInstallationsForSite(DEFAULT_TEST_SITE_ID)).toEqual(
-      [],
-    );
+    expect(
+      await service.listInstallationsForSite(DEFAULT_TEST_SITE_ID),
+    ).toEqual([]);
   });
 
   it("returns empty list of sites for an unknown installation", async () => {
@@ -78,9 +80,8 @@ describe("GitHubAppInstallationsService", () => {
       DEFAULT_TEST_SITE_ID,
       makeAccount({ login: "old-name" }),
     );
-    const initial = await service.listInstallationsForSite(
-      DEFAULT_TEST_SITE_ID,
-    );
+    const initial =
+      await service.listInstallationsForSite(DEFAULT_TEST_SITE_ID);
     const addedAt = initial[0]!.addedAt;
 
     await service.upsertInstallation(
@@ -88,9 +89,8 @@ describe("GitHubAppInstallationsService", () => {
       DEFAULT_TEST_SITE_ID,
       makeAccount({ login: "renamed-org", avatarUrl: "https://x.png" }),
     );
-    const updated = await service.listInstallationsForSite(
-      DEFAULT_TEST_SITE_ID,
-    );
+    const updated =
+      await service.listInstallationsForSite(DEFAULT_TEST_SITE_ID);
     expect(updated).toHaveLength(1);
     expect(updated[0]!.addedAt).toBe(addedAt);
     expect(updated[0]!.account.login).toBe("renamed-org");

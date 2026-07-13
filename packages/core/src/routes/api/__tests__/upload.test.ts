@@ -118,6 +118,8 @@ describe("Upload API Routes", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ success: true });
     expect(await services.media.getById(media.id)).toBeNull();
+    // This mock exposes no server-side copy, so the object is retired by
+    // deleting the original key immediately (no recycle window).
     expect(storage.delete).toHaveBeenCalledWith("media/photo.webp");
   });
 

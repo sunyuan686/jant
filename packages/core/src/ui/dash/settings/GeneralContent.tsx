@@ -10,11 +10,13 @@
 import { msg } from "@lingui/core/macro";
 import { useLingui } from "../../../i18n/context.js";
 import type { TimezoneEntry } from "../../../lib/timezones.js";
+import type { AboutPageStatus } from "../../../services/about-page.js";
 
 export function GeneralContent({
   siteName,
   siteDescription,
   siteLanguage,
+  dashboardLanguage,
   cjkSerifFont,
   siteNameFallback,
   siteDescriptionFallback,
@@ -22,16 +24,21 @@ export function GeneralContent({
   mainFeedUrl,
   latestFeedUrl,
   featuredFeedUrl,
+  archiveFeedUrl,
   timeZone,
   siteFooter,
   showJantBrandingOnHome,
   noindex,
   demoMode,
   timezones,
+  aboutPage,
+  aboutEditUrl,
+  aboutCreateUrl,
 }: {
   siteName: string;
   siteDescription: string;
   siteLanguage: string;
+  dashboardLanguage: string;
   cjkSerifFont: string;
   siteNameFallback: string;
   siteDescriptionFallback: string;
@@ -39,12 +46,16 @@ export function GeneralContent({
   mainFeedUrl: string;
   latestFeedUrl: string;
   featuredFeedUrl: string;
+  archiveFeedUrl: string;
   timeZone: string;
   siteFooter: string;
   showJantBrandingOnHome: boolean;
   noindex: boolean;
   demoMode: boolean;
   timezones: TimezoneEntry[];
+  aboutPage: AboutPageStatus;
+  aboutEditUrl: string;
+  aboutCreateUrl: string;
 }) {
   const { i18n } = useLingui();
 
@@ -59,6 +70,38 @@ export function GeneralContent({
       msg({
         message: "Site",
         comment: "@context: Settings subsection heading for basic site fields",
+      }),
+    ),
+    aboutPage: i18n._(
+      msg({
+        message: "About page",
+        comment: "@context: Link label for editing or creating the About page",
+      }),
+    ),
+    aboutPagePrompt: i18n._(
+      msg({
+        message: "Want to write a fuller introduction?",
+        comment:
+          "@context: Prompt shown below the short site description, before the About page action",
+      }),
+    ),
+    createAboutPage: i18n._(
+      msg({
+        message: "Create About page",
+        comment: "@context: Button to create the standard About page",
+      }),
+    ),
+    editAboutPage: i18n._(
+      msg({
+        message: "Edit About page",
+        comment: "@context: Link to edit the standard About page",
+      }),
+    ),
+    aboutPageConflict: i18n._(
+      msg({
+        message:
+          "/about is already used. Rename that item before creating an About page.",
+        comment: "@context: Compact conflict message when /about is occupied",
       }),
     ),
     languageAndTime: i18n._(
@@ -101,15 +144,37 @@ export function GeneralContent({
     ),
     siteLanguage: i18n._(
       msg({
-        message: "Language",
-        comment: "@context: Settings form field for site/admin language",
+        message: "Content language",
+        comment:
+          "@context: Settings form field for the public content language",
       }),
     ),
     siteLanguageHelp: i18n._(
       msg({
         message:
-          "Sets the content language announced to readers (HTML lang, RSS) and the dashboard language. Any BCP 47 tag is accepted; tags without a dashboard translation fall back to English.",
-        comment: "@context: Help text under the site language input",
+          "The language your posts are written in. Announced to readers and search engines through HTML lang and your RSS feed. Any BCP 47 tag works.",
+        comment: "@context: Help text under the content language picker",
+      }),
+    ),
+    contentLanguagePreview: i18n._(
+      msg({
+        message: "Readers and search engines see",
+        comment:
+          "@context: Lead text before a live <html lang> preview of the content language",
+      }),
+    ),
+    dashboardLanguage: i18n._(
+      msg({
+        message: "Dashboard language",
+        comment:
+          "@context: Settings form field for the admin interface language",
+      }),
+    ),
+    dashboardLanguageHelp: i18n._(
+      msg({
+        message:
+          "The language this admin dashboard shows in. Available in English, 简体中文, and 繁體中文.",
+        comment: "@context: Help text under the dashboard language picker",
       }),
     ),
     siteLanguageSearchPlaceholder: i18n._(
@@ -210,6 +275,19 @@ export function GeneralContent({
         comment: "@context: Label for the explicit featured RSS feed URL",
       }),
     ),
+    archiveFeedUrl: i18n._(
+      msg({
+        message: "Archive feed",
+        comment: "@context: Label for the full-archive RSS feed URL",
+      }),
+    ),
+    archiveFeedUrlHelp: i18n._(
+      msg({
+        message: "Every published post, including ones hidden from Latest.",
+        comment:
+          "@context: Help text under the archive feed URL, explaining it is the complete feed",
+      }),
+    ),
     latestFeedOption: i18n._(
       msg({
         message: "Latest",
@@ -308,6 +386,14 @@ export function GeneralContent({
     timezones.map((tz) => ({ value: tz.value, label: tz.label })),
   ).replace(/</g, "\\u003c");
 
+  // The 3 catalog locales Jant's dashboard is translated into. Native-script
+  // labels so each reads in its own language, like the CJK font options.
+  const dashboardLanguagesJson = JSON.stringify([
+    { value: "en", label: "English" },
+    { value: "zh-Hans", label: "简体中文" },
+    { value: "zh-Hant", label: "繁體中文" },
+  ]).replace(/</g, "\\u003c");
+
   const cjkFontsJson = JSON.stringify([
     { value: "off", label: "None" },
     {
@@ -322,10 +408,13 @@ export function GeneralContent({
     { value: "ko", label: "\uD55C\uAD6D\uC5B4 (Korean)" },
   ]).replace(/</g, "\\u003c");
 
+  const aboutPageJson = JSON.stringify(aboutPage).replace(/</g, "\\u003c");
+
   const initialData = JSON.stringify({
     siteName,
     siteDescription,
     siteLanguage,
+    dashboardLanguage,
     cjkSerifFont,
     mainRssFeed,
     timeZone,
@@ -341,12 +430,17 @@ export function GeneralContent({
           labels={labels}
           timezones={timezonesJson}
           cjk-fonts={cjkFontsJson}
+          dashboard-languages={dashboardLanguagesJson}
           sitename-fallback={siteNameFallback}
           sitedescription-fallback={siteDescriptionFallback}
           main-feed-url={mainFeedUrl}
           latest-feed-url={latestFeedUrl}
           featured-feed-url={featuredFeedUrl}
+          archive-feed-url={archiveFeedUrl}
           demo-mode={demoMode || undefined}
+          about-page={aboutPageJson}
+          about-edit-url={aboutEditUrl}
+          about-create-url={aboutCreateUrl}
         >
           {/* SSR fallback skeleton */}
           <div>

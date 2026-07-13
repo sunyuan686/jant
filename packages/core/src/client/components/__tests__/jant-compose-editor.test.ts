@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 vi.mock("../../upload-with-metadata.js", () => ({
   uploadWithMetadata: vi.fn(),
 }));
-import type { Editor } from "@tiptap/core";
+import type { Editor, JSONContent } from "@tiptap/core";
 import type { Slice } from "@tiptap/pm/model";
 import * as ProseMirrorView from "@tiptap/pm/view";
 import type { ComposeLabels } from "../compose-types.js";
@@ -264,7 +264,23 @@ const labels: ComposeLabels = {
   showMore: "Show more",
   showLess: "Show less",
   newThread: "New Thread",
+  replyTitle: "Reply",
+  editTitle: "Edit",
   slashHint: "Type / for commands",
+  tableControls: {
+    toolbarLabel: "Table controls",
+    addRowAbove: "Add row above",
+    addRowBelow: "Add row below",
+    addColumnBefore: "Add column before",
+    addColumnAfter: "Add column after",
+    options: "Table options",
+    deleteRow: "Delete row",
+    deleteColumn: "Delete column",
+    toggleHeaderRow: "Toggle header row",
+    deleteTable: "Delete table",
+    sizePickerLabel: "Choose table size",
+    insertTableSize: "Insert %rows% by %cols% table",
+  },
   collectionFormLabels: {
     titleLabel: "Title",
     titlePlaceholder: "My Collection",
@@ -297,6 +313,25 @@ async function createElement(
   document.body.appendChild(el);
   await el.updateComplete;
   return el;
+}
+
+function tiptapDoc(...content: JSONContent[]): JSONContent {
+  return { type: "doc", content };
+}
+
+function tiptapHeading(level: number, text: string): JSONContent {
+  return {
+    type: "heading",
+    attrs: { level },
+    content: [{ type: "text", text }],
+  };
+}
+
+function tiptapParagraph(text: string): JSONContent {
+  return {
+    type: "paragraph",
+    content: [{ type: "text", text }],
+  };
 }
 
 async function toggleEmojiPicker(el: JantComposeEditor) {
@@ -903,6 +938,77 @@ describe("JantComposeEditor", () => {
     expect(el.getData().title).toBe("My Title");
   });
 
+  it("promotes a leading H1 to the note title", async () => {
+    const el = await createElement("note");
+    const editor = requireEditor(el);
+    editor.commands.setContent(
+      tiptapDoc(tiptapHeading(1, "My Markdown Title"), tiptapParagraph("Body")),
+    );
+
+    el.promoteLeadingH1Title({ force: true });
+    await el.updateComplete;
+
+    const data = el.getData();
+    const body = JSON.parse(data.body) as JSONContent;
+
+    expect(data.title).toBe("My Markdown Title");
+    expect(el._showTitle).toBe(true);
+    expect(body.content?.[0]).toEqual(tiptapParagraph("Body"));
+  });
+
+  it("keeps a leading H1 in the body while the cursor is still in it", async () => {
+    const el = await createElement("note");
+    const editor = requireEditor(el);
+
+    editor.commands.setContent(tiptapDoc(tiptapHeading(1, "Draft title")));
+    await el.updateComplete;
+
+    const data = el.getData();
+    const body = JSON.parse(data.body) as JSONContent;
+
+    expect(data.title).toBe("");
+    expect(el._showTitle).toBe(false);
+    expect(body.content?.[0]).toEqual(tiptapHeading(1, "Draft title"));
+  });
+
+  it("does not overwrite an explicit note title with a leading H1", async () => {
+    const el = await createElement("note");
+    const editor = requireEditor(el);
+    el._title = "Manual title";
+    el._showTitle = true;
+
+    editor.commands.setContent(
+      tiptapDoc(tiptapHeading(1, "Markdown Title"), tiptapParagraph("Body")),
+    );
+
+    el.promoteLeadingH1Title({ force: true });
+    await el.updateComplete;
+
+    const data = el.getData();
+    const body = JSON.parse(data.body) as JSONContent;
+
+    expect(data.title).toBe("Manual title");
+    expect(body.content?.[0]).toEqual(tiptapHeading(1, "Markdown Title"));
+  });
+
+  it("does not promote a leading H1 for link posts", async () => {
+    const el = await createElement("link");
+    const editor = requireEditor(el);
+
+    editor.commands.setContent(
+      tiptapDoc(tiptapHeading(1, "Markdown Title"), tiptapParagraph("Body")),
+    );
+
+    el.promoteLeadingH1Title({ force: true });
+    await el.updateComplete;
+
+    const data = el.getData();
+    const body = JSON.parse(data.body) as JSONContent;
+
+    expect(data.title).toBe("");
+    expect(body.content?.[0]).toEqual(tiptapHeading(1, "Markdown Title"));
+  });
+
   it("omits rating when the rating control is hidden", async () => {
     const el = await createElement("note");
     el._rating = 3;
@@ -1014,7 +1120,9 @@ describe("JantComposeEditor", () => {
     image.dispatchEvent(new Event("error"));
     await el.updateComplete;
 
-    expect(el.querySelector("[data-preview-failed='image']")).not.toBeNull();
+    const fallback = el.querySelector("[data-preview-failed='image']");
+    expect(fallback).not.toBeNull();
+    expect(fallback?.textContent).toContain("Image unavailable");
     expect(el.querySelector(".compose-attachment-remove")).not.toBeNull();
     expect(el.querySelector(".compose-attachment-img")).toBeNull();
   });

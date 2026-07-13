@@ -342,17 +342,16 @@ location /_assets/ {
 
 这些设置可以在初始化完成后，通过 Jant 的 Settings 页面修改。所有设置都可以通过同名环境变量预置初始值——Settings 里改过的值优先级高于环境变量。
 
-| 设置                         | 用途                                     |
-| ---------------------------- | ---------------------------------------- |
-| `SITE_NAME`                  | 站点显示名称                             |
-| `SITE_DESCRIPTION`           | Meta description 和 feed description     |
-| `SITE_LANGUAGE`              | 主要语言代码                             |
-| `TIME_ZONE`                  | 显示时区，例如 `UTC` 或 `Asia/Shanghai`  |
-| `HOME_DEFAULT_VIEW`          | 决定首页默认从 Latest 还是 Featured 开始 |
-| `MAIN_RSS_FEED`              | 决定 `/feed` 返回什么                    |
-| `SITE_FOOTER`                | 自定义页脚文本                           |
-| `SHOW_JANT_BRANDING_ON_HOME` | 是否在首页显示 Jant 品牌标识             |
-| `NOINDEX`                    | 请求搜索引擎不要收录这个站点             |
+| 设置                         | 用途                                    |
+| ---------------------------- | --------------------------------------- |
+| `SITE_NAME`                  | 站点显示名称                            |
+| `SITE_DESCRIPTION`           | Meta description 和 feed description    |
+| `SITE_LANGUAGE`              | 主要语言代码                            |
+| `TIME_ZONE`                  | 显示时区，例如 `UTC` 或 `Asia/Shanghai` |
+| `MAIN_RSS_FEED`              | 决定 `/feed` 返回什么                   |
+| `SITE_FOOTER`                | 自定义页脚文本                          |
+| `SHOW_JANT_BRANDING_ON_HOME` | 是否在首页显示 Jant 品牌标识            |
+| `NOINDEX`                    | 请求搜索引擎不要收录这个站点            |
 
 颜色主题、字型主题、自定义 CSS、头像以及其他外观细节，也都在 Settings 里管理。
 

@@ -1163,6 +1163,26 @@ svg[stroke-width].icon-fine {
     border-color: var(--color-border);
   }
 
+  .nav-suggestions-list {
+    @apply flex flex-col gap-2;
+  }
+
+  .nav-suggestion-item {
+    @apply flex items-center justify-between gap-3 rounded-lg border px-3 py-2;
+  }
+
+  .nav-suggestion-info {
+    @apply flex min-w-0 flex-col;
+  }
+
+  .nav-suggestion-title {
+    @apply truncate text-sm font-medium;
+  }
+
+  .nav-suggestion-meta {
+    @apply truncate text-xs text-muted-foreground;
+  }
+
   /* Collection picker dropdown menu */
   .collection-picker {
     @apply absolute left-0 z-10 mt-1.5 w-64 overflow-y-auto rounded-lg border py-1.5;

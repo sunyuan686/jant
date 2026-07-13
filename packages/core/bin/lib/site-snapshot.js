@@ -29,7 +29,6 @@ export const SNAPSHOT_SETTING_KEYS = [
   "SITE_NAME",
   "SITE_DESCRIPTION",
   "SITE_LANGUAGE",
-  "HOME_DEFAULT_VIEW",
   "MAIN_RSS_FEED",
   "THEME",
   "CUSTOM_CSS",
@@ -213,10 +212,7 @@ export function assertSnapshotMeta(meta) {
     );
   }
 
-  if (
-    meta.dialect !== undefined &&
-    !SNAPSHOT_DIALECTS.includes(meta.dialect)
-  ) {
+  if (meta.dialect !== undefined && !SNAPSHOT_DIALECTS.includes(meta.dialect)) {
     throw new Error(
       `Snapshot meta has unsupported dialect "${String(meta.dialect)}". Expected one of ${SNAPSHOT_DIALECTS.join(", ")}.`,
     );

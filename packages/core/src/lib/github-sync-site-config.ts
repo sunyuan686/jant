@@ -14,7 +14,6 @@
 
 import type { SiteConfig } from "../services/export.js";
 import type { AppVariables } from "../types/app-context.js";
-import { getHomeDefaultViewFromNavItems } from "./navigation.js";
 
 export async function buildSyncSiteConfig(c: {
   var: Pick<
@@ -31,7 +30,6 @@ export async function buildSyncSiteConfig(c: {
     siteDescription: appConfig.siteDescription,
     siteLanguage: appConfig.siteLanguage,
     showJantBrandingOnHome: appConfig.showJantBrandingOnHome,
-    homeDefaultView: getHomeDefaultViewFromNavItems(navItems),
     mainRssFeed: appConfig.mainRssFeed,
     siteFooter: appConfig.siteFooter,
     showHeaderAvatar: appConfig.showHeaderAvatar,

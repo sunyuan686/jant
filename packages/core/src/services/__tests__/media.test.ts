@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion -- Test assertions use ! for readability */
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { eq } from "drizzle-orm";
 import {
   createTestDatabase,
   DEFAULT_TEST_SITE_ID,
@@ -7,7 +8,9 @@ import {
 import { createMediaService } from "../media.js";
 import { createPostService } from "../post.js";
 import type { Database } from "../../db/index.js";
+import { storagePurge } from "../../db/schema.js";
 import { MediaQuotaExceededError } from "../../lib/errors.js";
+import { now } from "../../lib/time.js";
 
 interface MockStorageFile {
   body: Uint8Array;
@@ -54,7 +57,19 @@ function createMockStorage() {
     async delete(key: string) {
       files.delete(key);
     },
+    async copy(sourceKey: string, destKey: string) {
+      const file = files.get(sourceKey);
+      if (file) files.set(destKey, { ...file });
+    },
   };
+}
+
+/** Storage mock without server-side copy (e.g. R2 Workers binding). */
+function createNoCopyStorage() {
+  const full = createMockStorage();
+  const { copy: _copy, ...rest } = full;
+  void _copy;
+  return rest;
 }
 
 describe("MediaService", () => {
@@ -503,7 +518,7 @@ describe("MediaService", () => {
   });
 
   describe("delete for text attachments", () => {
-    it("removes the single .md storage object", async () => {
+    it("moves the .md object to trash and frees the original key", async () => {
       const storage = createMockStorage();
       const media = await mediaService.createTextAttachment(
         {
@@ -521,13 +536,18 @@ describe("MediaService", () => {
 
       await mediaService.delete(media.id, storage);
 
-      expect(storage.files.size).toBe(0);
+      // Row gone and the original (public) key freed immediately; the bytes
+      // live on under a trash/ key, recoverable until purge.
+      expect(await mediaService.getById(media.id)).toBeNull();
       expect(storage.files.has(media.storageKey)).toBe(false);
+      expect(
+        [...storage.files.keys()].some((k) => k.startsWith("trash/")),
+      ).toBe(true);
     });
   });
 
   describe("deleteByIds for text attachments", () => {
-    it("removes the .md file for every text attachment in the batch", async () => {
+    it("moves every .md object in the batch to trash", async () => {
       const storage = createMockStorage();
       const a = await mediaService.createTextAttachment(
         { contentFormat: "markdown", content: "first" },
@@ -542,7 +562,14 @@ describe("MediaService", () => {
 
       await mediaService.deleteByIds([a.id, b.id], storage);
 
-      expect(storage.files.size).toBe(0);
+      expect(await mediaService.getById(a.id)).toBeNull();
+      expect(await mediaService.getById(b.id)).toBeNull();
+      // Originals freed; two trash copies remain until the purge sweep.
+      expect(storage.files.has(a.storageKey)).toBe(false);
+      expect(storage.files.has(b.storageKey)).toBe(false);
+      expect(
+        [...storage.files.keys()].filter((k) => k.startsWith("trash/")).length,
+      ).toBe(2);
     });
   });
 
@@ -961,6 +988,112 @@ describe("MediaService", () => {
     });
   });
 
+  describe("listOrphanedMediaIds", () => {
+    it("returns unattached media created before the cutoff", async () => {
+      const m1 = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/a.jpg",
+      });
+      const m2 = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/b.jpg",
+      });
+
+      const ids = await mediaService.listOrphanedMediaIds({
+        before: now() + 1,
+        limit: 10,
+      });
+
+      expect(ids).toHaveLength(2);
+      expect(ids).toContain(m1.id);
+      expect(ids).toContain(m2.id);
+    });
+
+    it("excludes media attached to a post", async () => {
+      const post = await postService.create({
+        format: "note",
+        bodyMarkdown: "p",
+      });
+      const attached = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/a.jpg",
+      });
+      const orphan = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/b.jpg",
+      });
+      await mediaService.attachToPost(post.id, [attached.id]);
+
+      const ids = await mediaService.listOrphanedMediaIds({
+        before: now() + 1,
+        limit: 10,
+      });
+
+      expect(ids).toEqual([orphan.id]);
+    });
+
+    it("excludes site asset media (avatars, favicons) referenced by settings", async () => {
+      const orphan = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/site/files/orphan.jpg",
+      });
+      const avatar = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/site/assets/avatar/avatar.png",
+      });
+      const favicon = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/site/assets/favicon/apple-touch-icon.png",
+      });
+
+      const ids = await mediaService.listOrphanedMediaIds({
+        before: now() + 1,
+        limit: 10,
+      });
+
+      expect(ids).toEqual([orphan.id]);
+      expect(ids).not.toContain(avatar.id);
+      expect(ids).not.toContain(favicon.id);
+    });
+
+    it("excludes media created at or after the cutoff", async () => {
+      await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/a.jpg",
+      });
+
+      const ids = await mediaService.listOrphanedMediaIds({
+        before: 1,
+        limit: 10,
+      });
+
+      expect(ids).toEqual([]);
+    });
+
+    it("respects the batch limit", async () => {
+      await mediaService.create({ ...sampleMedia, storageKey: "media/a.jpg" });
+      await mediaService.create({ ...sampleMedia, storageKey: "media/b.jpg" });
+
+      const ids = await mediaService.listOrphanedMediaIds({
+        before: now() + 1,
+        limit: 1,
+      });
+
+      expect(ids).toHaveLength(1);
+    });
+
+    it("returns no IDs when the limit is zero", async () => {
+      await mediaService.create({ ...sampleMedia, storageKey: "media/a.jpg" });
+
+      const ids = await mediaService.listOrphanedMediaIds({
+        before: now() + 1,
+        limit: 0,
+      });
+
+      expect(ids).toEqual([]);
+    });
+  });
+
   describe("validateIds", () => {
     it("passes for valid IDs", async () => {
       const m1 = await mediaService.create({
@@ -1222,25 +1355,24 @@ describe("MediaService", () => {
       expect(result).toBe(false);
     });
 
-    it("deletes poster from storage when posterKey exists", async () => {
+    it("moves storage objects to trash and frees the original keys", async () => {
+      const storage = createMockStorage();
+      await storage.put("media/vid.mp4", new Uint8Array([1]));
+      await storage.put("media/vid.poster.webp", new Uint8Array([2]));
       const media = await mediaService.create({
         ...sampleMedia,
         storageKey: "media/vid.mp4",
         posterKey: "media/vid.poster.webp",
       });
 
-      const deletedKeys: string[] = [];
-      const mockStorage = {
-        delete: async (key: string) => {
-          deletedKeys.push(key);
-        },
-        put: async () => {},
-        get: async () => null,
-      };
+      await mediaService.delete(media.id, storage);
 
-      await mediaService.delete(media.id, mockStorage as never);
-      expect(deletedKeys).toContain("media/vid.mp4");
-      expect(deletedKeys).toContain("media/vid.poster.webp");
+      // Originals freed immediately; both objects moved under trash/.
+      expect(storage.files.has("media/vid.mp4")).toBe(false);
+      expect(storage.files.has("media/vid.poster.webp")).toBe(false);
+      expect(
+        [...storage.files.keys()].filter((k) => k.startsWith("trash/")).length,
+      ).toBe(2);
     });
   });
 
@@ -1274,7 +1406,11 @@ describe("MediaService", () => {
       expect(await mediaService.getById(m1.id)).not.toBeNull();
     });
 
-    it("deletes poster keys from storage", async () => {
+    it("moves storage objects to trash and frees the original keys", async () => {
+      const storage = createMockStorage();
+      await storage.put("media/a.mp4", new Uint8Array([1]));
+      await storage.put("media/a-poster.webp", new Uint8Array([2]));
+      await storage.put("media/b.jpg", new Uint8Array([3]));
       const m1 = await mediaService.create({
         ...sampleMedia,
         storageKey: "media/a.mp4",
@@ -1285,20 +1421,295 @@ describe("MediaService", () => {
         storageKey: "media/b.jpg",
       });
 
-      const deletedKeys: string[] = [];
-      const mockStorage = {
-        delete: async (key: string) => {
-          deletedKeys.push(key);
-        },
-        put: async () => {},
-        get: async () => null,
-      };
+      await mediaService.deleteByIds([m1.id, m2.id], storage);
 
-      await mediaService.deleteByIds([m1.id, m2.id], mockStorage as never);
-      expect(deletedKeys).toContain("media/a.mp4");
-      expect(deletedKeys).toContain("media/a-poster.webp");
-      expect(deletedKeys).toContain("media/b.jpg");
-      expect(deletedKeys).toHaveLength(3);
+      // Three originals freed, three trash copies remain.
+      expect(storage.files.has("media/a.mp4")).toBe(false);
+      expect(storage.files.has("media/a-poster.webp")).toBe(false);
+      expect(storage.files.has("media/b.jpg")).toBe(false);
+      expect(
+        [...storage.files.keys()].filter((k) => k.startsWith("trash/")).length,
+      ).toBe(3);
     });
+  });
+
+  describe("storage purge (recycle window)", () => {
+    const FAR_FUTURE = () => now() + 365 * 24 * 60 * 60;
+
+    it("moves a deleted object to trash with a recorded original_key", async () => {
+      const storage = createMockStorage();
+      await storage.put("media/x.jpg", new Uint8Array([1]));
+      const m = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/x.jpg",
+      });
+
+      await mediaService.delete(m.id, storage);
+
+      const rows = await db
+        .select()
+        .from(storagePurge)
+        .where(eq(storagePurge.siteId, DEFAULT_TEST_SITE_ID));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.originalKey).toBe("media/x.jpg");
+      expect(rows[0]!.storageKey.startsWith("trash/")).toBe(true);
+      expect(storage.files.has(rows[0]!.storageKey)).toBe(true);
+      expect(storage.files.has("media/x.jpg")).toBe(false);
+    });
+
+    it("purges trashed objects once due (storageKey + posterKey)", async () => {
+      const storage = createMockStorage();
+      await storage.put("media/v.mp4", new Uint8Array([1]));
+      await storage.put("media/v-poster.webp", new Uint8Array([2]));
+      const m = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/v.mp4",
+        posterKey: "media/v-poster.webp",
+      });
+      await mediaService.delete(m.id, storage);
+
+      const purged = await mediaService.purgeDueStorageObjects(
+        { before: FAR_FUTURE(), limit: 50, provider: "r2" },
+        storage,
+      );
+
+      expect(purged).toBe(2);
+      expect(storage.files.size).toBe(0);
+    });
+
+    it("retains trash whose recycle window has not elapsed", async () => {
+      const storage = createMockStorage();
+      await storage.put("media/keep.jpg", new Uint8Array([1]));
+      const m = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/keep.jpg",
+      });
+      await mediaService.delete(m.id, storage);
+
+      // before = now → the 30-day-out purge_after is not yet due.
+      const purged = await mediaService.purgeDueStorageObjects(
+        { before: now(), limit: 50, provider: "r2" },
+        storage,
+      );
+
+      expect(purged).toBe(0);
+      // Original freed, but the trash copy is retained.
+      expect(storage.files.has("media/keep.jpg")).toBe(false);
+      expect(
+        [...storage.files.keys()].some((k) => k.startsWith("trash/")),
+      ).toBe(true);
+    });
+
+    it("deletes immediately with no recycle when the driver lacks copy", async () => {
+      const storage = createNoCopyStorage();
+      await storage.put("media/nocopy.jpg", new Uint8Array([1]));
+      const m = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/nocopy.jpg",
+      });
+
+      await mediaService.delete(m.id, storage);
+
+      // Deleted outright; nothing in trash, nothing queued.
+      expect(storage.files.size).toBe(0);
+      const rows = await db
+        .select()
+        .from(storagePurge)
+        .where(eq(storagePurge.siteId, DEFAULT_TEST_SITE_ID));
+      expect(rows).toHaveLength(0);
+    });
+
+    it("respects the batch limit", async () => {
+      const storage = createMockStorage();
+      await storage.put("media/p1.jpg", new Uint8Array([1]));
+      await storage.put("media/p2.jpg", new Uint8Array([2]));
+      const m1 = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/p1.jpg",
+      });
+      const m2 = await mediaService.create({
+        ...sampleMedia,
+        storageKey: "media/p2.jpg",
+      });
+      await mediaService.deleteByIds([m1.id, m2.id], storage);
+
+      const purged = await mediaService.purgeDueStorageObjects(
+        { before: FAR_FUTURE(), limit: 1, provider: "r2" },
+        storage,
+      );
+
+      expect(purged).toBe(1);
+      // One trash object purged, one remains.
+      expect(
+        [...storage.files.keys()].filter((k) => k.startsWith("trash/")).length,
+      ).toBe(1);
+    });
+  });
+});
+
+/** Minimal valid PNG header (signature + IHDR with width 4, height 6). */
+function createPngBytes(): Uint8Array {
+  return new Uint8Array([
+    0x89,
+    0x50,
+    0x4e,
+    0x47,
+    0x0d,
+    0x0a,
+    0x1a,
+    0x0a, // signature
+    0x00,
+    0x00,
+    0x00,
+    0x0d, // IHDR length (13)
+    0x49,
+    0x48,
+    0x44,
+    0x52, // "IHDR"
+    0x00,
+    0x00,
+    0x00,
+    0x04, // width = 4
+    0x00,
+    0x00,
+    0x00,
+    0x06, // height = 6
+    0x08,
+    0x06,
+    0x00,
+    0x00,
+    0x00, // bit depth, color type, ...
+  ]);
+}
+
+describe("MediaService.ingestFromUrl", () => {
+  let db: Database;
+  let mediaService: ReturnType<typeof createMediaService>;
+
+  beforeEach(() => {
+    const testDb = createTestDatabase();
+    db = testDb.db as unknown as Database;
+    mediaService = createMediaService(db, DEFAULT_TEST_SITE_ID);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const deps = () => ({
+    storage: createMockStorage(),
+    storageDriver: "local",
+    maxFileSizeMB: 25,
+  });
+
+  it("fetches a remote image, stores it, and creates a media row", async () => {
+    const bytes = createPngBytes();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(bytes, { headers: { "content-type": "image/png" } }),
+      ),
+    );
+
+    const d = deps();
+    const media = await mediaService.ingestFromUrl(
+      { url: "https://example.com/photo.png", alt: "A photo" },
+      d,
+    );
+
+    expect(media.mimeType).toBe("image/png");
+    expect(media.mediaKind).toBe("image");
+    expect(media.width).toBe(4);
+    expect(media.height).toBe(6);
+    expect(media.alt).toBe("A photo");
+    expect(media.postId).toBeNull();
+
+    const stored = d.storage.files.get(media.storageKey);
+    expect(stored).toBeDefined();
+    expect(stored?.contentType).toBe("image/png");
+    expect(stored?.contentDisposition).toBe("inline");
+  });
+
+  it("stores SVG with attachment disposition (XSS-safe direct navigation)", async () => {
+    const svg = new TextEncoder().encode(
+      '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(svg, {
+            headers: { "content-type": "image/svg+xml" },
+          }),
+      ),
+    );
+
+    const d = deps();
+    const media = await mediaService.ingestFromUrl(
+      { url: "https://example.com/icon.svg" },
+      d,
+    );
+
+    expect(media.mimeType).toBe("image/svg+xml");
+    const stored = d.storage.files.get(media.storageKey);
+    expect(stored?.contentDisposition).toBe("attachment");
+  });
+
+  it("rejects content that isn't a real image (content-type spoofing)", async () => {
+    const html = new TextEncoder().encode(
+      "<!doctype html><script>alert(1)</script>",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        // Server lies: claims PNG, returns HTML.
+        async () =>
+          new Response(html, { headers: { "content-type": "image/png" } }),
+      ),
+    );
+
+    await expect(
+      mediaService.ingestFromUrl(
+        { url: "https://example.com/evil.png" },
+        deps(),
+      ),
+    ).rejects.toThrow(/supported image/i);
+  });
+
+  it("rejects an oversize image", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(2 * 1024 * 1024));
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(stream, { headers: { "content-type": "image/png" } }),
+      ),
+    );
+
+    await expect(
+      mediaService.ingestFromUrl(
+        { url: "https://example.com/huge.png" },
+        { ...deps(), maxFileSizeMB: 1 },
+      ),
+    ).rejects.toThrow(/too large/i);
+  });
+
+  it("rejects a private/SSRF URL before fetching", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      mediaService.ingestFromUrl(
+        { url: "http://169.254.169.254/latest/meta-data" },
+        deps(),
+      ),
+    ).rejects.toThrow(/private address/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -263,6 +263,7 @@ export async function renderCollectionFeed(
       {
         status: "published",
         excludePrivate: true,
+        ignoreCollectionPinnedSort: true,
         limit: feedLimit,
       },
     );

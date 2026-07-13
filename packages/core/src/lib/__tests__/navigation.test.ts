@@ -1,36 +1,6 @@
 import type { Context } from "hono";
 import { describe, expect, it } from "vitest";
-import {
-  getHomeDefaultViewFromNavItems,
-  getNavigationData,
-} from "../navigation.js";
-
-describe("getHomeDefaultViewFromNavItems", () => {
-  it("falls back to latest when both built-in feed links are disabled", () => {
-    expect(
-      getHomeDefaultViewFromNavItems([
-        { type: "system", systemKey: "archive" },
-        { type: "link", systemKey: undefined },
-      ]),
-    ).toBe("latest");
-  });
-
-  it("uses whichever feed link appears first", () => {
-    expect(
-      getHomeDefaultViewFromNavItems([
-        { type: "system", systemKey: "featured" },
-        { type: "system", systemKey: "latest" },
-      ]),
-    ).toBe("featured");
-
-    expect(
-      getHomeDefaultViewFromNavItems([
-        { type: "system", systemKey: "latest" },
-        { type: "system", systemKey: "featured" },
-      ]),
-    ).toBe("latest");
-  });
-});
+import { getNavigationData } from "../navigation.js";
 
 describe("getNavigationData", () => {
   it("renders site footer markdown through the shared pipeline", async () => {
@@ -42,7 +12,6 @@ describe("getNavigationData", () => {
           sitePathPrefix: "",
           siteDescription: "Footer test",
           siteDescriptionExplicit: true,
-          homeDefaultView: "latest",
           siteAvatarUrl: "",
           showHeaderAvatar: false,
           siteFooter:
@@ -73,7 +42,7 @@ describe("getNavigationData", () => {
     );
   });
 
-  it("derives the home default view from nav item order", async () => {
+  it("keeps system feed links fixed regardless of nav item order", async () => {
     const context = {
       var: {
         publicPath: "/",
@@ -82,7 +51,6 @@ describe("getNavigationData", () => {
           sitePathPrefix: "",
           siteDescription: "",
           siteDescriptionExplicit: false,
-          homeDefaultView: "latest",
           siteAvatarUrl: "",
           showHeaderAvatar: false,
           siteFooter: "",
@@ -125,8 +93,7 @@ describe("getNavigationData", () => {
 
     const result = await getNavigationData(context);
 
-    expect(result.homeDefaultView).toBe("featured");
-    expect(result.links[0]?.url).toBe("/");
-    expect(result.links[1]?.url).toBe("/latest");
+    expect(result.links[0]?.url).toBe("/featured");
+    expect(result.links[1]?.url).toBe("/");
   });
 });

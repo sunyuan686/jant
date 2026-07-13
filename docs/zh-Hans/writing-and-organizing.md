@@ -109,7 +109,7 @@ Jant 没有单独的「页面」类型——独立页面就是一篇 Hidden from
 把一篇帖子标记为 Featured，等于同时做两件事：让它出现在 `/featured` 页面，并把它推送到默认 `/feed` 里订阅你的人那里。
 
 - Featured 帖子会出现在 Featured 页面
-- Featured feed 在 `/feed/featured`
+- Featured feed 在 `/featured/feed`
 - 主 `/feed` 可以指向 Featured 或 Latest，默认指向 Featured
 
 ### 为什么默认 feed 是 Featured
@@ -156,8 +156,8 @@ Jant 使用可读 URL：
 Feed：
 
 - `/feed` 使用你当前配置的主 feed
-- `/feed/latest` 返回出现在首页 Latest 的帖子（不含 `Hidden from Latest`）
-- `/feed/featured` 返回 Featured 帖子
+- `/latest/feed` 返回出现在首页 Latest 的帖子（不含 `Hidden from Latest`）
+- `/featured/feed` 返回 Featured 帖子
 - `/archive/feed` 返回全量公开帖子（包含 `Hidden from Latest`），支持 `?year=`、`?format=`、`?collection=`、`?media=` 等筛选参数
 - `/{slug}/feed` 返回单个 Collection 的 feed
 - `/collections/{slug1}+{slug2}/feed` 返回组合 Collection 的 feed

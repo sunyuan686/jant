@@ -4,7 +4,6 @@ generated_at = "2026-05-12T00:13:42.000Z"
 site_name = "Jant"
 site_description = ""
 site_language = "en"
-home_default_view = "latest"
 main_rss_feed = "featured"
 show_jant_branding_on_home = true
 show_header_avatar = false

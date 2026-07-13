@@ -1,0 +1,4 @@
+interface:
+  display_name: "Generate Demo"
+  short_description: "Create a visual proof document"
+  default_prompt: "Use $demo to generate a visual demo for the current work."

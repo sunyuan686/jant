@@ -186,25 +186,17 @@ describe("feed renderers", () => {
   });
 
   it("renders thread replies with hr separator and time element", () => {
-    const reply: PostView = {
+    const reply = makePostView({
       id: "reply-1",
       permalink: "/reply-1",
       slug: "reply-1",
-      format: "note",
-      status: "published",
-      visibility: "public",
-      pinned: false,
-      featured: false,
       publishedAt: "2026-03-19T12:00:00.000Z",
       publishedAtFormatted: "Mar 19, 2026",
       publishedAtTime: "12:00",
       publishedAtRelative: "now",
       updatedAt: "2026-03-19T12:00:00.000Z",
-      media: [],
-      collections: [],
-      isLastInThread: true,
       bodyHtml: "<p>This is a reply</p>",
-    };
+    });
 
     const xml = defaultFeedRenderer(
       makeFeedData(
@@ -220,6 +212,100 @@ describe("feed renderers", () => {
     expect(xml).toContain("<hr/>");
     expect(xml).toContain('<time datetime="2026-03-19T12:00:00.000Z">');
     expect(xml).toContain("<p>This is a reply</p>");
+  });
+
+  it("renders note reply titles inline because replies do not get their own Atom entry title", () => {
+    const reply = makePostView({
+      id: "reply-1",
+      permalink: "/reply-1",
+      slug: "reply-1",
+      title: "Reply Article",
+      bodyHtml: "<p>Reply article body.</p>",
+    });
+
+    const xml = defaultFeedRenderer(
+      makeFeedData(
+        makePostView({
+          title: "Thread Root",
+          bodyHtml: "<p>Root content</p>",
+          threadReplies: [reply],
+        }),
+      ),
+    );
+
+    expect(xml).toContain(
+      '<h2><a href="https://example.com/reply-1">Reply Article</a></h2>',
+    );
+    expect(xml).toContain("<p>Reply article body.</p>");
+  });
+
+  it("renders link reply domain and title inline before commentary", () => {
+    const reply = makePostView({
+      id: "reply-1",
+      permalink: "/reply-1",
+      slug: "reply-1",
+      format: "link",
+      title: "test rss title",
+      url: "https://www.jant.me/test-rss-title",
+      bodyHtml: "<p>rss body</p>",
+    });
+
+    const xml = defaultFeedRenderer(
+      makeFeedData(
+        makePostView({
+          summary: "test rss",
+          bodyHtml: "<p>test rss</p>",
+          threadReplies: [reply],
+        }),
+      ),
+    );
+
+    expect(xml).toContain(
+      '<p><a href="https://www.jant.me/test-rss-title">jant.me</a></p>',
+    );
+    expect(xml).toContain(
+      '<h2><a href="https://www.jant.me/test-rss-title">test rss title</a></h2>',
+    );
+    expect(xml).toContain("<p>rss body</p>");
+    expect(xml).toContain(
+      '<a href="https://example.com/reply-1" title="Permalink">&nbsp;★&nbsp;</a>',
+    );
+  });
+
+  it("includes thread reply media as Atom enclosures on the combined entry", () => {
+    const reply = makePostView({
+      id: "reply-1",
+      permalink: "/reply-1",
+      slug: "reply-1",
+      bodyHtml: "<p>Reply with audio.</p>",
+      media: [
+        makeMediaView({
+          id: "reply-audio",
+          url: "https://example.com/media/reply.mp3",
+          thumbnailUrl: "https://example.com/media/reply.mp3",
+          mimeType: "audio/mpeg",
+          originalName: "reply.mp3",
+          size: 1024,
+        }),
+      ],
+    });
+
+    const xml = defaultFeedRenderer(
+      makeFeedData(
+        makePostView({
+          title: "Thread Root",
+          bodyHtml: "<p>Root content</p>",
+          threadReplies: [reply],
+        }),
+      ),
+    );
+
+    expect(xml).toContain(
+      '<link rel="enclosure" type="audio/mpeg" href="https://example.com/media/reply.mp3" length="1024" title="reply.mp3"',
+    );
+    expect(xml).toContain(
+      '<a href="https://example.com/media/reply.mp3">📎 [audio/mpeg] reply.mp3</a> (1 KB)',
+    );
   });
 
   it("embeds image attachments as figures with alt text caption", () => {
@@ -272,7 +358,11 @@ describe("feed renderers", () => {
     expect(xml).toContain(
       '<img src="https://example.com/media/clip-poster.jpg"',
     );
-    expect(xml).toContain("▶ Watch video · 0:42 · 1.1 MB");
+    // The action label is a link (not just the thumbnail); metadata sits
+    // outside the link in parens, matching the audio/text attachment style.
+    expect(xml).toContain(
+      '<figcaption><a href="https://example.com/media/clip.mp4">▶ Watch video</a> (0:42 · 1.1 MB)</figcaption>',
+    );
     expect(xml).toContain(
       '<link rel="enclosure" type="video/mp4" href="https://example.com/media/clip.mp4" length="1200000"',
     );

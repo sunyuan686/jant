@@ -182,9 +182,9 @@ html {
   --tw-prose-quote-borders: var(--color-border);
   --tw-prose-captions: var(--color-muted-foreground);
   --tw-prose-kbd: var(--color-foreground);
-  --tw-prose-code: var(--color-foreground);
-  --tw-prose-pre-code: var(--color-muted-foreground);
-  --tw-prose-pre-bg: var(--color-muted);
+  --tw-prose-code: var(--site-code-text);
+  --tw-prose-pre-code: var(--site-code-text);
+  --tw-prose-pre-bg: var(--site-code-block-bg);
   --tw-prose-th-borders: var(--color-border);
   --tw-prose-td-borders: var(--color-border);
   font-family: var(--font-body);
@@ -213,14 +213,12 @@ html {
 
   :where(h2) {
     font-size: var(--type-content-title);
-    font-style: italic;
     margin-top: 2.1rem;
     margin-bottom: 1.4rem;
   }
 
   :where(h3) {
     font-size: var(--type-content-subtitle);
-    font-style: italic;
     margin-top: 2rem;
     margin-bottom: 1.4rem;
   }
@@ -236,12 +234,12 @@ html {
 
   :where(ul, ol) {
     margin: 1.25em 0;
-    padding-left: 1.625em;
+    padding-left: 1.4em;
   }
 
   :where(li, dt) {
-    margin-top: 1.2em;
-    margin-bottom: 1.2em;
+    margin-top: 0.5em;
+    margin-bottom: 0.5em;
   }
 
   /* Normalize li > p so list spacing is controlled by li alone,
@@ -257,18 +255,35 @@ html {
   :where(code, pre code) {
     font-size: var(--type-code);
     line-height: 1.42;
+    color: var(--site-code-text);
     overflow-wrap: break-word;
   }
 
   :where(:not(pre) > code) {
-    padding: 0.1em 0.35em;
-    background-color: var(--site-feed-card-bg);
-    border: 1px solid var(--site-feed-card-border);
-    border-radius: 0.25rem;
+    padding: 0.08em 0.28em;
+    background-color: var(--site-code-bg);
+    border-radius: 0.22em;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  :where(:not(pre) > code)::before,
+  :where(:not(pre) > code)::after {
+    content: none;
+  }
+
+  :where(pre) {
+    background-color: var(--site-code-block-bg);
+    border: 1px solid var(--site-code-block-border);
+    border-radius: 6px;
   }
 
   :where(pre code) {
     font-size: var(--type-code-block);
+    color: inherit;
+    background: transparent;
+    border: 0;
+    padding: 0;
   }
 
   :where(h1, h2, h3) :where(code) {
@@ -315,9 +330,15 @@ html {
 
   /* Blockquotes — tinted background card with quote icon */
   blockquote {
+    --_blockquote-pad-x: 1rem;
     position: relative;
     margin: 1.4rem 0;
-    padding: 1.4rem 1rem 0.75rem;
+    padding: 1.4rem var(--_blockquote-pad-x) 0.75rem;
+    /* A footnote referenced inside a quote floats within this padded box, so its
+       gutter anchor is inset by the right padding and the note drifts left. Expose
+       that inset (same value as the padding, so the two can't drift) — the sidenote
+       rule in ui.css subtracts it to pull the note back out to the gutter. */
+    --sidenote-anchor-inset: var(--_blockquote-pad-x);
     border: none;
     background: var(--site-blockquote-bg);
     border-radius: 6px;
@@ -420,6 +441,37 @@ html {
 }
 
 /*
+ * Feed body headings
+ *
+ * In list contexts, the post title owns the card heading level. Authored
+ * headings inside the body should remain visible, but they should read as
+ * sections within the card rather than as peer post titles.
+ */
+[data-post]:not([data-page="post"]) [data-post-body].prose {
+  :where(h1, h2) {
+    font-size: calc(var(--type-content-body) * 1.12);
+    font-weight: var(--fw-medium);
+    margin-top: 1.45rem;
+    margin-bottom: 0.55rem;
+  }
+
+  :where(h3, h4) {
+    font-size: var(--type-content-body);
+    font-weight: var(--fw-medium);
+    margin-top: 1.2rem;
+    margin-bottom: 0.45rem;
+  }
+
+  :where(h5, h6) {
+    font-size: var(--type-secondary);
+    font-weight: var(--fw-medium);
+    color: var(--site-text-secondary);
+    margin-top: 1rem;
+    margin-bottom: 0.35rem;
+  }
+}
+
+/*
  * Detail-page reading prose
  *
  * Keep these overrides outside cascade layers so they can outrank the base
@@ -449,12 +501,8 @@ html {
   );
   --tw-prose-captions: var(--site-reading-caption);
   --tw-prose-kbd: var(--site-reading-heading);
-  --tw-prose-code: var(--site-reading-heading);
-  --tw-prose-pre-code: color-mix(
-    in srgb,
-    var(--site-reading-caption) 86%,
-    var(--site-reading-body)
-  );
+  --tw-prose-code: var(--site-code-text);
+  --tw-prose-pre-code: var(--site-code-text);
   --tw-prose-th-borders: color-mix(
     in srgb,
     var(--site-divider) 88%,

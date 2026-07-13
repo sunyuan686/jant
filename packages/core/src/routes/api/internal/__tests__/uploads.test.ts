@@ -62,6 +62,11 @@ function createMockStorage(): StorageDriver & {
     async delete(key) {
       files.delete(key);
     },
+
+    async copy(sourceKey, destKey) {
+      const file = files.get(sourceKey);
+      if (file) files.set(destKey, { ...file });
+    },
   };
 }
 
@@ -120,6 +125,8 @@ describe("Internal upload admin routes", () => {
     await expect(res.json()).resolves.toEqual({
       abortedMultipartUploads: 0,
       deletedSessions: 1,
+      deletedOrphanMedia: 0,
+      purgedStorageObjects: 0,
     });
 
     const remaining = sqlite
@@ -127,5 +134,80 @@ describe("Internal upload admin routes", () => {
       .get(session.id);
     expect(remaining).toBeUndefined();
     expect(storage.files.has(row.tempStorageKey)).toBe(false);
+  });
+
+  it("keeps finalized unattached media during upload cleanup", async () => {
+    const storage = createMockStorage();
+    const { app, services, sqlite } = createTestApp({
+      authenticated: false,
+      internalAdminToken: "internal-secret",
+      storage,
+    });
+    app.route("/api/internal/uploads", internalUploadsRoutes);
+
+    const oldStorageKey = "media/old-orphan.jpg";
+    const freshStorageKey = "media/fresh-orphan.jpg";
+    await storage.put(oldStorageKey, createFakeWebpBytes(), {
+      contentType: "image/jpeg",
+    });
+    await storage.put(freshStorageKey, createFakeWebpBytes(), {
+      contentType: "image/jpeg",
+    });
+
+    const oldOrphan = await services.media.create({
+      filename: "old.jpg",
+      originalName: "old.jpg",
+      mimeType: "image/jpeg",
+      size: 1024,
+      storageKey: oldStorageKey,
+    });
+    const freshOrphan = await services.media.create({
+      filename: "fresh.jpg",
+      originalName: "fresh.jpg",
+      mimeType: "image/jpeg",
+      size: 1024,
+      storageKey: freshStorageKey,
+    });
+
+    // Backdate the first orphan beyond the 7-day grace window.
+    sqlite
+      .prepare("update media set created_at = 0 where id = ?")
+      .run(oldOrphan.id);
+
+    const res = await app.request("/api/internal/uploads/cleanup", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer internal-secret",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ limit: 10 }),
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      abortedMultipartUploads: 0,
+      deletedSessions: 0,
+      deletedOrphanMedia: 0,
+      purgedStorageObjects: 0,
+    });
+
+    // Finalized media may be referenced from post body JSON without being a
+    // post attachment, so upload cleanup must not delete it from `postId IS
+    // NULL` alone.
+    expect(
+      sqlite.prepare("select id from media where id = ?").get(oldOrphan.id),
+    ).toBeDefined();
+    expect(storage.files.has(oldStorageKey)).toBe(true);
+    expect(
+      sqlite
+        .prepare("select id from storage_purge where original_key = ?")
+        .get(oldStorageKey),
+    ).toBeUndefined();
+
+    // Fresh unattached media is also untouched.
+    expect(
+      sqlite.prepare("select id from media where id = ?").get(freshOrphan.id),
+    ).toBeDefined();
+    expect(storage.files.has(freshStorageKey)).toBe(true);
   });
 });

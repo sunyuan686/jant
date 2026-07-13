@@ -1,12 +1,17 @@
 /**
  * Atom Feed Routes
  *
- * Feed hierarchy:
- * - /feed                  — site main feed (latest or featured, site-configurable)
- * - /feed/latest           — latest public posts
- * - /feed/featured        — featured posts only
- * - /{slug}/feed          — single-collection feed (handled in page routes)
+ * Feed hierarchy (resource-first: a feed is a sub-resource of the page it
+ * represents, so it lives at `{page}/feed`):
+ * - /feed                    — site main feed (latest or featured, site-configurable; feed of `/`)
+ * - /latest/feed             — latest public posts (handled in pages/latest)
+ * - /featured/feed           — featured posts only (handled in pages/featured)
+ * - /archive/feed            — full archive incl. Hidden-from-Latest (handled in pages/archive)
+ * - /{slug}/feed             — single-collection feed (handled in page routes)
  * - /collections/{slug}/feed — combined collection feed (handled in collection routes)
+ *
+ * Legacy: /feed/latest and /feed/featured 308-redirect to the canonical
+ * /latest/feed and /featured/feed. Kept indefinitely for old subscribers.
  */
 
 import { msg } from "@lingui/core/macro";
@@ -121,6 +126,7 @@ async function buildLatestFeedData(
     excludeLatestHidden: true,
     excludePrivate: true,
     format,
+    ignorePinnedSort: true,
     limit: feedLimit,
   });
 
@@ -255,11 +261,15 @@ async function buildFeaturedFeedData(
 /**
  * Build FeedData from the Hono context.
  *
+ * Exported so the canonical latest/featured feeds (served from the
+ * `/latest/feed` and `/featured/feed` page route groups) can reuse the
+ * same feed-building logic.
+ *
  * @param c - Hono context
  * @param opts - Filter options for the feed
  * @returns Feed data ready for rendering
  */
-async function buildFeedData(
+export async function buildFeedData(
   c: Context<Env>,
   opts: FeedOptions,
 ): Promise<FeedData> {
@@ -311,7 +321,7 @@ async function buildFeedData(
  * Parse and validate the `format` query parameter.
  * Returns a valid Format or undefined if missing/invalid.
  */
-function parseFormatQuery(c: Context<Env>): Format | undefined {
+export function parseFormatQuery(c: Context<Env>): Format | undefined {
   const raw = c.req.query("format");
   if (raw && (FORMATS as readonly string[]).includes(raw)) {
     return raw as Format;
@@ -319,7 +329,7 @@ function parseFormatQuery(c: Context<Env>): Format | undefined {
   return undefined;
 }
 
-function renderFeed(xml: string) {
+export function renderFeed(xml: string) {
   return new Response(xml, {
     headers: {
       "Content-Type": "application/atom+xml; charset=utf-8",
@@ -335,24 +345,24 @@ feedRoutes.get("/", async (c) => {
   return renderFeed(defaultFeedRenderer(feedData));
 });
 
-// Atom — /feed/latest
-feedRoutes.get("/latest", async (c) => {
-  const format = parseFormatQuery(c);
-  const feedData = await buildFeedData(c, {
-    kind: "latest",
-    selfPath: "/feed/latest",
-    format,
-  });
-  return renderFeed(defaultFeedRenderer(feedData));
+// Legacy — /feed/latest moved to the canonical /latest/feed. Kept
+// indefinitely as a 308 so old subscribers don't break; preserves the
+// ?format= query string.
+feedRoutes.get("/latest", (c) => {
+  const sitePathPrefix = c.var.appConfig.sitePathPrefix;
+  const qs = c.req.url.includes("?")
+    ? c.req.url.slice(c.req.url.indexOf("?"))
+    : "";
+  return c.redirect(
+    `${toPublicPath("/latest/feed", sitePathPrefix)}${qs}`,
+    308,
+  );
 });
 
-// Atom — /feed/featured
-feedRoutes.get("/featured", async (c) => {
-  const feedData = await buildFeedData(c, {
-    kind: "featured",
-    selfPath: "/feed/featured",
-  });
-  return renderFeed(defaultFeedRenderer(feedData));
+// Legacy — /feed/featured moved to the canonical /featured/feed.
+feedRoutes.get("/featured", (c) => {
+  const sitePathPrefix = c.var.appConfig.sitePathPrefix;
+  return c.redirect(toPublicPath("/featured/feed", sitePathPrefix), 308);
 });
 
 // Legacy aliases
@@ -362,7 +372,7 @@ feedRoutes.get("/all", (c) => {
     ? c.req.url.slice(c.req.url.indexOf("?"))
     : "";
   return c.redirect(
-    `${toPublicPath("/feed/latest", sitePathPrefix)}${qs}`,
+    `${toPublicPath("/latest/feed", sitePathPrefix)}${qs}`,
     308,
   );
 });
@@ -374,13 +384,13 @@ feedRoutes.get("/atom.xml", (c) => {
 });
 feedRoutes.get("/latest/atom.xml", (c) => {
   const sitePathPrefix = c.var.appConfig.sitePathPrefix;
-  return c.redirect(toPublicPath("/feed/latest", sitePathPrefix), 308);
+  return c.redirect(toPublicPath("/latest/feed", sitePathPrefix), 308);
 });
 feedRoutes.get("/featured/atom.xml", (c) => {
   const sitePathPrefix = c.var.appConfig.sitePathPrefix;
-  return c.redirect(toPublicPath("/feed/featured", sitePathPrefix), 308);
+  return c.redirect(toPublicPath("/featured/feed", sitePathPrefix), 308);
 });
 feedRoutes.get("/all/atom.xml", (c) => {
   const sitePathPrefix = c.var.appConfig.sitePathPrefix;
-  return c.redirect(toPublicPath("/feed/latest", sitePathPrefix), 308);
+  return c.redirect(toPublicPath("/latest/feed", sitePathPrefix), 308);
 });

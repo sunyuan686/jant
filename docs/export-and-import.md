@@ -145,6 +145,7 @@ A `site export` → `site import` round-trip preserves every post's Featured, pi
 
 - `featured_at` and `pinned_at` are written to front matter as ISO timestamps, not booleans, so re-importing restores the precise moment a post was Featured or pinned.
 - The top-level `collections` array in front matter carries `collected_at`, `position`, and per-collection `pinned_at` for every entry. Each reply leaf bundle keeps the same metadata in its own front matter.
+- Thread root `last_activity_at` preserves the effect of replies published with **Reply quietly**. Quietness is not a per-reply field in the export; import uses the root activity timestamp to avoid bumping replies that originally landed quietly.
 
 Fields not documented here are Jant-internal — don't hand-edit them. They get written back to the database verbatim on the next import and will overwrite any later changes you made in Jant.
 
@@ -212,7 +213,7 @@ Import does not merge, overwrite, or roll back transactions — it walks the inb
 
 ### Clearing the target site
 
-When migration hits field conflicts or a previous import didn't complete cleanly, there's currently no lightweight "wipe content but keep the account" entry point. The fastest path is to use **Settings → Account → Delete Account** to remove the account along with all its content, then re-register — a common shortcut during first-time migration. The flow forces a `site export` download as a final backup, then asks for a confirmation phrase.
+When migration hits field conflicts or a previous import didn't complete cleanly, there's currently no lightweight "wipe content but keep the account" entry point. The fastest path is to use **Settings → Account & Data → Delete Account** to remove the account along with all its content, then re-register — a common shortcut during first-time migration. The flow forces a `site export` download as a final backup, then asks for a confirmation phrase.
 
 On hosted sites, **Delete Account** removes the same content and account but leaves billing, domain bindings, and the jant.me instance itself intact. After re-registering you can re-initialize the same instance.
 

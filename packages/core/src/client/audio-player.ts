@@ -99,9 +99,11 @@ async function extractPeaks(url: string, count: number): Promise<number[]> {
  * time to lay out the canvas (which starts as display:none and only
  * becomes visible when the `has-waveform` class is added).
  */
-function initPrecomputedWaveforms() {
+export function initPrecomputedWaveforms(
+  root: globalThis.Document | globalThis.Element = document,
+) {
   const canvases =
-    document.querySelectorAll<HTMLCanvasElement>("[data-audio-peaks]");
+    root.querySelectorAll<HTMLCanvasElement>("[data-audio-peaks]");
   const cardsToRender: HTMLElement[] = [];
 
   for (const canvas of canvases) {
@@ -472,7 +474,9 @@ document.addEventListener(
 // --- Initialize pre-computed waveforms on page load ---
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", initPrecomputedWaveforms);
+  document.addEventListener("DOMContentLoaded", () =>
+    initPrecomputedWaveforms(),
+  );
 } else {
   initPrecomputedWaveforms();
 }

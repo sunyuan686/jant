@@ -185,7 +185,7 @@ sitemapRoutes.get("/sitemap-collections.xml", async (c) => {
 
 sitemapRoutes.get("/sitemap-pages.xml", async (c) => {
   const { appConfig } = c.var;
-  const { siteUrl, sitePathPrefix, homeDefaultView } = appConfig;
+  const { siteUrl, sitePathPrefix } = appConfig;
 
   const urls: SitemapUrlEntry[] = [
     {
@@ -200,12 +200,8 @@ sitemapRoutes.get("/sitemap-pages.xml", async (c) => {
     },
   ];
 
-  // Whichever of /latest and /featured is NOT the homepage default is a
-  // standalone URL worth indexing; the other 302-redirects to `/`.
-  const secondaryAggregate =
-    homeDefaultView === "featured" ? "/latest" : "/featured";
   urls.push({
-    loc: absoluteUrl(secondaryAggregate, siteUrl, sitePathPrefix),
+    loc: absoluteUrl("/featured", siteUrl, sitePathPrefix),
     priority: "0.6",
     changefreq: "daily",
   });

@@ -53,15 +53,16 @@ export const SUPPORTED_LOCALE_TAGS = [
   "ro",
   "uk",
 
-  // Common regional variants worth preselecting.
+  // Common regional variants worth preselecting. Chinese is offered only via
+  // its script subtags (zh-Hans/zh-Hant) above — the region forms (zh-CN/zh-TW/
+  // zh-HK) are near-duplicates for `<html lang>` and the W3C recommends script
+  // subtags for Chinese, so they are intentionally omitted here. Any stored
+  // region tag still resolves and displays correctly via getOrBuildEntry.
   "en-GB",
   "en-US",
   "fr-CA",
   "pt-BR",
   "es-MX",
-  "zh-CN",
-  "zh-TW",
-  "zh-HK",
 ] as const;
 
 export interface LocaleEntry {

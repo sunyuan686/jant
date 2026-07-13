@@ -15,10 +15,10 @@ import { SETTINGS_KEYS } from "../lib/constants.js";
 import { ConflictError, NotFoundError } from "../lib/errors.js";
 import { createEntityId } from "../lib/ids.js";
 import { getConfiguredSingleSiteUrl } from "../lib/env.js";
-import { getHomeDefaultViewFromNavItems } from "../lib/navigation.js";
 import { resolveConfig } from "../lib/resolve-config.js";
 import { buildThemeStyle } from "../lib/theme.js";
 import { now } from "../lib/time.js";
+import { normalizeTimeZone } from "../lib/timezones.js";
 import { detectLocaleFromHeader } from "../i18n/detect.js";
 import { baseLocale } from "../i18n/locales.js";
 import { BUILTIN_COLOR_THEMES } from "../ui/color-themes.js";
@@ -305,6 +305,11 @@ export function createSiteAdminService(
     const siteKey = input.key.trim();
     const primaryHost = input.primaryHost.trim().toLowerCase();
     const siteName = input.siteName.trim();
+    // Browser-detected timezone metadata is optional. Preserve any runtime-
+    // supported IANA name or fixed offset, but never fail the whole managed
+    // site transaction when a browser reports a value this runtime does not
+    // recognize.
+    const timeZone = normalizeTimeZone(input.timeZone);
     const idempotencyKey = input.idempotencyKey?.trim() || null;
 
     if (idempotencyKey) {
@@ -410,7 +415,7 @@ export function createSiteAdminService(
           ? detectLocaleFromHeader(input.siteLanguage)
           : baseLocale,
         cjkSerifFont: "off",
-        timeZone: input.timeZone?.trim() ?? "",
+        timeZone,
       },
       {
         oldLanguage: "",
@@ -793,7 +798,6 @@ export function createSiteAdminService(
           siteDescription: appConfig.siteDescription,
           siteLanguage: appConfig.siteLanguage,
           showJantBrandingOnHome: appConfig.showJantBrandingOnHome,
-          homeDefaultView: getHomeDefaultViewFromNavItems(navItemList),
           mainRssFeed: appConfig.mainRssFeed,
           siteFooter: appConfig.siteFooter,
           showHeaderAvatar: appConfig.showHeaderAvatar,

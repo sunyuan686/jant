@@ -2,6 +2,7 @@ import { Extension, InputRule } from "@tiptap/core";
 import { Fragment, type Node as ProseMirrorNode } from "@tiptap/pm/model";
 import {
   NodeSelection,
+  Plugin,
   TextSelection,
   type EditorState,
   type Transaction,
@@ -193,6 +194,85 @@ function ensureFootnoteDefinition(
   tr.insert(insertPos, definitionNode);
   removeAutoInsertedParagraphAfter(tr, insertPos + definitionNode.nodeSize);
   return insertPos;
+}
+
+function collectMissingFootnoteDefinitionLabels(
+  doc: ProseMirrorNode,
+): string[] {
+  const definedLabels = new Set<string>();
+  const queuedLabels = new Set<string>();
+  const missingLabels: string[] = [];
+
+  doc.forEach((node) => {
+    if (node.type.name !== "footnoteDefinition") {
+      return;
+    }
+
+    const label = normalizeFootnoteLabel(node.attrs.label);
+    if (label) {
+      definedLabels.add(getFootnoteLabelKey(label));
+    }
+  });
+
+  doc.descendants((node) => {
+    if (node.type.name !== "footnoteReference") {
+      return true;
+    }
+
+    const label = normalizeFootnoteLabel(node.attrs.label);
+    const labelKey = getFootnoteLabelKey(label);
+    if (label && !definedLabels.has(labelKey) && !queuedLabels.has(labelKey)) {
+      queuedLabels.add(labelKey);
+      missingLabels.push(label);
+    }
+
+    return true;
+  });
+
+  return missingLabels;
+}
+
+function buildEnsureFootnoteDefinitionsTransaction(
+  state: EditorState,
+): Transaction | null {
+  const missingLabels = collectMissingFootnoteDefinitionLabels(state.doc);
+  if (missingLabels.length === 0) {
+    return null;
+  }
+
+  const tr = state.tr;
+  for (const label of missingLabels) {
+    ensureFootnoteDefinition(state, tr, label);
+  }
+
+  return tr.docChanged ? tr : null;
+}
+
+function getSelectedFootnoteReferenceLabel(state: EditorState): string | null {
+  const { selection } = state;
+  if (
+    !(selection instanceof NodeSelection) ||
+    selection.node.type.name !== "footnoteReference"
+  ) {
+    return null;
+  }
+
+  return normalizeFootnoteLabel(selection.node.attrs.label) || null;
+}
+
+function buildNavigateToFootnoteDefinitionTransaction(
+  state: EditorState,
+  label: string,
+): Transaction | null {
+  const tr = state.tr;
+  const definitionPos = ensureFootnoteDefinition(state, tr, label);
+  if (definitionPos === null) {
+    return null;
+  }
+
+  setSelectionInsideInsertedFootnote(tr, definitionPos);
+  tr.scrollIntoView();
+  return tr;
 }
 
 function ensureNonEmptyDoc(state: EditorState, tr: Transaction) {
@@ -603,6 +683,66 @@ declare module "@tiptap/core" {
 export const Footnotes = Extension.create({
   name: "footnotes",
 
+  onCreate() {
+    const tr = buildEnsureFootnoteDefinitionsTransaction(this.editor.state);
+    if (tr) {
+      this.editor.view.dispatch(tr);
+    }
+  },
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        appendTransaction: (transactions, _oldState, newState) => {
+          if (!transactions.some((transaction) => transaction.docChanged)) {
+            return null;
+          }
+
+          return buildEnsureFootnoteDefinitionsTransaction(newState);
+        },
+        props: {
+          handleClickOn: (view, _pos, node, _nodePos, _event, direct) => {
+            if (!direct || node.type.name !== "footnoteReference") {
+              return false;
+            }
+
+            const label = normalizeFootnoteLabel(node.attrs.label);
+            if (!label) {
+              return false;
+            }
+
+            const tr = buildNavigateToFootnoteDefinitionTransaction(
+              view.state,
+              label,
+            );
+            if (!tr) {
+              return false;
+            }
+
+            view.dispatch(tr);
+            view.focus();
+            return true;
+          },
+          handleClick: (view, pos) => {
+            const $pos = view.state.doc.resolve(pos);
+            if (
+              $pos.nodeBefore?.type.name !== "footnoteDefinition" ||
+              $pos.nodeAfter?.type.name !== "footnoteDefinition"
+            ) {
+              return false;
+            }
+
+            const tr = view.state.tr;
+            setSelectionInsideInsertedFootnote(tr, pos);
+            view.dispatch(tr.scrollIntoView());
+            view.focus();
+            return true;
+          },
+        },
+      }),
+    ];
+  },
+
   addCommands() {
     return {
       insertFootnote:
@@ -649,6 +789,22 @@ export const Footnotes = Extension.create({
   addKeyboardShortcuts() {
     return {
       Enter: ({ editor }) => {
+        const selectedReferenceLabel = getSelectedFootnoteReferenceLabel(
+          editor.state,
+        );
+        if (selectedReferenceLabel) {
+          const navigateTr = buildNavigateToFootnoteDefinitionTransaction(
+            editor.state,
+            selectedReferenceLabel,
+          );
+          if (!navigateTr) {
+            return false;
+          }
+
+          editor.view.dispatch(navigateTr);
+          return true;
+        }
+
         const tr = activateTrailingFootnoteAtParagraphEnd(editor.state);
         if (!tr) {
           return false;

@@ -118,7 +118,7 @@ export interface HugoFrontMatter {
   collections?: HugoCollectionRef[];
   media?: JantMedia[];
 
-  // Escape hatch for page-type-specific keys (home default view, etc.)
+  // Escape hatch for page-specific export metadata.
   [key: string]: unknown;
 }
 

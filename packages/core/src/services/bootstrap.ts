@@ -13,6 +13,7 @@ import {
   baseLocale,
   isValidContentLanguage,
   normalizeContentLanguage,
+  resolveCatalogLocale,
 } from "../i18n/locales.js";
 import { createNavItemService } from "./navigation.js";
 import { createSettingsService } from "./settings.js";
@@ -65,6 +66,12 @@ export function createBootstrapService(
           ? normalizeContentLanguage(data.siteLanguage)
           : baseLocale;
       await settings.set("SITE_LANGUAGE", siteLanguage);
+      // Pin the dashboard UI locale to the detected catalog language so it stays
+      // stable if the operator later changes the public content language.
+      await settings.set(
+        "DASHBOARD_LANGUAGE",
+        resolveCatalogLocale(siteLanguage),
+      );
       if (data.cjkSerifFont && data.cjkSerifFont !== "off") {
         await settings.set("CJK_SERIF_FONT", data.cjkSerifFont);
       }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Changeset"
+  short_description: "Prepare a fixed-version changeset"
+  default_prompt: "Use $release to create a release changeset for the current work."

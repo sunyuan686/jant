@@ -1,5 +1,47 @@
 # @jant/core
 
+## 0.6.14
+
+### Patch Changes
+
+- [`fc4dbdb`](https://github.com/jant-me/jant/commit/fc4dbdb88ae1dd1a6f8fdc192b9458d21f8ece46) Thanks [@theowenyoung](https://github.com/theowenyoung)! - Improve editing, search, and responsive UI interactions.
+
+## 0.6.13
+
+### Patch Changes
+
+- [`d067461`](https://github.com/jant-me/jant/commit/d0674618d0b9efcd0500b91a911630fd115d352b) Thanks [@theowenyoung](https://github.com/theowenyoung)! - Improve compose and media handling, navigation updates, and feed ordering fixes.
+
+## 0.6.12
+
+### Patch Changes
+
+- [`505d101`](https://github.com/jant-me/jant/commit/505d1014e499c1c0b8b896cbfde238c229ad638d) Thanks [@theowenyoung](https://github.com/theowenyoung)! - Refine reading typography, reply composition, navigation workflows, and import behavior.
+
+## 0.6.11
+
+### Patch Changes
+
+- [`b7197f0`](https://github.com/jant-me/jant/commit/b7197f030a62ad6e373508c4cecb73249c9dae17) Thanks [@theowenyoung](https://github.com/theowenyoung)! - Auto-rehost pasted inline images into site storage, and fix the TipTap link editor popover not appearing on mobile tap
+
+## 0.6.10
+
+### Patch Changes
+
+- [`b4c9b97`](https://github.com/jant-me/jant/commit/b4c9b97de8824b9e0047060d8e253b9b7af8d43f) Thanks [@theowenyoung](https://github.com/theowenyoung)! - Add Snow color theme with per-theme preview descriptions; split site language into separate content and dashboard languages; move deleted and orphaned compose media to a 30-day trash before purge; allow changing post format while editing and show the format selector above replies/edits; expand untitled notes inline with read more/less; add a thread filter and single-word filter params to the archive; add a top-level Manage Hosting entry; plus feed, threads, typography, footnote, and client-hydration fixes.
+
+## 0.6.9
+
+### Patch Changes
+
+- [`ab64986`](https://github.com/jant-me/jant/commit/ab6498699d3a4dfeb79b144f17af5232921b1dda) Thanks [@theowenyoung](https://github.com/theowenyoung)! - Change post format while editing and move the format selector above replies/edits; expand untitled notes inline with Read more/less; add an archive thread filter with single-word URL params; split content and dashboard language settings; reap orphaned compose media and move deleted media to a 30-day trash before purge; clipper-friendly footnote sidenotes; treat self-referential absolute nav links as internal; re-hydrate interactive behaviors in swapped-in fragments
+
+## 0.6.8
+
+### Patch Changes
+
+- [#128](https://github.com/jant-me/jant/pull/128) [`4a0b3e7`](https://github.com/jant-me/jant/commit/4a0b3e704134aced078587eac03fb8db30f92cfa) Thanks [@theowenyoung](https://github.com/theowenyoung)! - Add an archive thread filter and switch shareable filter URLs to single-word params (media/title/replies/visibility, legacy spellings still accepted); expand untitled notes in the feed with read more/less; allow switching post format while editing; add a Manage Hosting entry in Settings for hosted sites; treat self-referential absolute nav links as internal; raise the default upload size limit to 1024 MB; reap orphaned compose uploads; and fix footnote sidenote rendering and clipper recognition.
+
 ## 0.6.7
 
 ### Patch Changes

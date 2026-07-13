@@ -18,6 +18,11 @@ msgstr ""
 msgid "/* Your custom CSS here */"
 msgstr "/* 在此放入您的自訂 CSS */"
 
+#. @context: Compact conflict message when /about is occupied
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "/about is already used. Rename that item before creating an About page."
+msgstr "/about 已被佔用。重新命名該項目後再建立 About 頁面。"
+
 #. @context: GitHub sync picker — entry at the bottom of the owner dropdown that starts a new install flow
 #: src/routes/dash/settings.tsx
 msgid "+ Install on another account"
@@ -33,28 +38,51 @@ msgstr "301 (永久)"
 msgid "302 (Temporary)"
 msgstr "302 (暫時)"
 
+#. @context: Slate color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "A calm, cool backdrop."
+msgstr "沉靜、偏冷的底色。"
+
 #. @context: Help text for site description field
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "A short intro shown on your home page."
 msgstr "顯示在您的主頁上的簡短介紹。"
+
+#. @context: Parchment color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "A warmer look, like slightly aged paper."
+msgstr "更暖一些，像略舊的紙。"
+
+#. @context: Link label for editing or creating the About page
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "About page"
+msgstr "About 頁面"
 
 #. @context: Settings form field for site description
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "About this blog"
 msgstr "關於本部落格"
 
-#. @context: Breadcrumb label
+#. @context: Label next to the theme accent-color swatch in a color theme preview card
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Accent"
+msgstr "強調色"
+
 #. @context: GitHub sync picker — owner dropdown label
-#. @context: Page title for the account settings menu
 #. @context: Settings group label for account settings
-#. @context: Settings item — account settings
 #: src/routes/dash/settings.tsx
-#: src/routes/dash/settings.tsx
-#: src/ui/dash/settings/AccountMenuContent.tsx
-#: src/ui/dash/settings/SettingsRootContent.tsx
 #: src/ui/dash/settings/SettingsRootContent.tsx
 msgid "Account"
 msgstr "帳戶"
+
+#. @context: Breadcrumb label
+#. @context: Page title for the account settings menu
+#. @context: Settings item — account settings
+#: src/routes/dash/settings.tsx
+#: src/ui/dash/settings/AccountMenuContent.tsx
+#: src/ui/dash/settings/SettingsRootContent.tsx
+msgid "Account & Data"
+msgstr "帳戶與資料"
 
 #. @context: Error shown when account deletion is blocked in demo mode
 #: src/routes/dash/settings.tsx
@@ -71,6 +99,11 @@ msgstr "目前的工作階段"
 msgid "Active Tokens"
 msgstr "已啟用的權杖"
 
+#. @context: Button to add a suggested nav link
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add"
+msgstr "新增"
+
 #. @context: Description in link popover form
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Add a custom link to any URL"
@@ -85,6 +118,11 @@ msgstr "新增選集"
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Add collection to navigation"
 msgstr "新增選集到導覽"
+
+#. @context: Description for suggested nav links
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add common destinations that already exist on your site."
+msgstr "新增網站中已經存在的常用入口。"
 
 #. @context: Custom CSS settings description
 #: src/ui/dash/appearance/AdvancedContent.tsx
@@ -131,6 +169,11 @@ msgstr "始終顯示深色主題。"
 msgid "Always show the light version of the theme."
 msgstr "永遠顯示主題的淺色版本。"
 
+#. @context: Clay color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "An earthier, warmer tone."
+msgstr "更偏暖、偏土的色調。"
+
 #. @context: Code Injection security warning body
 #: src/ui/dash/appearance/CodeInjectionContent.tsx
 msgid "Anything you paste here has full access to your visitors' browsers. Only use code from sources you trust."
@@ -162,10 +205,17 @@ msgstr "套用於整個網站, 包括管理頁面. 選擇一個調色盤, 然後
 
 #. @context: Custom URL target type badge for an archive view
 #. @context: Custom URL type option for filtered archive view
+#. @context: Suggested navigation link target type
 #: src/routes/dash/custom-urls.tsx
 #: src/routes/dash/custom-urls.tsx
+#: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Archive"
 msgstr "封存"
+
+#. @context: Label for the full-archive RSS feed URL
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Archive feed"
+msgstr "封存 RSS 來源"
 
 #. @context: Help text for archive custom URL query params
 #: src/routes/dash/custom-urls.tsx
@@ -226,10 +276,25 @@ msgstr "部落格大頭貼"
 msgid "Bot token"
 msgstr "機器人權杖"
 
+#. @context: Paper color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Bright paper white"
+msgstr "亮紙白"
+
+#. @context: Paper color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Bright warm-white with a moss-green accent."
+msgstr "明亮的暖白底，配苔綠點綴。"
+
 #. @context: Section heading for built-in nav items
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Built-in links"
 msgstr "內建連結"
+
+#. @context: Sage color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Calm and natural, easy on the eyes."
+msgstr "平靜自然，看著舒服。"
 
 #. @context: Button label to dismiss a dialog or action
 #. @context: Button label to dismiss a dialog or action
@@ -294,6 +359,11 @@ msgstr "選擇要與此網站同步的 GitHub 帳號和儲存庫."
 msgid "CJK Font"
 msgstr "CJK 字體"
 
+#. @context: Paper color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Clean and high-contrast, close to white."
+msgstr "乾淨、高對比，接近純白。"
+
 #. @context: Breadcrumb label
 #. @context: Settings item — code injection settings
 #: src/routes/dash/settings.tsx
@@ -313,8 +383,10 @@ msgstr "選集"
 
 #. @context: Custom URL target type badge for a collection
 #. @context: Custom URL type option
+#. @context: Suggested navigation link target type
 #: src/routes/dash/custom-urls.tsx
 #: src/routes/dash/custom-urls.tsx
+#: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Collection"
 msgstr "選集"
 
@@ -397,6 +469,21 @@ msgstr "連線後會將您的網站同步到 {repo} 的預設分支，並疊加�
 msgid "Connecting…"
 msgstr "連線中…"
 
+#. @context: Settings form field for the public content language
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Content language"
+msgstr "內容語言"
+
+#. @context: Slate color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Cool blue-gray"
+msgstr "冷藍灰"
+
+#. @context: Frost color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Cool white"
+msgstr "冷白"
+
 #. @context: Feedback after copying API token
 #. @context: Feedback after copying to clipboard
 #: src/ui/dash/settings/ApiTokensContent.tsx
@@ -447,6 +534,16 @@ msgstr "無法刪除。請稍後再試。"
 msgid "Couldn't save. Try again in a moment."
 msgstr "無法儲存。請稍後再試。"
 
+#. @context: Ember color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Cozy and bold among the warm tones."
+msgstr "暖色裡最濃的一檔，溫馨。"
+
+#. @context: Espresso color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Cream and coffee brown"
+msgstr "奶油配深咖"
+
 #. @context: Help text explaining where to get a Telegram bot token
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Create a bot by messaging @BotFather on Telegram, then paste the token it gives you."
@@ -466,6 +563,11 @@ msgstr "在 GitHub 建立新儲存庫"
 #: src/ui/dash/settings/ApiTokensContent.tsx
 msgid "Create a post with curl:"
 msgstr "使用 curl 建立貼文："
+
+#. @context: Button to create the standard About page
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Create About page"
+msgstr "建立 About 頁面"
 
 #. @context: Button to save new custom URL
 #: src/routes/dash/custom-urls.tsx
@@ -536,6 +638,11 @@ msgstr "危險區域"
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Dark"
 msgstr "深色"
+
+#. @context: Settings form field for the admin interface language
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Dashboard language"
+msgstr "後台語言"
 
 #. @context: Settings group label for data export/import
 #: src/ui/dash/settings/AccountMenuContent.tsx
@@ -679,10 +786,25 @@ msgstr "例如 iOS 捷徑"
 msgid "Edit"
 msgstr "編輯"
 
+#. @context: Link to edit the standard About page
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Edit About page"
+msgstr "編輯 About 頁面"
+
 #. @context: GitHub sync picker — shown when the selected repo has no commits
 #: src/routes/dash/settings.tsx
 msgid "Empty repository. Ready to connect."
 msgstr "倉庫為空。準備連線。"
+
+#. @context: Help text under the archive feed URL, explaining it is the complete feed
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Every published post, including ones hidden from Latest."
+msgstr "已發布的全部貼文，包括從 Latest 中隱藏的那些。"
+
+#. @context: Placeholder link label shown in color theme preview cards
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Example link"
+msgstr "示例連結"
 
 #. @context: Confirmation text after downloading the site export in delete flow
 #: src/ui/dash/settings/DeleteAccountContent.tsx
@@ -727,11 +849,6 @@ msgstr "已複製訂閱網址。"
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Feeds"
 msgstr "訂閱來源"
-
-#. @context: Color theme preview card title
-#: src/ui/dash/appearance/ColorThemeContent.tsx
-msgid "Field notes on quiet design"
-msgstr "關於靜謐設計的實地筆記"
 
 #. @context: Error toast when file storage is not set up
 #: src/routes/dash/settings.tsx
@@ -800,13 +917,18 @@ msgstr "頁首"
 
 #. @context: Settings item description for navigation
 #: src/ui/dash/settings/SettingsRootContent.tsx
-msgid "Header links, home feed, and overflow menu"
-msgstr "頁首連結、首頁動態與更多選單"
+msgid "Header links, built-in destinations, and overflow menu"
+msgstr "頁首連結、內建目的地與更多選單"
 
 #. @context: Description for the RSS system navigation toggle. {feed} is either Latest or Featured.
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Header RSS points to your {feed} feed (/feed). Change what /feed returns in General."
 msgstr "頁首 RSS 指向你的 {feed} 訂閱 (/feed)。在「一般」中變更 /feed 回傳的內容。"
+
+#. @context: Fallback color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Headings, body text, and links in this theme."
+msgstr "這個主題下的標題、正文和連結。"
 
 #. @context: Post badge for posts hidden from Latest
 #: src/ui/dash/StatusBadge.tsx
@@ -875,11 +997,6 @@ msgstr "標籤與 URL 為必填"
 msgid "Label is required"
 msgstr "標籤為必填"
 
-#. @context: Settings form field for site/admin language
-#: src/ui/dash/settings/GeneralContent.tsx
-msgid "Language"
-msgstr "語言"
-
 #. @context: Settings subsection heading for language and time zone fields
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Language & Time"
@@ -932,6 +1049,16 @@ msgstr "讓您覆寫任何主題變數。"
 msgid "Light"
 msgstr "淺色"
 
+#. @context: Slate color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Light blue-gray background, cool and even."
+msgstr "淺藍灰底，冷靜而均勻。"
+
+#. @context: Sage color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Light sage-green with a matching green accent."
+msgstr "淺鼠尾草綠底，配同色系的綠。"
+
 #. @context: Nav item type badge
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "link"
@@ -940,7 +1067,12 @@ msgstr "連結"
 #. @context: Post format badge - link
 #: src/ui/dash/FormatBadge.tsx
 msgid "Link"
-msgstr "連結 (Jant 的貼文格式之一。)"
+msgstr "連結"
+
+#. @context: Toast after adding a suggested nav link
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Link added to navigation."
+msgstr "連結已新增到導覽。"
 
 #. @context: Label for list posts curl example
 #: src/ui/dash/settings/ApiTokensContent.tsx
@@ -984,8 +1116,8 @@ msgstr "在 {providerLabel} 管理密碼與託管存取"
 
 #. @context: Intro text on the account settings menu page below the title
 #: src/ui/dash/settings/AccountMenuContent.tsx
-msgid "Manage sign-in security, exports, and irreversible actions."
-msgstr "管理登入安全、匯出，以及不可逆的操作。"
+msgid "Manage sign-in security, site exports, and irreversible actions."
+msgstr "管理登入安全、站點匯出和無法復原的操作。"
 
 #. @context: Intro text on the hosted account settings menu page below the title
 #: src/ui/dash/settings/AccountMenuContent.tsx
@@ -1012,6 +1144,11 @@ msgstr "支援 Markdown"
 msgid "Message the bot any text and it's published as a note."
 msgstr "傳送任何文字給機器人，該文字會作為筆記已發佈。"
 
+#. @context: Ink color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Minimal color, low distraction."
+msgstr "色彩極少，干擾最小。"
+
 #. @context: Section label for nav items hidden under More dropdown
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "More"
@@ -1021,6 +1158,11 @@ msgstr "更多"
 #: src/routes/dash/custom-urls.tsx
 msgid "More actions"
 msgstr "更多操作"
+
+#. @context: Clay color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Muted red-brown background, earthy and warm."
+msgstr "低飽和的紅棕底，溫暖、有泥土感。"
 
 #. @context: Settings item description for general
 #: src/ui/dash/settings/SettingsRootContent.tsx
@@ -1054,10 +1196,25 @@ msgstr "導覽位置已更新。"
 msgid "Navigation Preview"
 msgstr "導覽預覽"
 
+#. @context: Ink color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Near-neutral light gray with a steel-blue accent."
+msgstr "近中性的淺灰，配鋼藍點綴。"
+
+#. @context: Cotton color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Nearly white, with a touch of warmth."
+msgstr "近乎純白，帶一點暖意。"
+
 #. @context: Help text for GitHub PAT input explaining required permissions
 #: src/ui/dash/settings/GitHubSyncContent.tsx
 msgid "Needs Contents (read/write) and Webhooks (read/write) on the target repository."
 msgstr "需要在目標儲存庫上擁有 Contents（讀/寫）和 Webhooks（讀/寫）權限。"
+
+#. @context: Ink color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Neutral gray"
+msgstr "中性灰"
 
 #. @context: Button to create new custom URL
 #. @context: Button to create new custom URL
@@ -1125,6 +1282,11 @@ msgstr "尚未同步"
 msgid "Note"
 msgstr "筆記"
 
+#. @context: Tufte color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Off-white paper with a deep forest-green accent."
+msgstr "米白紙底，配深森綠。"
+
 #. @context: Caption inside the manual Telegram binding fallback. {linkOpen}/{linkClose} wrap the bot username as a t.me link — keep them around the @username token in translations.
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Open {linkOpen}@{botUsername}{linkClose} and send:"
@@ -1145,10 +1307,30 @@ msgstr "開啟機器人並傳送綁定碼，之後你傳給它的任何訊息都
 msgid "or"
 msgstr "或"
 
+#. @context: Ember color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Orange-tinted background. The warmest palette."
+msgstr "帶橘調的底色。最暖的一套。"
+
 #. @context: GitHub sync picker — placeholder text showing the expected input shape
 #: src/routes/dash/settings.tsx
 msgid "owner/repo"
 msgstr "owner/repo"
+
+#. @context: Suggested navigation link target type
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Page"
+msgstr "頁面"
+
+#. @context: Bone color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Pale bone-white with a muted green accent."
+msgstr "淺骨白底，配低飽和的綠。"
+
+#. @context: Frost color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Pale cool-white with deep indigo text. High contrast."
+msgstr "偏冷的淺白底，配深靛藍文字。高對比。"
 
 #. @context: Settings item description for color theme
 #: src/ui/dash/settings/SettingsRootContent.tsx
@@ -1202,6 +1384,11 @@ msgstr "選擇一個儲存庫"
 msgid "Pick an account first"
 msgstr "請先選擇一個帳戶"
 
+#. @context: Fallback color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Pick the one that fits your writing."
+msgstr "選一個適合你文字的。"
+
 #. @context: Description in collection picker section
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Pin a collection to your navigation bar. An asterisk (*) appears next to collections updated in the last 48 hours."
@@ -1239,6 +1426,16 @@ msgstr "處理中..."
 msgid "Published"
 msgstr "已發佈"
 
+#. @context: Snow color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Pure white"
+msgstr "純白"
+
+#. @context: Snow color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Pure white with neutral grays. No color tint."
+msgstr "純白底配中性灰。不帶任何色偏。"
+
 #. @context: Description for manual push action on GitHub Sync settings
 #: src/ui/dash/settings/GitHubSyncContent.tsx
 msgid "Push all posts to GitHub right now instead of waiting for the next automatic sync."
@@ -1254,20 +1451,15 @@ msgstr "連結至 Telegram 機器人的 QR 碼"
 msgid "Query Parameters"
 msgstr "查詢參數"
 
-#. @context: Color theme preview card secondary sentence
-#: src/ui/dash/appearance/ColorThemeContent.tsx
-msgid "Quiet surfaces let writing lead."
-msgstr "低調的介面讓文字成為主角。"
-
 #. @context: Post format badge - quote
 #: src/ui/dash/FormatBadge.tsx
 msgid "Quote"
-msgstr "引用 (Jant 的貼文格式之一。)"
+msgstr "引用"
 
-#. @context: Color theme preview inline link label
-#: src/ui/dash/appearance/ColorThemeContent.tsx
-msgid "Read why"
-msgstr "瞭解原因"
+#. @context: Lead text before a live <html lang> preview of the content language
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Readers and search engines see"
+msgstr "讀者和搜尋引擎看到的是"
 
 #. @context: Custom URL target type badge for a redirect
 #. @context: Custom URL type option
@@ -1354,6 +1546,11 @@ msgstr "要撤銷這個權杖嗎？任何使用它的腳本都會停止運作。
 msgid "Safe to leave this page — syncing continues in the background."
 msgstr "可以放心離開此頁面 — 同步會在背景繼續進行。"
 
+#. @context: Dune color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Sandy background with a green accent."
+msgstr "沙色底，配綠色點綴。"
+
 #. @context: Button to save Code Injection settings
 #. @context: Button to save settings
 #. @context: Button to save settings changes
@@ -1439,16 +1636,6 @@ msgstr "在示範模式中已停用工作階段管理。請改用共用示範工
 msgid "Sessions"
 msgstr "工作階段"
 
-#. @context: Settings item description for account settings on the settings home page
-#: src/ui/dash/settings/SettingsRootContent.tsx
-msgid "Sessions and password"
-msgstr "工作階段與密碼"
-
-#. @context: Help text under the site language input
-#: src/ui/dash/settings/GeneralContent.tsx
-msgid "Sets the content language announced to readers (HTML lang, RSS) and the dashboard language. Any BCP 47 tag is accepted; tags without a dashboard translation fall back to English."
-msgstr "聲明給讀者的內容語言（HTML lang、RSS），同時驅動後台介面的語言。可填任意 BCP 47 標籤；沒有對應翻譯時後台會回退為英文。"
-
 #. @context: Breadcrumb label
 #. @context: Page title for the settings home page
 #: src/routes/dash/settings.tsx
@@ -1461,6 +1648,11 @@ msgstr "設定"
 msgid "Show \"Build with Jant\" at the bottom of the home page"
 msgstr "在首頁底部顯示「Build with Jant」"
 
+#. @context: Description for built-in nav toggles
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Show or hide built-in destinations in the header and More menu."
+msgstr "在頁首和更多選單中顯示或隱藏內建目的地。"
+
 #. @context: GitHub sync picker — paginated repo count hint. Placeholders {shown} and {total} are integers.
 #: src/routes/dash/settings.tsx
 msgid "Showing {shown} of {total}"
@@ -1470,6 +1662,11 @@ msgstr "顯示 {shown} 共 {total}"
 #: src/ui/dash/settings/SettingsRootContent.tsx
 msgid "Sign Out"
 msgstr "登出"
+
+#. @context: Settings item description for account settings on the settings home page
+#: src/ui/dash/settings/SettingsRootContent.tsx
+msgid "Sign-in, export, and deletion"
+msgstr "登入、匯出和刪除"
 
 #. @context: Session creation date
 #: src/ui/dash/settings/SessionsContent.tsx
@@ -1510,15 +1707,30 @@ msgstr "網站設定已更新."
 msgid "Site-wide HTML for analytics and widgets"
 msgstr "用於分析與小工具的網站全域 HTML"
 
-#. @context: Color theme preview card body sentence
+#. @context: Linen color theme preview body
 #: src/ui/dash/appearance/ColorThemeContent.tsx
-msgid "Soft color should still carry a clear reading rhythm."
-msgstr "柔和的色彩仍應保有清晰的閱讀節奏。"
+msgid "Soft cream background with a muted green accent."
+msgstr "柔和的奶油底，配低飽和的綠。"
+
+#. @context: Sage color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Soft green"
+msgstr "柔綠"
+
+#. @context: Cotton color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Soft ivory"
+msgstr "柔象牙白"
 
 #. @context: Description for the Telegram disconnect action
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Stop accepting posts from Telegram. Your existing notes stay published."
 msgstr "停止接受來自 Telegram 的貼文。您現有的筆記會保持已發佈。"
+
+#. @context: Section heading for suggested nav links
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Suggested links"
+msgstr "建議新增的連結"
 
 #. @context: Button to trigger a full content push to GitHub on GitHub Sync settings
 #: src/ui/dash/settings/GitHubSyncContent.tsx
@@ -1566,6 +1778,31 @@ msgstr "該字型主題無法使用. 請選擇其他主題."
 msgid "That theme isn't available. Pick another one."
 msgstr "該主題目前不可用。請選擇其他主題。"
 
+#. @context: Snow color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "The cleanest, most neutral option."
+msgstr "最乾淨、最中性的一檔。"
+
+#. @context: Tufte color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "The default. Calm and easy for long reading."
+msgstr "預設主題。沉靜，適合長時間閱讀。"
+
+#. @context: Help text under the dashboard language picker
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "The language this admin dashboard shows in. Available in English, 简体中文, and 繁體中文."
+msgstr "後台介面顯示的語言。可選 English、简体中文 和 繁體中文。"
+
+#. @context: Help text under the content language picker
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "The language your posts are written in. Announced to readers and search engines through HTML lang and your RSS feed. Any BCP 47 tag works."
+msgstr "你撰寫內容所用的語言。透過 HTML lang 和 RSS 向讀者與搜尋引擎宣告。支援任意 BCP 47 標籤。"
+
+#. @context: Linen color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "The original Jant palette, and a solid everyday pick."
+msgstr "Jant 最初的配色，日常穩妥之選。"
+
 #. @context: Custom URL target slug help text
 #: src/routes/dash/custom-urls.tsx
 msgid "The slug of the target post or collection"
@@ -1606,6 +1843,11 @@ msgstr "此託管網站透過 {providerLabel} 登入。請在該處管理密碼�
 msgid "This is used for your favicon and apple-touch-icon. For best results, upload a square PNG with a solid background at least 512x512 pixels."
 msgstr "此圖會用於您的 favicon 和 apple-touch-icon。為達最佳效果，請上傳至少 512x512 像素、背景為純色的正方形 PNG。"
 
+#. @context: Fallback color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "This palette"
+msgstr "這套配色"
+
 #. @context: GitHub sync picker — confirmation card heading for foreign repos
 #: src/routes/dash/settings.tsx
 msgid "This repository already has commits"
@@ -1635,11 +1877,6 @@ msgstr "這會永久刪除您所有的資料 — 文章、媒體、選集、設�
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Time Zone"
 msgstr "時區"
-
-#. @context: Description for built-in nav toggles
-#: src/ui/dash/appearance/NavigationContent.tsx
-msgid "Toggle built-in navigation items. Their order controls what shows in the header and which feed the homepage opens first."
-msgstr "切換內建導覽項目。它們的順序決定頁首顯示哪些項目，以及首頁會先開啟哪一個 feed。"
 
 #. @context: Button to expand/collapse nav item edit
 #: src/ui/dash/appearance/NavigationContent.tsx
@@ -1746,6 +1983,11 @@ msgstr "將精選文章用於 /feed."
 msgid "Uses the latest public posts for /feed."
 msgstr "使用最新的公開貼文作為 /feed。"
 
+#. @context: Cotton color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Very light ivory with a faint tea-green accent."
+msgstr "極淺的象牙底，配淡淡的茶綠。"
+
 #. @context: Button to view item on public site
 #: src/ui/dash/ActionButtons.tsx
 msgid "View"
@@ -1756,6 +1998,66 @@ msgstr "檢視"
 msgid "Want more control?"
 msgstr "想要更細緻的控制？"
 
+#. @context: Prompt shown below the short site description, before the About page action
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Want to write a fuller introduction?"
+msgstr "想寫更完整的介紹？"
+
+#. @context: Dune color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm and earthy, but still light."
+msgstr "溫暖、有泥土感，但不顯暗。"
+
+#. @context: Espresso color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm and rich, with strong brown tones."
+msgstr "暖而厚重，棕調明顯。"
+
+#. @context: Linen color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm cream"
+msgstr "暖奶油色"
+
+#. @context: Espresso color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm cream background with deep coffee-brown accents."
+msgstr "暖奶油底，配深咖啡棕點綴。"
+
+#. @context: Tufte color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm ivory"
+msgstr "暖象牙白"
+
+#. @context: Bone color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm off-white"
+msgstr "暖白"
+
+#. @context: Ember color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm orange"
+msgstr "暖橘"
+
+#. @context: Parchment color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm parchment"
+msgstr "暖羊皮紙"
+
+#. @context: Dune color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm sand"
+msgstr "暖沙色"
+
+#. @context: Clay color theme preview title
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm terracotta"
+msgstr "暖陶土色"
+
+#. @context: Bone color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Warm-neutral and easy for long reading."
+msgstr "暖中性，適合長讀。"
+
 #. @context: GitHub sync picker — hint under the create-on-github entry. Placeholder {name} is the suggested repo name.
 #: src/routes/dash/settings.tsx
 msgid "We'll prefill the name {name}. The list refreshes on return."
@@ -1765,6 +2067,16 @@ msgstr "我們會預先填入名稱 {name}。返回時清單會重新整理。"
 #: src/ui/dash/settings/AccountMenuContent.tsx
 msgid "When to use site export, database backups, and recovery drills."
 msgstr "何時使用網站匯出、資料庫備份與復原演練。"
+
+#. @context: Frost color theme preview help line
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "When you want a cooler, sharper look."
+msgstr "想要更冷、更利落的觀感時。"
+
+#. @context: Parchment color theme preview body
+#: src/ui/dash/appearance/ColorThemeContent.tsx
+msgid "Yellow-tinted paper with an olive-green accent."
+msgstr "微黃的紙底，配橄欖綠。"
 
 #. @context: Fallback name when a connected Telegram account has no username
 #: src/ui/dash/settings/TelegramContent.tsx

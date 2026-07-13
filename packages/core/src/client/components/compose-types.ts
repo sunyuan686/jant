@@ -7,6 +7,7 @@
 
 import type { JSONContent } from "@tiptap/core";
 import type { CollectionFormLabels } from "./collection-types.js";
+import type { TableControlLabels } from "../tiptap/table-control-labels.js";
 
 export type ComposeFormat = "note" | "link" | "quote";
 
@@ -145,6 +146,18 @@ export interface ComposeLabels {
   addMore: string;
   removeAttachment: string;
   uploading: string;
+  /** Toast when exactly one pasted remote image couldn't be rehosted. */
+  imageNotRehosted?: string;
+  /** Toast when several pasted remote images couldn't be rehosted (uses a {count} placeholder). */
+  imagesNotRehosted?: string;
+  /** Inline editor label shown when an image node cannot load. */
+  brokenImageUnavailable?: string;
+  /** Button label for removing a broken inline image. */
+  brokenImageDelete?: string;
+  /** Button label for replacing a broken inline image. */
+  brokenImageReplace?: string;
+  /** Button label for opening the original broken image URL. */
+  brokenImageOpen?: string;
   loadingPost: string;
   loadPostFailed: string;
   published: string;
@@ -214,7 +227,10 @@ export interface ComposeLabels {
   showMore: string;
   showLess: string;
   newThread: string;
+  replyTitle: string;
+  editTitle: string;
   slashHint: string;
+  tableControls: TableControlLabels;
   collectionFormLabels: CollectionFormLabels;
 }
 

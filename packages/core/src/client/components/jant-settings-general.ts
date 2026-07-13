@@ -20,6 +20,8 @@ import type {
   SettingsLabels,
   SettingsTimezone,
   SettingsCjkFont,
+  SettingsDashboardLanguage,
+  SettingsAboutPageStatus,
 } from "./settings-types.js";
 import { showToast } from "../toast.js";
 import {
@@ -37,10 +39,18 @@ export class JantSettingsGeneral extends LitElement {
       type: String,
       attribute: "sitedescription-fallback",
     },
+    dashboardLanguages: { type: Array, attribute: "dashboard-languages" },
     demoMode: { type: Boolean, attribute: "demo-mode" },
     mainFeedUrl: { type: String, attribute: "main-feed-url" },
     latestFeedUrl: { type: String, attribute: "latest-feed-url" },
     featuredFeedUrl: { type: String, attribute: "featured-feed-url" },
+    archiveFeedUrl: { type: String, attribute: "archive-feed-url" },
+    aboutPage: { type: Object, attribute: "about-page" },
+    aboutEditUrl: { type: String, attribute: "about-edit-url" },
+    aboutCreateUrl: {
+      type: String,
+      attribute: "about-create-url",
+    },
 
     // Site group
     _siteName: { state: true },
@@ -52,6 +62,7 @@ export class JantSettingsGeneral extends LitElement {
 
     // Language, CJK & time group
     _siteLanguage: { state: true },
+    _dashboardLanguage: { state: true },
     _localeOpen: { state: true },
     _localeQuery: { state: true },
     _cjkSerifFont: { state: true },
@@ -80,12 +91,17 @@ export class JantSettingsGeneral extends LitElement {
   declare labels: SettingsLabels;
   declare timezones: SettingsTimezone[];
   declare cjkFonts: SettingsCjkFont[];
+  declare dashboardLanguages: SettingsDashboardLanguage[];
   declare siteNameFallback: string;
   declare siteDescriptionFallback: string;
   declare demoMode: boolean;
   declare mainFeedUrl: string;
   declare latestFeedUrl: string;
   declare featuredFeedUrl: string;
+  declare archiveFeedUrl: string;
+  declare aboutPage: SettingsAboutPageStatus;
+  declare aboutEditUrl: string;
+  declare aboutCreateUrl: string;
 
   // Site
   declare _siteName: string;
@@ -101,6 +117,8 @@ export class JantSettingsGeneral extends LitElement {
 
   // Language, CJK & time
   declare _siteLanguage: string;
+  /** Admin dashboard UI locale (one of the translated catalog locales). */
+  declare _dashboardLanguage: string;
   /** Whether the locale combobox dropdown is currently open. */
   declare _localeOpen: boolean;
   /** Search query inside the locale combobox. */
@@ -109,6 +127,7 @@ export class JantSettingsGeneral extends LitElement {
   declare _timeZone: string;
   declare _origLocale: {
     siteLanguage: string;
+    dashboardLanguage: string;
     cjkSerifFont: string;
     timeZone: string;
   };
@@ -145,12 +164,20 @@ export class JantSettingsGeneral extends LitElement {
     this.labels = {} as SettingsLabels;
     this.timezones = [];
     this.cjkFonts = [];
+    this.dashboardLanguages = [];
     this.siteNameFallback = "";
     this.siteDescriptionFallback = "";
     this.demoMode = false;
     this.mainFeedUrl = "/feed";
-    this.latestFeedUrl = "/feed/latest";
-    this.featuredFeedUrl = "/feed/featured";
+    this.latestFeedUrl = "/latest/feed";
+    this.featuredFeedUrl = "/featured/feed";
+    this.archiveFeedUrl = "/archive/feed";
+    this.aboutPage = {
+      state: "missing",
+      path: "/about",
+    };
+    this.aboutEditUrl = "/about?edit=1";
+    this.aboutCreateUrl = "/settings/general/about-page";
 
     this._siteName = "";
     this._siteDescription = "";
@@ -164,12 +191,14 @@ export class JantSettingsGeneral extends LitElement {
     this._siteLoading = false;
 
     this._siteLanguage = "en";
+    this._dashboardLanguage = "en";
     this._localeOpen = false;
     this._localeQuery = "";
     this._cjkSerifFont = "off";
     this._timeZone = "UTC";
     this._origLocale = {
       siteLanguage: "en",
+      dashboardLanguage: "en",
       cjkSerifFont: "off",
       timeZone: "UTC",
     };
@@ -213,10 +242,12 @@ export class JantSettingsGeneral extends LitElement {
     this._siteFooter = data.siteFooter;
 
     this._siteLanguage = data.siteLanguage;
+    this._dashboardLanguage = data.dashboardLanguage;
     this._cjkSerifFont = data.cjkSerifFont;
     this._timeZone = data.timeZone;
     this._origLocale = {
       siteLanguage: data.siteLanguage,
+      dashboardLanguage: data.dashboardLanguage,
       cjkSerifFont: data.cjkSerifFont,
       timeZone: data.timeZone,
     };
@@ -255,6 +286,7 @@ export class JantSettingsGeneral extends LitElement {
     } else if (section === "language-time") {
       this._origLocale = {
         siteLanguage: this._siteLanguage,
+        dashboardLanguage: this._dashboardLanguage,
         cjkSerifFont: this._cjkSerifFont,
         timeZone: this._timeZone,
       };
@@ -381,6 +413,7 @@ export class JantSettingsGeneral extends LitElement {
   private _syncLocaleDirty() {
     this._localeDirty =
       this._siteLanguage !== this._origLocale.siteLanguage ||
+      this._dashboardLanguage !== this._origLocale.dashboardLanguage ||
       this._cjkSerifFont !== this._origLocale.cjkSerifFont ||
       this._timeZone !== this._origLocale.timeZone;
   }
@@ -395,6 +428,7 @@ export class JantSettingsGeneral extends LitElement {
           endpoint: "/settings/general/language-time",
           data: {
             siteLanguage: this._siteLanguage,
+            dashboardLanguage: this._dashboardLanguage,
             cjkSerifFont: this._cjkSerifFont,
             timeZone: this._timeZone,
           },
@@ -465,28 +499,22 @@ export class JantSettingsGeneral extends LitElement {
     const noMatches = this.labels.siteLanguageNoMatches || "No matches.";
 
     return html`
-      <div class="relative" data-locale-picker>
+      <div class="relative w-fit max-w-full" data-locale-picker>
         <button
           type="button"
-          class="input flex w-full items-center justify-between text-left"
+          class="flex h-9 w-full cursor-pointer items-center rounded-md border border-input bg-transparent bg-[image:var(--chevron-down-icon-50)] bg-position-[center_right_0.75rem] bg-size-[1rem] bg-no-repeat py-2 pl-3 pr-9 text-left text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30 dark:hover:bg-input/50"
           aria-expanded=${this._localeOpen ? "true" : "false"}
           aria-haspopup="listbox"
           aria-labelledby="site-language-label"
           @click=${this._toggleLocalePicker}
         >
-          <span class="truncate">
-            ${current.native}
-            <span class="ml-2 text-xs text-muted-foreground">
-              ${current.tag} · ${Math.round(current.coverage * 100)}% translated
-            </span>
-          </span>
-          <span class="ml-2 text-muted-foreground" aria-hidden="true">▾</span>
+          <span class="min-w-0 truncate">${current.native}</span>
         </button>
 
         ${this._localeOpen
           ? html`
               <div
-                class="absolute left-0 right-0 top-full z-10 mt-1 max-h-72 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md"
+                class="absolute left-0 top-full z-10 mt-1 w-80 min-w-full max-w-[calc(100vw-2rem)] max-h-72 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md"
               >
                 <div class="border-b p-2">
                   <input
@@ -518,21 +546,16 @@ export class JantSettingsGeneral extends LitElement {
                               ? "true"
                               : "false"}
                             class=${[
-                              "flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-accent",
+                              "flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-accent",
                               entry.tag === this._siteLanguage
                                 ? "bg-accent/60"
                                 : "",
                             ].join(" ")}
                             @click=${() => this._selectLocale(entry.tag)}
                           >
-                            <span class="flex flex-col">
-                              <span>${entry.native}</span>
-                              <span class="text-xs text-muted-foreground">
-                                ${entry.tag} · ${entry.english}
-                              </span>
-                            </span>
+                            <span>${entry.native}</span>
                             <span class="text-xs text-muted-foreground">
-                              ${Math.round(entry.coverage * 100)}% translated
+                              ${entry.english}
                             </span>
                           </button>
                         `,
@@ -714,10 +737,17 @@ export class JantSettingsGeneral extends LitElement {
     }
   }
 
-  private _renderFeedInfoRow(label: string, value: string) {
+  private _renderFeedInfoRow(
+    label: string,
+    value: string,
+    description?: string,
+  ) {
     return html`
       <div class="flex min-w-0 flex-col gap-1">
         <p class="text-sm font-medium">${label}</p>
+        ${description
+          ? html`<p class="text-sm text-muted-foreground">${description}</p>`
+          : ""}
         <div class="relative">
           <input
             type="text"
@@ -739,6 +769,45 @@ export class JantSettingsGeneral extends LitElement {
             ${this.labels.copy}
           </button>
         </div>
+      </div>
+    `;
+  }
+
+  private _renderAboutPageRow() {
+    const status = this.aboutPage;
+
+    return html`
+      <div class="mt-2 text-sm text-muted-foreground" data-about-page-row>
+        ${this.labels.aboutPagePrompt}
+        ${status.state === "ready"
+          ? html`
+              <a
+                class="font-medium text-foreground underline-offset-4 hover:underline"
+                href=${this.aboutEditUrl}
+              >
+                ${this.labels.editAboutPage}
+              </a>
+            `
+          : status.state === "missing"
+            ? html`
+                <form
+                  class="inline"
+                  method="post"
+                  action=${this.aboutCreateUrl}
+                >
+                  <button
+                    type="submit"
+                    class="inline cursor-pointer border-0 bg-transparent p-0 font-medium text-foreground underline-offset-4 hover:underline"
+                  >
+                    ${this.labels.createAboutPage}
+                  </button>
+                </form>
+              `
+            : html`
+                <span class="text-destructive"
+                  >${this.labels.aboutPageConflict}</span
+                >
+              `}
       </div>
     `;
   }
@@ -782,6 +851,7 @@ export class JantSettingsGeneral extends LitElement {
             <p class="text-sm text-muted-foreground mt-1">
               ${this.labels.aboutBlogHelp}
             </p>
+            ${this._renderAboutPageRow()}
           </div>
 
           <div class="field">
@@ -818,6 +888,40 @@ export class JantSettingsGeneral extends LitElement {
             ${this._renderLanguagePicker()}
             <p class="text-sm text-muted-foreground mt-1">
               ${this.labels.siteLanguageHelp}
+            </p>
+            <p class="text-sm text-muted-foreground mt-1">
+              ${this.labels.contentLanguagePreview}
+              <code class="rounded bg-muted px-1.5 py-0.5 text-xs"
+                >${`<html lang="${this._siteLanguage || "en"}">`}</code
+              >
+            </p>
+          </div>
+
+          <div class="field">
+            <label id="dashboard-language-label" class="label"
+              >${this.labels.dashboardLanguage}</label
+            >
+            <select
+              class="select"
+              aria-labelledby="dashboard-language-label"
+              @change=${(e: Event) => {
+                this._dashboardLanguage = (e.target as HTMLSelectElement).value;
+                this._syncLocaleDirty();
+              }}
+            >
+              ${this.dashboardLanguages.map(
+                (lang) => html`
+                  <option
+                    value=${lang.value}
+                    ?selected=${this._dashboardLanguage === lang.value}
+                  >
+                    ${lang.label}
+                  </option>
+                `,
+              )}
+            </select>
+            <p class="text-sm text-muted-foreground mt-1">
+              ${this.labels.dashboardLanguageHelp}
             </p>
           </div>
 
@@ -928,6 +1032,11 @@ export class JantSettingsGeneral extends LitElement {
               ${this._renderFeedInfoRow(
                 this.labels.featuredFeedUrl,
                 this.featuredFeedUrl,
+              )}
+              ${this._renderFeedInfoRow(
+                this.labels.archiveFeedUrl,
+                this.archiveFeedUrl,
+                this.labels.archiveFeedUrlHelp,
               )}
             </div>
           </div>

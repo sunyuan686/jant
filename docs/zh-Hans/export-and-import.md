@@ -145,6 +145,7 @@ static/                   用户自有静态文件 + 下载的媒体
 
 - `featured_at` 与 `pinned_at` 在 front matter 里写 ISO 时间戳，而非布尔值；重新导入后会恢复到该 post 当时被 Feature 或置顶的具体时刻。
 - Front matter 顶层的 `collections` 数组，每条 entry 携带 `collected_at`、`position` 以及 per-collection `pinned_at`；每个回复的 leaf bundle 在自身 front matter 中保留同等信息。
+- Thread root 的 `last_activity_at` 会保留 **Reply quietly** 的效果。导出里没有 per-reply 的 quiet 字段；导入时会用 root 的活动时间判断哪些回复原本不应把 thread bump 到 Latest 顶部。
 
 未在文档中列出的字段属于 Jant 内部使用，不要手动改：再次导入时它们会原样写回数据库，覆盖你后来在 Jant 中的修改。
 
@@ -212,7 +213,7 @@ Import 不做合并、不做覆盖、不做事务回滚——它逐条把入站 
 
 ### 清空目标站点
 
-迁移时如果遇到字段冲突或一次没导干净，目前没有"只清空内容、保留账号"的轻量入口。最快的做法是去 **Settings → Account → Delete Account** 把账号连同内容一起删掉，再重新注册——这是初次迁移调试常用的快捷方式。流程会先强制下载一份 `site export` 作为最后的备份，再要求输入确认短语。
+迁移时如果遇到字段冲突或一次没导干净，目前没有"只清空内容、保留账号"的轻量入口。最快的做法是去 **Settings → Account & Data → Delete Account** 把账号连同内容一起删掉，再重新注册——这是初次迁移调试常用的快捷方式。流程会先强制下载一份 `site export` 作为最后的备份，再要求输入确认短语。
 
 托管站点上点这个 **Delete Account** 删的也是该站点的内容和账号，不影响计费、域名绑定和你在 jant.me 上的实例本身——重新注册后实例还在，可以直接重新初始化。
 

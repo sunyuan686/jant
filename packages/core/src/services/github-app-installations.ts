@@ -149,9 +149,7 @@ export function createGitHubAppInstallationsService(
         .select()
         .from(githubAppInstallation)
         .where(eq(githubAppInstallation.siteId, siteId));
-      return rows
-        .map(toStored)
-        .sort((a, b) => b.addedAt - a.addedAt);
+      return rows.map(toStored).sort((a, b) => b.addedAt - a.addedAt);
     },
 
     async listSitesForInstallation(installationId) {

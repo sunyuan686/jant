@@ -3,7 +3,23 @@ import { renderToString } from "hono/jsx/dom/server";
 import { describe, expect, it } from "vitest";
 import { I18nProvider } from "../../../i18n/context.js";
 import { createI18n } from "../../../i18n/i18n.js";
+import type { NavItemView } from "../../../types.js";
 import { SiteLayout } from "../SiteLayout.js";
+
+function createNavItem(
+  index: number,
+  placement: NavItemView["placement"],
+): NavItemView {
+  return {
+    id: `nav_${index}`,
+    type: "link",
+    label: `Link ${index}`,
+    url: `/link-${index}`,
+    placement,
+    isActive: false,
+    isExternal: false,
+  };
+}
 
 function renderSiteLayout(
   props: Partial<Parameters<typeof SiteLayout>[0]> = {},
@@ -30,6 +46,38 @@ function renderSiteLayout(
 }
 
 describe("SiteLayout", () => {
+  it.each([
+    [3, "sm"],
+    [4, "md"],
+    [5, "lg"],
+  ] as const)(
+    "reveals the More divider at the first breakpoint that overflows %i header links",
+    (headerLinkCount, tier) => {
+      const headerLinks = Array.from({ length: headerLinkCount }, (_, index) =>
+        createNavItem(index, "header"),
+      );
+      const html = renderSiteLayout({
+        links: [...headerLinks, createNavItem(headerLinkCount, "more")],
+      });
+
+      expect(html).toContain(
+        `class="site-header-more-divider site-header-more-divider-responsive site-header-more-divider-show-${tier}"`,
+      );
+    },
+  );
+
+  it("omits the More divider when no header link can overflow", () => {
+    const html = renderSiteLayout({
+      links: [
+        createNavItem(0, "header"),
+        createNavItem(1, "header"),
+        createNavItem(2, "more"),
+      ],
+    });
+
+    expect(html).not.toContain("site-header-more-divider");
+  });
+
   it("renders the mobile compose FAB for authenticated timeline pages", () => {
     const html = renderSiteLayout({
       currentPath: "/latest",

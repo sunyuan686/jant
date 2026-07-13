@@ -10,23 +10,23 @@ The project is in **pre-1.0 development**. Breaking changes are expected and wel
 
 ## Workflow Orchestration
 
-### 1. Plan Mode Default
+### 1. Planning Default
 
-– Enter plan mode for ANY non-trivial task (3+ steps)
-– If something goes sideways, STOP and re-plan immediately
-– Write detailed specs upfront to reduce ambiguity
+– For non-trivial tasks (3+ steps), write a short plan before changing files
+– Check in before starting when the plan introduces meaningful scope, trade-offs, or risk
+– If something goes sideways, stop and re-plan before continuing
 
 ### 2. Subagent Strategy
 
-– Use subagents liberally to keep main context window clean
-– One task per subagent for focused execution
-– For complex problems, throw more compute at it
+– Use subagents for complex, parallelizable, or context-isolated work
+– Give each subagent one focused task
+– Avoid subagents for simple or tightly sequential work
 
 ### 3. Self-Improvement Loop
 
-– After ANY correction: update tasks/lessons.md
-– Write rules that prevent the same mistake
-– Ruthlessly iterate until mistake rate drops
+– After a correction, update `tasks/lessons.md` only when there is a reusable rule that should prevent future mistakes
+– Write lessons as concrete rules, not task logs
+– Keep lessons concise so the file remains useful
 
 ### 4. Verification Before Done
 
@@ -46,12 +46,13 @@ The project is in **pre-1.0 development**. Breaking changes are expected and wel
 
 ## Task Management
 
-1. Plan First: Write plan to tasks/todo.md
-2. Verify Plan: Check in before starting
-3. Track Progress: Mark items complete as you go
-4. Explain Changes: High-level summary at each step
-5. Document Results: Add review section to todo.md
-6. Capture Lessons: Update lessons.md after corrections
+1. Plan First: For non-trivial tasks, create or update a task-specific file under `tasks/todos/`. Prefer issue or Linear IDs when available (for example, `tasks/todos/JANT-123-fix-auth-redirect.md`); otherwise use `YYYY-MM-DD-HHMM-<slug>.md` (for example, `tasks/todos/2026-07-06-1430-fix-auth-redirect.md`). Do not use the shared `tasks/todo.md` for new work; it is legacy and conflict-prone.
+2. Verify Plan: Check in before starting when the plan introduces meaningful scope, trade-offs, or risk.
+3. Track Progress: Mark items complete in the same task file as you go.
+4. Explain Changes: High-level summary at each step.
+5. Document Results: Add the review/results section to the same task file.
+6. Clean Up Completed Tasks: After the work is verified, documented, and committed, remove the task-specific file from `tasks/todos/` by default. Keep `tasks/todos/` focused on active or handoff-ready work. Only retain a completed task file when it has long-term reference value; if retained for history, move it out of `tasks/todos/` into an archive location.
+7. Capture Lessons: Update `tasks/lessons.md` after corrections, but only for reusable rules that should prevent future mistakes.
 
 ## Development Philosophy
 
@@ -106,9 +107,9 @@ Non-negotiable regardless of context:
 - **Deployment shorthand**: when the user says "部署", interpret it as "commit the current work and push the current branch". Site rollout happens automatically after push unless the user says otherwise.
 - **Debug**: `mise run dev-debug` prepares local auth helpers automatically and uses the first free debug port starting at `19020`. For browser testing, use the printed `http://localhost:19xxx/__dev/login?token=...&redirect=/settings` URL with `DEV_API_TOKEN` from `packages/core/.dev.vars`, then continue on `http://localhost:19xxx/settings`. `jant.localtest.me` is still accepted locally, but some browsers upgrade it to HTTPS and break local HTTP dev ports. HTTP agents can call the same local login URL directly and reuse the returned `Set-Cookie`. Stop background processes when done.
 - **Verify before changing**: never assume CLI flags; confirm with `--help` or docs.
-- **Latest packages**: use `@latest` when installing.
+- **Latest packages**: when adding dependencies, check the latest stable version and compatibility first, then let the package manager lock the resolved version.
 - **Generated template is read-only**: never edit `packages/create-jant/template/`.
-- **GitHub Actions**: always add `workflow_dispatch:`.
+- **GitHub Actions**: new manually runnable workflows should include `workflow_dispatch:`.
 - **Verify proportionally**: choose verification based on the risk and surface area of the change instead of mechanically running the full suite every time.
   - Run `mise run check-tests` and `mise run check-lint` for behavior changes: routes, services, DB/schema/migrations, validation, auth, build tooling, shared infrastructure, interactive client logic, or anything with meaningful regression risk.
   - For isolated visual or content-only changes, such as CSS-only tweaks, spacing, color, typography, copy, or docs, use judgment. A focused sanity check is usually enough if no logic, markup structure, or event handling changed.
@@ -125,7 +126,7 @@ Non-negotiable regardless of context:
 - **Time**: Unix timestamps (seconds) via `lib/time.ts`.
 - **URL query params**: on public shareable URLs, names must be single lowercase words — fold presence flags into values (`media=any|none|<kinds>`, `title=any|none`, `replies=any|none`), never `hasX=1/0` booleans; `visibility=hidden` is the URL alias for `latest_hidden`. Compound camelCase names are allowed only on machine surfaces (APIs, dash, auth). Param renames on shareable URLs require accept-old/emit-new parsing kept indefinitely. Details in `docs/internal/coding-standards.md`.
 - **IDs**: TypeID (text) everywhere — DB, API, auth tables, jobs, storage-backed entities. Store canonical TypeID strings directly; never convert them back to UUIDs in application code. Use the shared prefixes from `src/lib/ids.ts` (`pst`, `med`, `col`, `pth`, `cdi`, `nav`, `api`, `usr`, `ses`, `acc`, `vrf`). **Post URLs**: slug-based (`/{slug}`). Slugs are auto-generated from title (via `lib/slug.ts`) or as random alphanumeric IDs (via `lib/nanoid.ts`). Path overrides are managed through the `path_registry` table. **Collection URLs**: single collections share the root-URL namespace with posts (`/{slug}` — uniqueness enforced by `path_registry`). Only `/collections` itself (the directory), aggregate selections (`/collections/{a+b}`), and management routes (`/collections/new`, `/collections/{slug}/edit`) live under `/collections`. `SLUG_ID_LENGTH` env var controls random slug length (default: 5).
-- **Soft delete**: posts use `deleted_at`.
+- **Deletion**: posts and media hard-delete their rows (the old `post.deleted_at` soft-delete was removed). For media **storage objects**, `media.delete`/`deleteByIds` free the original key immediately (so the original URL 404s at once). When the storage driver supports server-side copy (S3-compatible, including R2 via its S3 API), the bytes are first moved to a `trash/` key recorded in `storage_purge` and physically purged only after a 30-day recycle window by the upload cleanup sweep — so accidental deletes stay recoverable. Drivers without server-side copy (R2 Workers binding, local) delete immediately with no recycle.
 - **Library functions**: include JSDoc with `@param`, `@returns`, `@example`.
 
 ### i18n

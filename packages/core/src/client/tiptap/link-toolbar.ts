@@ -10,7 +10,7 @@
  */
 
 import { Extension } from "@tiptap/core";
-import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import type { EditorState } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 import {
@@ -331,9 +331,71 @@ export const LinkToolbar = Extension.create({
       suppressNextUpdate = true;
     }
 
+    /**
+     * Open the passive link popover when a link is clicked or tapped.
+     *
+     * The popover is otherwise shown only as a side effect of a collapsed
+     * caret landing inside a link (see the plugin `update` below). A mouse
+     * click reliably drops that caret, but a touch tap often does not — it may
+     * leave the selection unchanged or select a word — so on mobile the popover
+     * never appeared. Here we read the tapped position directly and force a
+     * collapsed caret inside the link, which works for both pointer types.
+     */
+    function handleLinkClick(view: EditorView, event: MouseEvent) {
+      if (event.button !== 0) return;
+      const target = event.target as HTMLElement | null;
+      const anchor = target?.closest("a");
+      if (!anchor || !view.dom.contains(anchor)) return;
+
+      const linkType = view.state.schema.marks.link;
+      if (!linkType) return;
+
+      // Don't disturb an active range selection (e.g. drag-selecting link
+      // text) — that case is owned by the bubble menu.
+      if (!view.state.selection.empty) return;
+
+      // When the click already dropped a caret inside a link (the desktop
+      // path), keep it where the user clicked. On touch the tap often doesn't
+      // move the caret into the link, so derive a position from the anchor
+      // element itself — targeting this exact link regardless of where the
+      // user tapped.
+      const cur = view.state.selection.from;
+      const hasLink = (p: number) =>
+        view.state.doc
+          .resolve(p)
+          .marks()
+          .some((m) => m.type === linkType);
+
+      let pos = cur;
+      if (!hasLink(cur)) {
+        try {
+          pos = view.posAtDOM(anchor, 0) + 1;
+        } catch {
+          return;
+        }
+        if (pos < 0 || pos > view.state.doc.content.size) return;
+        if (!hasLink(pos)) return;
+      }
+
+      // Re-show even if the user previously dismissed it, then (re)place a
+      // collapsed caret in the link so the passive popover flow picks it up.
+      suppressAutoShow = false;
+      view.dispatch(
+        view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)),
+      );
+    }
+
     return [
       new Plugin({
         key: linkToolbarKey,
+        props: {
+          handleDOMEvents: {
+            click: (view, event) => {
+              handleLinkClick(view, event as MouseEvent);
+              return false;
+            },
+          },
+        },
         view(editorView) {
           createElements();
           const dialog = editorView.dom.closest("dialog");

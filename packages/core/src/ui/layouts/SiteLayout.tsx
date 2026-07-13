@@ -112,26 +112,44 @@ function HeaderLink({
   );
 }
 
-export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
+export interface SiteHeaderProps {
+  siteName: string;
+  links: NavItemView[];
+  currentPath: string;
+  sitePathPrefix?: string;
+  siteAvatarUrl?: string;
+  showHeaderAvatar?: boolean;
+}
+
+function linkCollapseTier(idx: number): string {
+  if (idx < 2) return "";
+  if (idx === 2) return "site-header-link-collapse-sm";
+  if (idx === 3) return "site-header-link-collapse-md";
+  return "site-header-link-collapse-lg";
+}
+
+function moreLinkRevealTier(idx: number): string {
+  if (idx === 2) return "site-header-more-link-show-sm";
+  if (idx === 3) return "site-header-more-link-show-md";
+  return "site-header-more-link-show-lg";
+}
+
+function getResponsiveOverflowTier(
+  headerLinkCount: number,
+): "sm" | "md" | "lg" | null {
+  if (headerLinkCount >= 5) return "lg";
+  if (headerLinkCount === 4) return "md";
+  if (headerLinkCount === 3) return "sm";
+  return null;
+}
+
+export const SiteHeader: FC<SiteHeaderProps> = ({
   siteName,
   links,
   currentPath,
   sitePathPrefix = "",
-  isAuthenticated,
-  collections,
   siteAvatarUrl,
   showHeaderAvatar,
-  siteDescriptionHtml,
-  siteFooterHtml,
-  showHomeBranding = false,
-  sidebar,
-  uploadMaxFileSize,
-  showComposeDialog = true,
-  showHeader = true,
-  composeOpenShortcutDiscovered = false,
-  slashCommandDiscovered = false,
-  composeCollectionId,
-  children,
 }) => {
   const { i18n } = useLingui();
   const linksWithLabels = links.map((link) => ({
@@ -154,56 +172,30 @@ export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
       comment: "@context: Hamburger menu button label",
     }),
   );
-  const moreLabel = i18n._(NAV_MORE_LABEL);
-  const newPostLabel = i18n._(
+  const closeMenuLabel = i18n._(
     msg({
-      message: "New post",
-      comment:
-        "@context: Mobile floating action button label to open the compose dialog",
+      message: "Close menu",
+      comment: "@context: Close drawer button label",
     }),
   );
+  const moreLabel = i18n._(NAV_MORE_LABEL);
 
-  // Split custom links by placement
+  // Split custom links by placement.
   const headerLinks = linksWithLabels.filter(
     (l) => l.placement === "header" || !l.placement,
   );
   const moreLinks = linksWithLabels.filter((l) => l.placement === "more");
-  // Responsive collapse tiers — first two links always stay inline; the
-  // remaining links collapse into the "More" popover in stages so wider
-  // windows (tablets, narrow laptops) can show 3 or 4 links before falling
-  // back to the minimum of 2.
-  //
-  //   idx 2   → collapse-sm  (hidden ≤580px, shown in popover)
-  //   idx 3   → collapse-md  (hidden ≤780px)
-  //   idx ≥ 4 → collapse-lg  (hidden ≤960px)
-  function linkCollapseTier(idx: number): string {
-    if (idx < 2) return "";
-    if (idx === 2) return "site-header-link-collapse-sm";
-    if (idx === 3) return "site-header-link-collapse-md";
-    return "site-header-link-collapse-lg";
-  }
-  function moreLinkRevealTier(idx: number): string {
-    if (idx === 2) return "site-header-more-link-show-sm";
-    if (idx === 3) return "site-header-more-link-show-md";
-    return "site-header-more-link-show-lg";
-  }
-  const hasResponsiveOverflow = headerLinks.length > 2;
+  const responsiveOverflowTier = getResponsiveOverflowTier(headerLinks.length);
+  const hasResponsiveOverflow = responsiveOverflowTier !== null;
   const hasSupplementalMoreLinks = moreLinks.length > 0;
   const showMoreMenu = hasResponsiveOverflow || hasSupplementalMoreLinks;
+
   // Decide the widest breakpoint at which the "More" button must appear
-  // when there are no supplemental links. With 3 total links only idx 2 ever
-  // collapses (≤780); with 4 links idx 3 starts collapsing at ≤920; with 5+
-  // idx 4 starts collapsing at ≤1100.
-  let responsiveTierClass = "";
-  if (hasResponsiveOverflow && !hasSupplementalMoreLinks) {
-    if (headerLinks.length >= 5) {
-      responsiveTierClass = "site-header-more-tier-lg";
-    } else if (headerLinks.length === 4) {
-      responsiveTierClass = "site-header-more-tier-md";
-    } else {
-      responsiveTierClass = "site-header-more-tier-sm";
-    }
-  }
+  // when there are no supplemental links.
+  const responsiveTierClass =
+    responsiveOverflowTier && !hasSupplementalMoreLinks
+      ? `site-header-more-tier-${responsiveOverflowTier}`
+      : "";
   const moreMenuClass = [
     "site-header-more",
     hasResponsiveOverflow && !hasSupplementalMoreLinks
@@ -213,127 +205,87 @@ export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
   ]
     .filter(Boolean)
     .join(" ");
-
   const isHomePage =
     currentPath === toPublicPath("/", sitePathPrefix) ||
     currentPath === toPublicPath("/featured", sitePathPrefix) ||
     currentPath === toPublicPath("/latest", sitePathPrefix);
-  const showMobileComposeFab = Boolean(
-    (isHomePage || composeCollectionId) && isAuthenticated && showComposeDialog,
-  );
-  const mobileComposeFabClick = composeCollectionId
-    ? `document.getElementById('compose-dialog')?.querySelector('jant-compose-dialog')?.openNew(${JSON.stringify(
-        { collectionId: composeCollectionId },
-      )})`
-    : "document.getElementById('compose-dialog')?.querySelector('jant-compose-dialog')?.openNew()";
-  const contentClass = [
-    "site-content",
-    isHomePage ? "site-content-home" : "",
-    showMobileComposeFab ? "site-content-mobile-compose-enabled" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
 
   return (
-    <div class="site-page">
-      {showHeader && (
-        <header class="site-header">
-          <div class="site-header-inner">
-            <div
-              class={`site-header-top site-header-top-bordered${isHomePage ? " site-header-top-home" : ""}`}
-            >
-              <a href={toPublicPath("/", sitePathPrefix)} class="site-logo">
-                {showHeaderAvatar && siteAvatarUrl && (
-                  <img src={siteAvatarUrl} class="site-logo-avatar" alt="" />
-                )}
-                {siteName}
-              </a>
-              <nav class="site-header-nav" aria-label="Primary">
-                {headerLinks.map((link, idx) => (
-                  <HeaderLink
-                    key={link.id}
-                    link={link}
-                    label={link.displayLabel}
-                    className={[
-                      idx < 2
-                        ? "site-header-link-primary"
-                        : "site-header-link-overflow",
-                      linkCollapseTier(idx),
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                  />
-                ))}
-                {showMoreMenu && (
-                  <div class={moreMenuClass}>
-                    <button
-                      type="button"
-                      class="site-header-more-btn"
-                      id="site-nav-more-trigger"
-                      aria-haspopup="menu"
-                      aria-expanded="false"
-                    >
-                      {moreLabel}
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        width="12"
-                        height="12"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        aria-hidden="true"
-                      >
-                        <path d="m6 9 6 6 6-6" />
-                      </svg>
-                    </button>
-                    <div
-                      id="site-nav-more-popover"
-                      class="site-header-more-popover"
-                      data-popover
-                      data-align="start"
+    <>
+      <header class="site-header" data-site-header-fragment="header">
+        <div class="site-header-inner">
+          <div
+            class={`site-header-top site-header-top-bordered${isHomePage ? " site-header-top-home" : ""}`}
+          >
+            <a href={toPublicPath("/", sitePathPrefix)} class="site-logo">
+              {showHeaderAvatar && siteAvatarUrl && (
+                <img src={siteAvatarUrl} class="site-logo-avatar" alt="" />
+              )}
+              {siteName}
+            </a>
+            <nav class="site-header-nav" aria-label="Primary">
+              {headerLinks.map((link, idx) => (
+                <HeaderLink
+                  key={link.id}
+                  link={link}
+                  label={link.displayLabel}
+                  className={[
+                    idx < 2
+                      ? "site-header-link-primary"
+                      : "site-header-link-overflow",
+                    linkCollapseTier(idx),
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                />
+              ))}
+              {showMoreMenu && (
+                <div class={moreMenuClass}>
+                  <button
+                    type="button"
+                    class="site-header-more-btn"
+                    id="site-nav-more-trigger"
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                  >
+                    {moreLabel}
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
                       aria-hidden="true"
                     >
-                      {headerLinks.slice(2).map((link, i) => {
-                        const idx = i + 2;
-                        const classes = [
-                          "site-header-more-link",
-                          "site-header-more-link-responsive",
-                          moreLinkRevealTier(idx),
-                          link.isActive ? "site-header-more-link-active" : "",
-                        ]
-                          .filter(Boolean)
-                          .join(" ");
-                        return (
-                          <a
-                            key={link.id}
-                            href={link.url}
-                            class={classes}
-                            {...(link.isExternal
-                              ? {
-                                  target: "_blank",
-                                  rel: "noopener noreferrer",
-                                }
-                              : {})}
-                            {...(link.freshAt
-                              ? { "data-fresh-at": link.freshAt }
-                              : {})}
-                          >
-                            {link.displayLabel}
-                            {link.isExternal && <ExternalLinkIcon />}
-                          </a>
-                        );
-                      })}
-                      {hasResponsiveOverflow && hasSupplementalMoreLinks && (
-                        <div class="site-header-more-divider site-header-more-divider-responsive" />
-                      )}
-                      {moreLinks.map((link) => (
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+                  </button>
+                  <div
+                    id="site-nav-more-popover"
+                    class="site-header-more-popover"
+                    data-popover
+                    data-align="start"
+                    aria-hidden="true"
+                  >
+                    {headerLinks.slice(2).map((link, i) => {
+                      const idx = i + 2;
+                      const classes = [
+                        "site-header-more-link",
+                        "site-header-more-link-responsive",
+                        moreLinkRevealTier(idx),
+                        link.isActive ? "site-header-more-link-active" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ");
+                      return (
                         <a
                           key={link.id}
                           href={link.url}
-                          class={`site-header-more-link site-header-more-link-supplemental ${link.isActive ? "site-header-more-link-active" : ""}`}
+                          class={classes}
                           {...(link.isExternal
                             ? {
                                 target: "_blank",
@@ -347,75 +299,101 @@ export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
                           {link.displayLabel}
                           {link.isExternal && <ExternalLinkIcon />}
                         </a>
-                      ))}
-                    </div>
+                      );
+                    })}
+                    {responsiveOverflowTier && hasSupplementalMoreLinks && (
+                      <div
+                        class={`site-header-more-divider site-header-more-divider-responsive site-header-more-divider-show-${responsiveOverflowTier}`}
+                      />
+                    )}
+                    {moreLinks.map((link) => (
+                      <a
+                        key={link.id}
+                        href={link.url}
+                        class={`site-header-more-link site-header-more-link-supplemental ${link.isActive ? "site-header-more-link-active" : ""}`}
+                        {...(link.isExternal
+                          ? {
+                              target: "_blank",
+                              rel: "noopener noreferrer",
+                            }
+                          : {})}
+                        {...(link.freshAt
+                          ? { "data-fresh-at": link.freshAt }
+                          : {})}
+                      >
+                        {link.displayLabel}
+                        {link.isExternal && <ExternalLinkIcon />}
+                      </a>
+                    ))}
                   </div>
-                )}
-              </nav>
+                </div>
+              )}
+            </nav>
 
-              {/* Search */}
-              <div class="site-header-search-slot">
-                <form
-                  class="site-header-search-form"
-                  action={searchHref}
-                  method="get"
-                >
-                  <SearchIcon class="site-header-search-icon" />
-                  <input
-                    type="search"
-                    name="q"
-                    class="site-header-search-input"
-                    placeholder={searchLabel}
-                    aria-label={searchLabel}
-                    enterkeyhint="search"
-                  />
-                </form>
-                <a
-                  href={searchHref}
-                  class="site-header-search-link"
+            <div class="site-header-search-slot">
+              <form
+                class="site-header-search-form"
+                action={searchHref}
+                method="get"
+              >
+                <SearchIcon class="site-header-search-icon" />
+                <input
+                  type="search"
+                  name="q"
+                  class="site-header-search-input"
+                  placeholder={searchLabel}
                   aria-label={searchLabel}
-                  title={searchLabel}
-                >
-                  <SearchIcon class="site-header-search-link-icon" />
-                </a>
-              </div>
+                  enterkeyhint="search"
+                />
+              </form>
+              <a
+                href={searchHref}
+                class="site-header-search-link"
+                aria-label={searchLabel}
+                title={searchLabel}
+              >
+                <SearchIcon class="site-header-search-link-icon" />
+              </a>
+            </div>
 
-              <div class="site-header-right">
-                {/* Mobile hamburger */}
-                <button
-                  type="button"
-                  class="site-header-hamburger"
-                  aria-controls="site-nav-drawer"
-                  aria-expanded="false"
-                  aria-label={menuLabel}
+            <div class="site-header-right">
+              <button
+                type="button"
+                class="site-header-hamburger"
+                aria-controls="site-nav-drawer"
+                aria-expanded="false"
+                aria-label={menuLabel}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
                 >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <line x1="4" x2="20" y1="12" y2="12" />
-                    <line x1="4" x2="20" y1="6" y2="6" />
-                    <line x1="4" x2="20" y1="18" y2="18" />
-                  </svg>
-                </button>
-              </div>
+                  <line x1="4" x2="20" y1="12" y2="12" />
+                  <line x1="4" x2="20" y1="6" y2="6" />
+                  <line x1="4" x2="20" y1="18" y2="18" />
+                </svg>
+              </button>
             </div>
           </div>
-        </header>
-      )}
+        </div>
+      </header>
 
-      {/* Mobile navigation drawer */}
-      <div class="site-nav-drawer-backdrop" aria-hidden="true" />
+      <div
+        class="site-nav-drawer-backdrop"
+        data-site-header-fragment="drawer-backdrop"
+        aria-hidden="true"
+      />
       <div
         id="site-nav-drawer"
         class="site-nav-drawer"
+        data-site-header-fragment="drawer"
         role="dialog"
         aria-modal="true"
         aria-label={menuLabel}
@@ -439,12 +417,7 @@ export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
           <button
             type="button"
             class="site-nav-drawer-close"
-            aria-label={i18n._(
-              msg({
-                message: "Close menu",
-                comment: "@context: Close drawer button label",
-              }),
-            )}
+            aria-label={closeMenuLabel}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -499,6 +472,72 @@ export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
           )}
         </nav>
       </div>
+    </>
+  );
+};
+
+export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
+  siteName,
+  links,
+  currentPath,
+  sitePathPrefix = "",
+  isAuthenticated,
+  collections,
+  siteAvatarUrl,
+  showHeaderAvatar,
+  siteDescriptionHtml,
+  siteFooterHtml,
+  showHomeBranding = false,
+  sidebar,
+  uploadMaxFileSize,
+  showComposeDialog = true,
+  showHeader = true,
+  composeOpenShortcutDiscovered = false,
+  slashCommandDiscovered = false,
+  composeCollectionId,
+  children,
+}) => {
+  const { i18n } = useLingui();
+  const newPostLabel = i18n._(
+    msg({
+      message: "New post",
+      comment:
+        "@context: Mobile floating action button label to open the compose dialog",
+    }),
+  );
+
+  const isHomePage =
+    currentPath === toPublicPath("/", sitePathPrefix) ||
+    currentPath === toPublicPath("/featured", sitePathPrefix) ||
+    currentPath === toPublicPath("/latest", sitePathPrefix);
+  const showMobileComposeFab = Boolean(
+    (isHomePage || composeCollectionId) && isAuthenticated && showComposeDialog,
+  );
+  const mobileComposeFabClick = composeCollectionId
+    ? `document.getElementById('compose-dialog')?.querySelector('jant-compose-dialog')?.openNew(${JSON.stringify(
+        { collectionId: composeCollectionId },
+      )})`
+    : "document.getElementById('compose-dialog')?.querySelector('jant-compose-dialog')?.openNew()";
+  const contentClass = [
+    "site-content",
+    isHomePage ? "site-content-home" : "",
+    showMobileComposeFab ? "site-content-mobile-compose-enabled" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <div class="site-page">
+      {showHeader && (
+        <SiteHeader
+          siteName={siteName}
+          links={links}
+          currentPath={currentPath}
+          sitePathPrefix={sitePathPrefix}
+          siteAvatarUrl={siteAvatarUrl}
+          showHeaderAvatar={showHeaderAvatar}
+        />
+      )}
 
       <main class="site-main">
         {sidebar ? (

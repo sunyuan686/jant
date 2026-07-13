@@ -179,8 +179,8 @@ export interface TimelineCardProps {
 /** Props for thread inline preview */
 export interface ThreadPreviewProps {
   rootPost: PostView;
-  secondReply?: PostView;
-  penultimateReply?: PostView;
+  leadingReplies: PostView[];
+  trailingReplies: PostView[];
   latestReply: PostView;
   totalReplyCount: number;
 }

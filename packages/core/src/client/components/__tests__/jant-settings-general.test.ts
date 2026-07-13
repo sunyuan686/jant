@@ -5,7 +5,9 @@ import type {
   SettingsLabels,
   SettingsTimezone,
   SettingsCjkFont,
+  SettingsDashboardLanguage,
   SettingsSaveDetail,
+  SettingsAboutPageStatus,
 } from "../settings-types.js";
 import { MAX_SITE_NAME_LENGTH } from "../../../types.js";
 import "../jant-settings-general.js";
@@ -75,16 +77,25 @@ const labels: SettingsLabels = {
   uploadError: "Upload failed.",
   general: "General",
   site: "Site",
+  aboutPage: "About page",
+  aboutPagePrompt: "Want to write a fuller introduction?",
+  aboutPageConflict:
+    "/about is already used. Rename that item before creating an About page.",
+  createAboutPage: "Create About page",
+  editAboutPage: "Edit About page",
   languageAndTime: "Language & Time",
   home: "Home",
   search: "Search",
   siteName: "Site Name",
   aboutBlog: "About this blog",
   aboutBlogHelp: "Displayed above your blog posts.",
-  siteLanguage: "Site Language",
-  siteLanguageHelp: "Language used for the site UI.",
+  siteLanguage: "Content language",
+  siteLanguageHelp: "The language your posts are written in.",
   siteLanguageSearchPlaceholder: "Search…",
   siteLanguageNoMatches: "No matches.",
+  contentLanguagePreview: "Readers and search engines see",
+  dashboardLanguage: "Dashboard language",
+  dashboardLanguageHelp: "The language this admin dashboard shows in.",
   cjkFont: "CJK Font",
   cjkFontHelp:
     "Load a serif font optimized for Chinese, Japanese, or Korean content.",
@@ -99,6 +110,9 @@ const labels: SettingsLabels = {
   mainFeedUrl: "Main feed",
   latestFeedUrl: "Latest feed",
   featuredFeedUrl: "Featured feed",
+  archiveFeedUrl: "Archive feed",
+  archiveFeedUrlHelp:
+    "Every published post, including ones hidden from Latest.",
   latestFeedOption: "Latest",
   latestFeedOptionDescription: "Uses the latest public posts for /feed.",
   featuredFeedOption: "Featured",
@@ -127,10 +141,17 @@ const cjkFonts: SettingsCjkFont[] = [
   { value: "zh-Hans", label: "简体中文 (Simplified Chinese)" },
 ];
 
+const dashboardLanguages: SettingsDashboardLanguage[] = [
+  { value: "en", label: "English" },
+  { value: "zh-Hans", label: "简体中文" },
+  { value: "zh-Hant", label: "繁體中文" },
+];
+
 const initialData = {
   siteName: "My Blog",
   siteDescription: "A test blog",
   siteLanguage: "en",
+  dashboardLanguage: "en",
   cjkSerifFont: "off",
   timeZone: "UTC",
   mainRssFeed: "featured",
@@ -153,6 +174,7 @@ function findCheckboxByLabel(
 async function createElement(
   opts: {
     demoMode?: boolean;
+    aboutPage?: SettingsAboutPageStatus;
   } = {},
 ): Promise<JantSettingsGeneral> {
   const el = document.createElement(
@@ -161,11 +183,21 @@ async function createElement(
   el.labels = labels;
   el.timezones = timezones;
   el.cjkFonts = cjkFonts;
+  el.dashboardLanguages = dashboardLanguages;
   el.siteNameFallback = "Fallback Name";
   el.siteDescriptionFallback = "Fallback Description";
   el.mainFeedUrl = "/feed";
-  el.latestFeedUrl = "/feed/latest";
-  el.featuredFeedUrl = "/feed/featured";
+  el.latestFeedUrl = "/latest/feed";
+  el.featuredFeedUrl = "/featured/feed";
+  el.archiveFeedUrl = "/archive/feed";
+  el.aboutPage =
+    opts.aboutPage ??
+    ({
+      state: "missing",
+      path: "/about",
+    } satisfies SettingsAboutPageStatus);
+  el.aboutEditUrl = "/about?edit=1";
+  el.aboutCreateUrl = "/settings/general/about-page";
   el.demoMode = opts.demoMode ?? false;
   document.body.appendChild(el);
   await el.updateComplete;
@@ -193,6 +225,61 @@ describe("JantSettingsGeneral", () => {
       labels.home,
       labels.search,
     ]);
+
+    const siteSection = requireElement(
+      findSectionByHeading(el, labels.site),
+      "expected site section",
+    );
+    expect(siteSection.querySelector("[data-about-page-row]")).not.toBeNull();
+  });
+
+  it("renders a create About form from the missing About prompt", async () => {
+    const el = await createElement();
+    const aboutRow = requireElement(
+      el.querySelector<HTMLElement>("[data-about-page-row]"),
+      "expected About page row",
+    );
+    const form = requireElement(
+      aboutRow.querySelector<HTMLFormElement>("form"),
+      "expected create About page form",
+    );
+    const button = requireElement(
+      form.querySelector<HTMLButtonElement>("button"),
+      "expected create About page button",
+    );
+
+    expect(aboutRow.textContent).toContain(labels.aboutPagePrompt);
+    expect(form.method).toBe("post");
+    expect(form.action).toContain("/settings/general/about-page");
+    expect(button.textContent).toContain(labels.createAboutPage);
+  });
+
+  it("renders an edit link when the About page exists", async () => {
+    const el = await createElement({
+      aboutPage: {
+        state: "ready",
+        path: "/about",
+        post: {
+          id: "pst_about000000000000000000000",
+          title: "About",
+          status: "published",
+          visibility: "latest_hidden",
+        },
+      },
+    });
+
+    const aboutRow = requireElement(
+      el.querySelector<HTMLElement>("[data-about-page-row]"),
+      "expected About page row",
+    );
+    const editLink = requireElement(
+      aboutRow.querySelector<HTMLAnchorElement>("a"),
+      "expected About edit link",
+    );
+
+    expect(aboutRow.textContent).toContain(labels.aboutPagePrompt);
+    expect(editLink.textContent).toContain(labels.editAboutPage);
+    expect(editLink.href).toContain("/about?edit=1");
   });
 
   it("renders form fields with initial values", async () => {
@@ -239,10 +326,11 @@ describe("JantSettingsGeneral", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
 
     const options = el.querySelectorAll<HTMLButtonElement>('[role="option"]');
+    // The content-language picker lists the full BCP 47 catalog so any public
+    // content language is reachable. Coverage / raw tags are not shown here.
     expect(options.length).toBeGreaterThanOrEqual(20);
-    // Each option carries the universal "translated" coverage suffix.
     for (const option of options) {
-      expect(option.textContent).toMatch(/% translated/);
+      expect(option.textContent).not.toMatch(/% translated/);
     }
 
     const search = requireElement(
@@ -258,7 +346,7 @@ describe("JantSettingsGeneral", () => {
     expect(filtered[0]?.textContent).toMatch(/Suomi|Finnish/);
   });
 
-  it("selects a non-catalog locale and reports 0% translated coverage on it", async () => {
+  it("selects a non-catalog content language and shows its native name", async () => {
     const el = await createElement();
     const trigger = requireElement(
       el.querySelector<HTMLButtonElement>(
@@ -285,9 +373,43 @@ describe("JantSettingsGeneral", () => {
 
     // Picker closes after selection.
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    // Trigger reflects the new tag and shows 0% coverage.
-    expect(trigger.textContent).toMatch(/fi/);
-    expect(trigger.textContent).toMatch(/0% translated/);
+    // Trigger shows the selected language's native name only — no raw BCP 47
+    // tag, no coverage metric.
+    expect(trigger.textContent).toMatch(/suomi|finnish/i);
+    expect(trigger.textContent).not.toMatch(/% translated/);
+    expect(trigger.textContent).not.toMatch(/\bfi\b/);
+  });
+
+  it("renders dashboard language options and saves the selection", async () => {
+    const el = await createElement();
+    const select = requireElement(
+      el.querySelector(
+        'select[aria-labelledby="dashboard-language-label"]',
+      ) as globalThis.HTMLSelectElement | null,
+      "expected dashboard language select",
+    );
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).toEqual(["en", "zh-Hans", "zh-Hant"]);
+    expect(select.value).toBe("en");
+
+    const saves: SettingsSaveDetail[] = [];
+    el.addEventListener("jant:settings-save", (e) => {
+      saves.push((e as CustomEvent<SettingsSaveDetail>).detail);
+    });
+
+    select.value = "zh-Hant";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await el.updateComplete;
+
+    const saveButton = requireElement(
+      findSaveButtonByHeading(el, labels.languageAndTime),
+      "expected language & time save button",
+    );
+    saveButton.click();
+
+    expect(saves).toHaveLength(1);
+    expect(saves[0]?.endpoint).toBe("/settings/general/language-time");
+    expect(saves[0]?.data.dashboardLanguage).toBe("zh-Hant");
   });
 
   it("renders CJK font options", async () => {
@@ -323,8 +445,9 @@ describe("JantSettingsGeneral", () => {
     expect(el.textContent).toContain(labels.latestFeedOptionDescription);
     expect(Array.from(feedUrlInputs, (input) => input.value)).toEqual([
       "/feed",
-      "/feed/latest",
-      "/feed/featured",
+      "/latest/feed",
+      "/featured/feed",
+      "/archive/feed",
     ]);
   });
 
@@ -534,6 +657,7 @@ describe("JantSettingsGeneral", () => {
     const d = detail as unknown as SettingsSaveDetail;
     expect(d.endpoint).toBe("/settings/general/home");
     expect(d.section).toBe("home");
+    expect(d.data).not.toHaveProperty("homeDefaultView");
     expect(d.data.showJantBrandingOnHome).toBe(true);
     expect(siteSaveBtn?.disabled).toBe(true);
   });

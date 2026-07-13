@@ -18,6 +18,8 @@ Need more storage? Email [support@jant.me](mailto:support@jant.me) and we'll wor
 
 Billed annually. After you cancel, the site keeps running until the end of the current paid period. Then it enters a 90-day retention window during which data can still be recovered. After 90 days, the site is permanently deleted.
 
+New plans come with a one-time, 14-day money-back guarantee. Within 14 days of your first payment you can refund it yourself from the dashboard (Billing → Get a refund) — no support ticket needed. A refund ends the plan immediately: the site goes offline and enters the same 90-day retention window, so restarting the plan within that time brings it back.
+
 Your data can be carried out at any time via [Hugo export](export-and-import.md) or [GitHub Sync](github-sync.md) into your own environment.
 
 ## What's included

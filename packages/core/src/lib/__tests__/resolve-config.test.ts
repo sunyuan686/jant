@@ -24,7 +24,6 @@ describe("resolveConfig", () => {
     expect(config.siteName).toBe("Jant");
     expect(config.siteDescription).toBe("");
     expect(config.siteLanguage).toBe("en");
-    expect(config.homeDefaultView).toBe("latest");
     expect(config.mainRssFeed).toBe("featured");
     expect(config.timeZone).toBe("UTC");
     expect(config.showJantBrandingOnHome).toBe(false);
@@ -61,6 +60,12 @@ describe("resolveConfig", () => {
       MAIN_RSS_FEED: "latest",
     });
     expect(dbConfig.mainRssFeed).toBe("latest");
+  });
+
+  it("falls back when feed kind settings are invalid", () => {
+    const config = resolveConfig(makeEnv({ MAIN_RSS_FEED: "nope" }), {});
+
+    expect(config.mainRssFeed).toBe("featured");
   });
 
   it("normalizes legacy time zone values from the database", () => {

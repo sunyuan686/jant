@@ -95,9 +95,7 @@ function printUsage() {
   console.log("  jant site export https://your-site.example");
   console.log("");
   console.log("Examples:");
-  console.log(
-    "  jant site export https://your-site.example -o ./export.zip",
-  );
+  console.log("  jant site export https://your-site.example -o ./export.zip");
   console.log(
     "  jant site export https://your-site.example -d ./jant-site && cd ./jant-site && hugo serve",
   );

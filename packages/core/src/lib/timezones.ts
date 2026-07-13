@@ -336,21 +336,28 @@ export const TIMEZONES: TimezoneEntry[] = [
   },
 ];
 
-function findTimezoneEntry(value: string): TimezoneEntry | undefined {
-  return TIMEZONES.find(
-    (tz) =>
-      tz.value === value ||
-      tz.iana.includes(value) ||
-      tz.legacyValues?.includes(value),
-  );
+function findLegacyTimezoneEntry(value: string): TimezoneEntry | undefined {
+  return TIMEZONES.find((tz) => tz.legacyValues?.includes(value));
+}
+
+function resolveRuntimeTimeZone(value: string): string | null {
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: value })
+      .resolvedOptions()
+      .timeZone.trim();
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Normalizes a timezone value from settings, env, or browser detection into the
- * canonical IANA identifier used by the app. Unknown values fall back to UTC.
+ * Normalizes a timezone value from settings, env, or browser detection. Any
+ * IANA name or fixed-offset identifier supported by the runtime is preserved;
+ * historical display labels are mapped to their curated replacement. Unknown
+ * values fall back to UTC.
  *
  * @param value - Timezone value to normalize
- * @returns Canonical IANA timezone identifier
+ * @returns Runtime-normalized timezone identifier or UTC
  *
  * @example
  * ```ts
@@ -365,12 +372,17 @@ export function normalizeTimeZone(value: string | null | undefined): string {
     return "UTC";
   }
 
-  return findTimezoneEntry(trimmed)?.value ?? "UTC";
+  const runtimeTimeZone = resolveRuntimeTimeZone(trimmed);
+  if (runtimeTimeZone) {
+    return runtimeTimeZone;
+  }
+
+  return findLegacyTimezoneEntry(trimmed)?.value ?? "UTC";
 }
 
 /**
- * Returns whether the app recognizes a timezone value from the curated list,
- * one of its accepted IANA aliases, or a historical legacy value.
+ * Returns whether the runtime recognizes a timezone value or the app can map
+ * it from a historical display label.
  *
  * @param value - Timezone value to validate
  * @returns `true` when the value can be normalized safely
@@ -381,7 +393,35 @@ export function isSupportedTimeZone(value: string | null | undefined): boolean {
     return false;
   }
 
-  return findTimezoneEntry(trimmed) !== undefined;
+  return (
+    resolveRuntimeTimeZone(trimmed) !== null ||
+    findLegacyTimezoneEntry(trimmed) !== undefined
+  );
+}
+
+/**
+ * Returns the curated settings options plus a valid current value that is not
+ * already represented. This keeps the UI compact without losing an IANA zone
+ * or fixed offset detected outside the curated list.
+ *
+ * @param currentValue - Current stored timezone value
+ * @returns Timezone options that can represent the current setting
+ */
+export function getTimeZoneOptions(currentValue: string): TimezoneEntry[] {
+  const normalized = normalizeTimeZone(currentValue);
+  if (TIMEZONES.some((timezone) => timezone.value === normalized)) {
+    return TIMEZONES;
+  }
+
+  return [
+    ...TIMEZONES,
+    {
+      value: normalized,
+      label: normalized,
+      offset: "",
+      iana: [normalized],
+    },
+  ];
 }
 
 /**

@@ -109,7 +109,7 @@ A post has four publishing states:
 Marking a post as Featured does two things at once: it adds the post to the `/featured` page, and it pushes the post into the default `/feed` that goes to your subscribers.
 
 - Featured posts appear on the Featured page
-- The Featured feed lives at `/feed/featured`
+- The Featured feed lives at `/featured/feed`
 - The main `/feed` can point at Featured or Latest, and defaults to Featured
 
 ### Why the default feed is Featured
@@ -156,8 +156,8 @@ Jant uses readable URLs:
 Feeds:
 
 - `/feed` uses your currently configured main feed
-- `/feed/latest` returns posts that appear on the homepage Latest (excludes `Hidden from Latest`)
-- `/feed/featured` returns Featured posts
+- `/latest/feed` returns posts that appear on the homepage Latest (excludes `Hidden from Latest`)
+- `/featured/feed` returns Featured posts
 - `/archive/feed` returns every public post (including `Hidden from Latest`), and supports filters like `?year=`, `?format=`, `?collection=`, `?media=`
 - `/{slug}/feed` returns the feed for a single Collection
 - `/collections/{slug1}+{slug2}/feed` returns the feed for a combined Collection view

@@ -1,20 +1,18 @@
 import type { PostView } from "../../types.js";
 
 export function getThreadPreviewState({
-  secondReply,
-  penultimateReply,
+  leadingReplies,
+  trailingReplies,
   latestReply,
   totalReplyCount,
 }: {
-  secondReply?: PostView;
-  penultimateReply?: PostView;
+  leadingReplies: PostView[];
+  trailingReplies: PostView[];
   latestReply: PostView;
   totalReplyCount: number;
 }) {
   const visibleReplyIds = new Set(
-    [secondReply, penultimateReply, latestReply]
-      .filter((post): post is PostView => post !== undefined)
-      .map((post) => post.id),
+    [...leadingReplies, ...trailingReplies, latestReply].map((post) => post.id),
   );
   const hiddenCount = Math.max(0, totalReplyCount - visibleReplyIds.size);
 

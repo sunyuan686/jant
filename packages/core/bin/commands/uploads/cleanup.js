@@ -116,4 +116,6 @@ export async function run(argv) {
   const result = await requestCleanup(cleanupUrl, token, limit);
   console.log(`Deleted sessions: ${result.deletedSessions}`);
   console.log(`Aborted multipart uploads: ${result.abortedMultipartUploads}`);
+  console.log(`Orphaned media deleted: ${result.deletedOrphanMedia}`);
+  console.log(`Purged storage objects: ${result.purgedStorageObjects ?? 0}`);
 }

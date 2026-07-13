@@ -20,6 +20,22 @@ import type { EditorView } from "@tiptap/pm/view";
 import { uploadWithMetadata } from "../upload-with-metadata.js";
 import { renderMarkdownImage } from "../../lib/rich-image.js";
 
+export const INLINE_IMAGE_LOAD_STATE_EVENT = "jant:inline-image-load-state";
+
+export interface ImageNodeLabels {
+  unavailable: string;
+  delete: string;
+  replace: string;
+  open: string;
+}
+
+const DEFAULT_IMAGE_NODE_LABELS: ImageNodeLabels = {
+  unavailable: "Image unavailable",
+  delete: "Delete image",
+  replace: "Replace image",
+  open: "Open image URL",
+};
+
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     image: {
@@ -40,6 +56,8 @@ declare module "@tiptap/core" {
 // ---------------------------------------------------------------------------
 
 const ICONS = {
+  /** Broken image placeholder */
+  imageBroken: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m5 17 4.25-4.25 2.5 2.5 1.75-1.75L19 19"/><path d="m4 4 16 16"/></svg>`,
   /** Content-width — centered column */
   regular: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>`,
   /** Wide — max 1200 px breakout */
@@ -62,6 +80,9 @@ class ImageNodeView {
   dom: HTMLElement;
 
   private img: HTMLImageElement;
+  private missingPanel: HTMLElement;
+  private missingSource: HTMLElement;
+  private openBtn: HTMLButtonElement;
   private figcaption: HTMLElement;
   private captionInput: HTMLInputElement;
   private altBtn: HTMLButtonElement;
@@ -73,25 +94,31 @@ class ImageNodeView {
   private view: EditorView;
   private getPos: () => number | undefined;
   private editor: Editor;
+  private labels: ImageNodeLabels;
 
   private editingAlt = false;
+  private missing = false;
+  private currentSrc = "";
 
   constructor(
     node: ProseMirrorNode,
     view: EditorView,
     getPos: () => number | undefined,
     editor: Editor,
+    labels: ImageNodeLabels,
   ) {
     this.node = node;
     this.view = view;
     this.getPos = getPos;
     this.editor = editor;
+    this.labels = labels;
 
     // --- Build DOM tree ---
     const figure = document.createElement("figure");
     figure.className = "tiptap-image-figure";
     figure.dataset.selected = "false";
     figure.dataset.layout = String(node.attrs.layout || "regular");
+    figure.dataset.loadState = "loading";
     this.dom = figure;
 
     // Image container
@@ -101,12 +128,77 @@ class ImageNodeView {
 
     // <img>
     const img = document.createElement("img");
-    img.src = String(node.attrs.src ?? "");
-    img.alt = String(node.attrs.alt ?? "");
-    if (node.attrs.title) img.title = String(node.attrs.title);
     img.draggable = false;
+    img.addEventListener("load", () => this.setMissing(false));
+    img.addEventListener("error", () => this.setMissing(true));
     container.appendChild(img);
     this.img = img;
+
+    // --- Missing image panel ---
+    const missingPanel = document.createElement("div");
+    missingPanel.className = "tiptap-image-missing";
+    missingPanel.role = "group";
+    missingPanel.tabIndex = 0;
+    missingPanel.setAttribute("aria-label", labels.unavailable);
+    missingPanel.addEventListener("keydown", (e) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      e.preventDefault();
+      this.deleteNode();
+    });
+    container.appendChild(missingPanel);
+    this.missingPanel = missingPanel;
+
+    const missingIcon = document.createElement("span");
+    missingIcon.className = "tiptap-image-missing-icon";
+    missingIcon.setAttribute("aria-hidden", "true");
+    missingIcon.innerHTML = ICONS.imageBroken;
+    missingPanel.appendChild(missingIcon);
+
+    const missingCopy = document.createElement("span");
+    missingCopy.className = "tiptap-image-missing-copy";
+    missingPanel.appendChild(missingCopy);
+
+    const missingTitle = document.createElement("strong");
+    missingTitle.textContent = labels.unavailable;
+    missingCopy.appendChild(missingTitle);
+
+    const missingSource = document.createElement("span");
+    missingSource.className = "tiptap-image-missing-source";
+    missingCopy.appendChild(missingSource);
+    this.missingSource = missingSource;
+
+    const missingActions = document.createElement("span");
+    missingActions.className = "tiptap-image-missing-actions";
+    missingPanel.appendChild(missingActions);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "tiptap-image-missing-delete";
+    deleteBtn.textContent = labels.delete;
+    deleteBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      this.deleteNode();
+    });
+    missingActions.appendChild(deleteBtn);
+
+    const replaceMissingBtn = document.createElement("button");
+    replaceMissingBtn.type = "button";
+    replaceMissingBtn.textContent = labels.replace;
+    replaceMissingBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      this.handleReplace();
+    });
+    missingActions.appendChild(replaceMissingBtn);
+
+    const openBtn = document.createElement("button");
+    openBtn.type = "button";
+    openBtn.textContent = labels.open;
+    openBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      this.handleOpenOriginal();
+    });
+    missingActions.appendChild(openBtn);
+    this.openBtn = openBtn;
 
     // --- Toolbar (shown when selected) ---
     const toolbar = document.createElement("div");
@@ -206,6 +298,8 @@ class ImageNodeView {
     figcaption.textContent = String(node.attrs.caption ?? "");
     figure.appendChild(figcaption);
     this.figcaption = figcaption;
+
+    this.syncImageAttrs(node);
   }
 
   // --- ProseMirror NodeView interface ---
@@ -215,9 +309,7 @@ class ImageNodeView {
     this.node = node;
 
     // Sync DOM with new attrs
-    this.img.src = String(node.attrs.src ?? "");
-    this.img.alt = String(node.attrs.alt ?? "");
-    this.img.title = String(node.attrs.title ?? "");
+    this.syncImageAttrs(node);
 
     this.dom.dataset.layout = String(node.attrs.layout || "regular");
     this.layoutBtns.forEach((btn, value) => {
@@ -259,6 +351,7 @@ class ImageNodeView {
     // Let the NodeView handle events on toolbar, caption bar, and their children
     if (target.closest(".tiptap-image-toolbar")) return true;
     if (target.closest(".tiptap-image-caption-bar")) return true;
+    if (target.closest(".tiptap-image-missing")) return true;
     return false;
   }
 
@@ -296,6 +389,65 @@ class ImageNodeView {
     this.view.dispatch(tr);
   }
 
+  private syncImageAttrs(node: ProseMirrorNode) {
+    const src = String(node.attrs.src ?? "");
+    this.img.alt = String(node.attrs.alt ?? "");
+    this.img.title = String(node.attrs.title ?? "");
+    this.missingSource.textContent = imageSourceHint(src);
+    this.openBtn.disabled = !canOpenImageSource(src);
+
+    if (src !== this.currentSrc) {
+      this.currentSrc = src;
+      this.setMissing(false);
+      this.dom.dataset.loadState = "loading";
+      this.img.setAttribute("src", src);
+      this.checkCachedImageState();
+      return;
+    }
+
+    this.checkCachedImageState();
+  }
+
+  private checkCachedImageState() {
+    queueMicrotask(() => {
+      if (
+        !this.img.complete ||
+        this.img.getAttribute("src") !== this.currentSrc
+      ) {
+        return;
+      }
+      this.setMissing(this.img.naturalWidth === 0);
+    });
+  }
+
+  private setMissing(missing: boolean) {
+    if (this.missing === missing) {
+      this.dom.dataset.loadState = missing ? "missing" : "loaded";
+      return;
+    }
+
+    this.missing = missing;
+    this.dom.dataset.loadState = missing ? "missing" : "loaded";
+    this.dom.dispatchEvent(
+      new CustomEvent(INLINE_IMAGE_LOAD_STATE_EVENT, {
+        bubbles: true,
+        composed: true,
+        detail: {
+          src: this.currentSrc,
+          missing,
+        },
+      }),
+    );
+  }
+
+  private deleteNode() {
+    const pos = this.getPos();
+    if (pos === undefined) return;
+    const tr = this.view.state.tr.delete(pos, pos + this.node.nodeSize);
+    this.view.dispatch(tr);
+    this.view.focus();
+  }
+
   private handleLink() {
     const current = String(this.node.attrs.href ?? "");
     if (current) {
@@ -322,6 +474,12 @@ class ImageNodeView {
       }
     });
     input.click();
+  }
+
+  private handleOpenOriginal() {
+    const src = String(this.node.attrs.src ?? "");
+    if (!canOpenImageSource(src)) return;
+    window.open(src, "_blank", "noopener,noreferrer");
   }
 
   private handleExpand() {
@@ -358,16 +516,35 @@ class ImageNodeView {
   }
 }
 
+function imageSourceHint(src: string): string {
+  const trimmed = src.trim();
+  if (!trimmed) return "";
+  if (trimmed.length > 140) return `${trimmed.slice(0, 137)}...`;
+  return trimmed;
+}
+
+function canOpenImageSource(src: string): boolean {
+  const trimmed = src.trim();
+  if (!trimmed) return false;
+  return /^(https?:|\/|\.\/|\.\.\/|blob:)/i.test(trimmed);
+}
+
 // ---------------------------------------------------------------------------
 // Node Extension
 // ---------------------------------------------------------------------------
 
-export const ImageNode = Node.create({
+export const ImageNode = Node.create<{ labels?: Partial<ImageNodeLabels> }>({
   name: "image",
   group: "block",
   atom: true,
   selectable: true,
   draggable: true,
+
+  addOptions() {
+    return {
+      labels: DEFAULT_IMAGE_NODE_LABELS,
+    };
+  },
 
   addAttributes() {
     return {
@@ -514,11 +691,16 @@ export const ImageNode = Node.create({
 
   addNodeView() {
     return ({ node, view, getPos, editor }) => {
+      const labels = {
+        ...DEFAULT_IMAGE_NODE_LABELS,
+        ...(this.options.labels ?? {}),
+      };
       return new ImageNodeView(
         node,
         view,
         getPos as () => number | undefined,
         editor,
+        labels,
       );
     };
   },

@@ -20,6 +20,8 @@ function parseSettingsInitialData(data: unknown): SettingsInitialData | null {
   const siteName = getJsonString(data, "siteName");
   const siteDescription = getJsonString(data, "siteDescription");
   const siteLanguage = getJsonString(data, "siteLanguage");
+  // Tolerate older payloads without the key: empty = follow content language.
+  const dashboardLanguage = getJsonString(data, "dashboardLanguage") ?? "";
   const cjkSerifFont = getJsonString(data, "cjkSerifFont");
   const mainRssFeed = getJsonString(data, "mainRssFeed");
   const timeZone = getJsonString(data, "timeZone");
@@ -45,6 +47,7 @@ function parseSettingsInitialData(data: unknown): SettingsInitialData | null {
     siteName,
     siteDescription,
     siteLanguage,
+    dashboardLanguage,
     cjkSerifFont,
     mainRssFeed,
     timeZone,

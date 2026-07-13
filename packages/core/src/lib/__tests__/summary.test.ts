@@ -800,4 +800,91 @@ describe("extractSummaryHtml", () => {
     // Link text should be inside a proper <a> tag, not a broken fragment
     expect(result!.html).toContain(">Link text</a>");
   });
+
+  function paragraphsDoc(...texts: string[]): string {
+    return JSON.stringify({
+      type: "doc",
+      content: texts.map((text) => ({
+        type: "paragraph",
+        content: [{ type: "text", text }],
+      })),
+    });
+  }
+
+  it("cancels char-limit truncation when the hidden tail is below minHiddenChars", () => {
+    const doc = paragraphsDoc("A".repeat(600), "B".repeat(150));
+    const result = extractSummaryHtml(doc, 10, 500, 200);
+    expect(result!.hasMore).toBe(false);
+    expect(result!.html).toContain("A".repeat(600));
+    expect(result!.html).toContain("B".repeat(150));
+  });
+
+  it("keeps truncation when the hidden tail meets minHiddenChars", () => {
+    const doc = paragraphsDoc("A".repeat(600), "B".repeat(600));
+    const result = extractSummaryHtml(doc, 10, 500, 200);
+    expect(result!.hasMore).toBe(true);
+    expect(result!.breakAtIndex).toBe(1);
+    expect(result!.html).toContain("A".repeat(600));
+    expect(result!.html).not.toContain("B".repeat(600));
+  });
+
+  it("treats minHiddenChars as a strict threshold", () => {
+    // Hidden tail of exactly 200 chars is not below 200, so it still truncates.
+    const doc = paragraphsDoc("A".repeat(600), "B".repeat(200));
+    const result = extractSummaryHtml(doc, 10, 500, 200);
+    expect(result!.hasMore).toBe(true);
+  });
+
+  it("applies tolerance to block-limit truncation too", () => {
+    const texts = Array.from({ length: 11 }, (_, i) => `p${i}`);
+    const doc = paragraphsDoc(...texts);
+    const result = extractSummaryHtml(doc, 10, 500, 200);
+    expect(result!.hasMore).toBe(false);
+    for (const text of texts) {
+      expect(result!.html).toContain(text);
+    }
+  });
+
+  it("never lets tolerance override an explicit moreBreak", () => {
+    const doc = JSON.stringify({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Before" }] },
+        { type: "moreBreak" },
+        { type: "paragraph", content: [{ type: "text", text: "After tail" }] },
+      ],
+    });
+    const result = extractSummaryHtml(doc, 10, 500, 200);
+    expect(result!.hasMore).toBe(true);
+    expect(result!.html).toContain("Before");
+    expect(result!.html).not.toContain("After tail");
+  });
+
+  it("leaves limit truncation intact when minHiddenChars defaults to 0", () => {
+    const doc = paragraphsDoc("A".repeat(600), "B".repeat(150));
+    const result = extractSummaryHtml(doc, 10, 500);
+    expect(result!.hasMore).toBe(true);
+    expect(result!.html).not.toContain("B".repeat(150));
+  });
+
+  it("excludes trailing non-content nodes when tolerance includes the tail", () => {
+    const doc = JSON.stringify({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "A".repeat(600) }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "B".repeat(150) }],
+        },
+        { type: "image", attrs: { src: "https://example.com/x.png" } },
+      ],
+    });
+    const result = extractSummaryHtml(doc, 10, 500, 200);
+    expect(result!.hasMore).toBe(false);
+    expect(result!.html).toContain("B".repeat(150));
+    expect(result!.html).not.toContain("<img");
+  });
 });

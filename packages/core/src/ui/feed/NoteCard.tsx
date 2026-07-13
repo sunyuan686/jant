@@ -5,7 +5,9 @@
  * With title: article-style rendering with summary excerpt and "Read more" link.
  */
 
+import { msg } from "@lingui/core/macro";
 import type { FC } from "hono/jsx";
+import { useLingui } from "../../i18n/context.js";
 import type { TimelineCardProps } from "../../types.js";
 import { MediaGallery } from "../shared/MediaGallery.js";
 import { StarRating } from "../shared/StarRating.js";
@@ -27,6 +29,7 @@ export const NoteCard: FC<TimelineCardProps> = ({
   mode = "feed",
   display,
 }) => {
+  const { i18n } = useLingui();
   const isCompact = mode === "compact";
   const isDetail = mode === "detail";
   const isArticle = !!post.title;
@@ -35,8 +38,42 @@ export const NoteCard: FC<TimelineCardProps> = ({
   const fullBodyHtml = showFullBody
     ? stripContinueAnchor(post.bodyHtml)
     : post.bodyHtml;
+  // Untitled notes only carry summaryHtml when their body was truncated; fall
+  // back to the full body so non-truncated notes render every block.
   const displayHtml =
-    isDetail || !isArticle || showFullBody ? fullBodyHtml : post.summaryHtml;
+    isDetail || showFullBody
+      ? fullBodyHtml
+      : (post.summaryHtml ?? fullBodyHtml);
+  const continueLabel = i18n._(
+    msg({
+      message: "Continue →",
+      comment:
+        "@context: Feed link from a truncated article excerpt to its full page",
+    }),
+  );
+  const readMoreLabel = i18n._(
+    msg({
+      message: "Read more",
+      comment:
+        "@context: Expand the rest of a truncated untitled note in place in the feed",
+    }),
+  );
+  const readLessLabel = i18n._(
+    msg({
+      message: "Read less",
+      comment:
+        "@context: Collapse an expanded untitled note back to its preview in the feed",
+    }),
+  );
+  // Untitled notes long enough to truncate render their full body with a
+  // `data-note-break` marker; this flag tells CSS to clamp the tail until the
+  // reader expands it in place.
+  const clampNote =
+    !isArticle &&
+    !isDetail &&
+    !isCompact &&
+    !showFullBody &&
+    post.summaryHasMore === true;
   const hasVisibleRating =
     !!post.rating && post.rating > 0 && !display?.hideRating;
   const showHeaderRating = isDetail && isArticle && hasVisibleRating;
@@ -88,12 +125,33 @@ export const NoteCard: FC<TimelineCardProps> = ({
         <div
           class={`e-content prose ${isCompact ? "prose-sm" : isDetail || showFullBody ? "post-detail-body" : isArticle ? "post-body-summary" : ""}`}
           data-post-body
+          {...(clampNote ? { "data-note-clamp": "" } : {})}
           dangerouslySetInnerHTML={{ __html: displayHtml }}
         />
       )}
       {(() => {
         const tail = (
           <>
+            {!isDetail &&
+              !isCompact &&
+              !showFullBody &&
+              post.summaryHasMore &&
+              (isArticle ? (
+                <a href={getContinueHref(post)} class="feed-continue-link">
+                  {continueLabel}
+                </a>
+              ) : (
+                <a
+                  href={getContinueHref(post)}
+                  class="feed-continue-link"
+                  data-note-expand
+                  aria-expanded="false"
+                  data-label-more={readMoreLabel}
+                  data-label-less={readLessLabel}
+                >
+                  {readMoreLabel}
+                </a>
+              ))}
             {!isCompact && post.media.length > 0 && (
               <div class="mt-3" data-post-media>
                 <MediaGallery
@@ -102,15 +160,6 @@ export const NoteCard: FC<TimelineCardProps> = ({
                 />
               </div>
             )}
-            {!isDetail &&
-              !isCompact &&
-              !showFullBody &&
-              isArticle &&
-              post.summaryHasMore && (
-                <a href={getContinueHref(post)} class="feed-continue-link">
-                  Continue →
-                </a>
-              )}
             {!isCompact && !showHeaderRating && !display?.hideRating && (
               <StarRating rating={post.rating} />
             )}

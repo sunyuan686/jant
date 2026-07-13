@@ -15,6 +15,7 @@ import "./client/components/jant-media-lightbox.js";
 import "./client/components/jant-text-preview.js";
 import "./client/toast.js";
 import "./client/thread-context.js";
+import "./client/note-expand.js";
 import "./client/archive-nav.js";
 import "./client/site-header-nav.js";
 import "./client/collection-sort-menu.js";

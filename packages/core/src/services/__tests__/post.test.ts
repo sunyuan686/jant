@@ -786,6 +786,39 @@ describe("PostService", () => {
       ]);
     });
 
+    it("can ignore pinned sort for subscription feed queries", async () => {
+      await postService.create({
+        format: "note",
+        bodyMarkdown: "older pinned",
+        pinned: true,
+        status: "published",
+        publishedAt: 1000,
+      });
+      await postService.create({
+        format: "note",
+        bodyMarkdown: "newer unpinned",
+        status: "published",
+        publishedAt: 2000,
+      });
+      await postService.create({
+        format: "note",
+        bodyMarkdown: "newest unpinned",
+        status: "published",
+        publishedAt: 3000,
+      });
+
+      const results = await postService.list({
+        status: "published",
+        ignorePinnedSort: true,
+        limit: 2,
+      });
+
+      expect(results.map((p) => p.bodyText)).toEqual([
+        "newest unpinned",
+        "newer unpinned",
+      ]);
+    });
+
     it("excludes deleted posts", async () => {
       const post = await postService.create({
         format: "note",

@@ -278,7 +278,7 @@ Report to the user:
 
 First-time bulk migrations often need 2-3 attempts before the mapping is right. If the script halted halfway, posts came out wrong, or the user wants to re-run with a different mapping, the cleanest reset is through Settings:
 
-**Settings → Account → Delete Account**
+**Settings → Account & Data → Delete Account**
 
 This wipes posts, media, collections, and settings for the site, and also deletes the account itself. The user will:
 

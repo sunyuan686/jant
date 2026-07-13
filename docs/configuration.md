@@ -372,17 +372,16 @@ jant telegram register-webhooks --base-url https://your-site.example
 
 These settings can be changed on Jant's Settings page after setup. Each one can also be seeded from an environment variable of the same name — values changed in Settings take precedence over the environment variable.
 
-| Setting                      | What it does                                       |
-| ---------------------------- | -------------------------------------------------- |
-| `SITE_NAME`                  | Site display name                                  |
-| `SITE_DESCRIPTION`           | Meta description and feed description              |
-| `SITE_LANGUAGE`              | Primary language code                              |
-| `TIME_ZONE`                  | Display time zone, e.g. `UTC` or `Asia/Shanghai`   |
-| `HOME_DEFAULT_VIEW`          | Whether the home page starts on Latest or Featured |
-| `MAIN_RSS_FEED`              | What `/feed` returns                               |
-| `SITE_FOOTER`                | Custom footer text                                 |
-| `SHOW_JANT_BRANDING_ON_HOME` | Show or hide Jant branding on the home page        |
-| `NOINDEX`                    | Ask search engines not to index the site           |
+| Setting                      | What it does                                     |
+| ---------------------------- | ------------------------------------------------ |
+| `SITE_NAME`                  | Site display name                                |
+| `SITE_DESCRIPTION`           | Meta description and feed description            |
+| `SITE_LANGUAGE`              | Primary language code                            |
+| `TIME_ZONE`                  | Display time zone, e.g. `UTC` or `Asia/Shanghai` |
+| `MAIN_RSS_FEED`              | What `/feed` returns                             |
+| `SITE_FOOTER`                | Custom footer text                               |
+| `SHOW_JANT_BRANDING_ON_HOME` | Show or hide Jant branding on the home page      |
+| `NOINDEX`                    | Ask search engines not to index the site         |
 
 Color theme, font theme, custom CSS, avatar, and other appearance details are also managed in Settings.
 

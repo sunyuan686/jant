@@ -102,7 +102,6 @@ export interface SiteConfig {
   siteDescription: string;
   siteLanguage: string;
   showJantBrandingOnHome: boolean;
-  homeDefaultView: string;
   /** "latest" or "featured" — drives the default RSS nav link in the exported site. */
   mainRssFeed: string;
   siteFooter: string;
@@ -1374,9 +1373,8 @@ function resolveNavItemLabel(item: SiteConfig["navItems"][number]): string {
  * Resolve a nav item's final href for the Hugo export.
  *
  * Mirrors the runtime logic in `lib/view.ts:toNavItemView`. System URLs
- * stored in the DB ("/latest", "/featured") are not real routes — they get
- * rewritten to "/" when they match `homeDefaultView`, otherwise they
- * resolve to the dedicated path.
+ * stored in the DB are canonicalized during export so stale DB values do not
+ * leak into the static site's navigation.
  *
  * The "rss" system nav item points at whichever Atom feed the site has
  * configured as its main feed: `mainRssFeed === "featured"` → the featured
@@ -1385,14 +1383,13 @@ function resolveNavItemLabel(item: SiteConfig["navItems"][number]): string {
  */
 function resolveNavItemUrl(
   item: SiteConfig["navItems"][number],
-  homeDefaultView: string,
   mainRssFeed: string,
 ): string {
   if (item.systemKey === "latest") {
-    return homeDefaultView === "latest" ? "/" : "/latest/";
+    return "/";
   }
   if (item.systemKey === "featured") {
-    return homeDefaultView === "featured" ? "/" : "/featured/";
+    return "/featured/";
   }
   if (item.systemKey === "collections") return "/collections/";
   if (item.systemKey === "archive") return "/archive/";
@@ -1474,7 +1471,6 @@ function buildHugoToml(config: SiteConfig): string {
     "",
     "[params]",
     `  description = "${escapeTomlString(config.siteDescription)}"`,
-    `  home_default_view = "${escapeTomlString(config.homeDefaultView)}"`,
     `  main_rss_feed = "${escapeTomlString(config.mainRssFeed)}"`,
     `  show_jant_branding_on_home = ${config.showJantBrandingOnHome}`,
     `  show_header_avatar = ${config.showHeaderAvatar}`,
@@ -1514,7 +1510,6 @@ function buildJantDataToml(
     `site_name = "${escapeTomlString(config.siteName)}"`,
     `site_description = "${escapeTomlString(config.siteDescription)}"`,
     `site_language = "${escapeTomlString(config.siteLanguage)}"`,
-    `home_default_view = "${escapeTomlString(config.homeDefaultView)}"`,
     `main_rss_feed = "${escapeTomlString(config.mainRssFeed)}"`,
     `show_jant_branding_on_home = ${config.showJantBrandingOnHome}`,
     `show_header_avatar = ${config.showHeaderAvatar}`,
@@ -1558,7 +1553,7 @@ function buildJantDataToml(
     parts.push(`type = "${escapeTomlString(item.type)}"`);
     parts.push(`label = "${escapeTomlString(resolveNavItemLabel(item))}"`);
     parts.push(
-      `url = "${escapeTomlString(resolveNavItemUrl(item, config.homeDefaultView, config.mainRssFeed))}"`,
+      `url = "${escapeTomlString(resolveNavItemUrl(item, config.mainRssFeed))}"`,
     );
     parts.push(`system_key = "${escapeTomlString(item.systemKey ?? "")}"`);
     parts.push(`placement = "${escapeTomlString(item.placement ?? "header")}"`);

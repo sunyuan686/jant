@@ -1,5 +1,32 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment happy-dom
+
+import type { Editor } from "@tiptap/core";
+import { afterEach, describe, expect, it } from "vitest";
+import { createTiptapEditor } from "../create-editor.js";
 import { isCodeEditorHtml } from "../markdown-clipboard.js";
+
+const editors: Editor[] = [];
+
+function dispatchMarkdownPaste(editor: Editor, text: string, html = "") {
+  const event = new Event("paste", {
+    bubbles: true,
+    cancelable: true,
+  }) as Event & { clipboardData: unknown };
+  event.clipboardData = {
+    getData: (type: string) =>
+      type === "text/plain" ? text : type === "text/html" ? html : "",
+    files: [],
+    items: [],
+    types: html ? ["text/html", "text/plain"] : ["text/plain"],
+  };
+  editor.commands.focus();
+  editor.view.dom.dispatchEvent(event);
+}
+
+afterEach(() => {
+  while (editors.length > 0) editors.pop()?.destroy();
+  document.body.innerHTML = "";
+});
 
 describe("isCodeEditorHtml", () => {
   it("detects VS Code HTML via data-vscode attribute", () => {
@@ -44,5 +71,125 @@ describe("isCodeEditorHtml", () => {
   it("returns false for white-space: pre without monospace font", () => {
     const html = `<div style="font-family: Arial, sans-serif; white-space: pre;">preformatted</div>`;
     expect(isCodeEditorHtml(html)).toBe(false);
+  });
+});
+
+describe("MarkdownClipboard", () => {
+  it.each([
+    ["plain text", ""],
+    [
+      "code editor text",
+      '<div data-vscode-theme-name="Default Dark+">Markdown</div>',
+    ],
+  ])("pastes a footnote from %s without adding an empty line", (_, html) => {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    const editor = createTiptapEditor({ element });
+    editors.push(editor);
+
+    dispatchMarkdownPaste(
+      editor,
+      "Body with a footnote.[^1]\n\n[^1]: Footnote body",
+      html,
+    );
+
+    expect(editor.getJSON()).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Body with a footnote." },
+            { type: "footnoteReference", attrs: { label: "1" } },
+          ],
+        },
+        {
+          type: "footnoteDefinition",
+          attrs: { label: "1" },
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "Footnote body" }],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it.each([
+    ["plain text", ""],
+    [
+      "code editor text",
+      '<div data-vscode-theme-name="Default Dark+">Markdown</div>',
+    ],
+  ])("adds an empty definition for an orphan footnote from %s", (_, html) => {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    const editor = createTiptapEditor({ element });
+    editors.push(editor);
+
+    dispatchMarkdownPaste(editor, "Body with a footnote.[^1]", html);
+
+    expect(editor.getJSON()).toEqual({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "Body with a footnote." },
+            { type: "footnoteReference", attrs: { label: "1" } },
+          ],
+        },
+        {
+          type: "footnoteDefinition",
+          attrs: { label: "1" },
+          content: [{ type: "paragraph" }],
+        },
+      ],
+    });
+  });
+
+  it("keeps the formatting toolbar hidden for a selected footnote node", () => {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    const editor = createTiptapEditor({
+      element,
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "Body" },
+              { type: "footnoteReference", attrs: { label: "1" } },
+            ],
+          },
+          {
+            type: "footnoteDefinition",
+            attrs: { label: "1" },
+            content: [{ type: "paragraph" }],
+          },
+        ],
+      },
+    });
+    editors.push(editor);
+
+    let referencePos: number | null = null;
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "footnoteReference") {
+        referencePos = pos;
+      }
+      return true;
+    });
+    if (referencePos === null) {
+      throw new Error("expected footnote reference");
+    }
+
+    editor.commands.setNodeSelection(referencePos);
+
+    expect(
+      document.querySelector<HTMLElement>(".tiptap-bubble-menu")?.style.display,
+    ).toBe("none");
   });
 });

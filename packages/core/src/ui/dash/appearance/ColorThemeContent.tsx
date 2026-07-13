@@ -2,6 +2,7 @@
  * Color theme picker
  */
 
+import type { MessageDescriptor } from "@lingui/core";
 import { msg } from "@lingui/core/macro";
 import { useLingui } from "../../../i18n/context.js";
 import { toPublicPath } from "../../../lib/url.js";
@@ -119,8 +120,260 @@ function ThemeModeCard({
   );
 }
 
+interface ThemeCopy {
+  title: MessageDescriptor;
+  body: MessageDescriptor;
+  help: MessageDescriptor;
+}
+
+/**
+ * Per-theme preview copy: a plain description of each palette — what the
+ * background and accent look like, and when it fits. Keyed by theme id;
+ * unknown ids fall back to FALLBACK_COPY.
+ */
+const THEME_COPY: Record<string, ThemeCopy> = {
+  tufte: {
+    title: msg({
+      message: "Warm ivory",
+      comment: "@context: Tufte color theme preview title",
+    }),
+    body: msg({
+      message: "Off-white paper with a deep forest-green accent.",
+      comment: "@context: Tufte color theme preview body",
+    }),
+    help: msg({
+      message: "The default. Calm and easy for long reading.",
+      comment: "@context: Tufte color theme preview help line",
+    }),
+  },
+  linen: {
+    title: msg({
+      message: "Warm cream",
+      comment: "@context: Linen color theme preview title",
+    }),
+    body: msg({
+      message: "Soft cream background with a muted green accent.",
+      comment: "@context: Linen color theme preview body",
+    }),
+    help: msg({
+      message: "The original Jant palette, and a solid everyday pick.",
+      comment: "@context: Linen color theme preview help line",
+    }),
+  },
+  frost: {
+    title: msg({
+      message: "Cool white",
+      comment: "@context: Frost color theme preview title",
+    }),
+    body: msg({
+      message: "Pale cool-white with deep indigo text. High contrast.",
+      comment: "@context: Frost color theme preview body",
+    }),
+    help: msg({
+      message: "When you want a cooler, sharper look.",
+      comment: "@context: Frost color theme preview help line",
+    }),
+  },
+  cotton: {
+    title: msg({
+      message: "Soft ivory",
+      comment: "@context: Cotton color theme preview title",
+    }),
+    body: msg({
+      message: "Very light ivory with a faint tea-green accent.",
+      comment: "@context: Cotton color theme preview body",
+    }),
+    help: msg({
+      message: "Nearly white, with a touch of warmth.",
+      comment: "@context: Cotton color theme preview help line",
+    }),
+  },
+  bone: {
+    title: msg({
+      message: "Warm off-white",
+      comment: "@context: Bone color theme preview title",
+    }),
+    body: msg({
+      message: "Pale bone-white with a muted green accent.",
+      comment: "@context: Bone color theme preview body",
+    }),
+    help: msg({
+      message: "Warm-neutral and easy for long reading.",
+      comment: "@context: Bone color theme preview help line",
+    }),
+  },
+  parchment: {
+    title: msg({
+      message: "Warm parchment",
+      comment: "@context: Parchment color theme preview title",
+    }),
+    body: msg({
+      message: "Yellow-tinted paper with an olive-green accent.",
+      comment: "@context: Parchment color theme preview body",
+    }),
+    help: msg({
+      message: "A warmer look, like slightly aged paper.",
+      comment: "@context: Parchment color theme preview help line",
+    }),
+  },
+  dune: {
+    title: msg({
+      message: "Warm sand",
+      comment: "@context: Dune color theme preview title",
+    }),
+    body: msg({
+      message: "Sandy background with a green accent.",
+      comment: "@context: Dune color theme preview body",
+    }),
+    help: msg({
+      message: "Warm and earthy, but still light.",
+      comment: "@context: Dune color theme preview help line",
+    }),
+  },
+  ink: {
+    title: msg({
+      message: "Neutral gray",
+      comment: "@context: Ink color theme preview title",
+    }),
+    body: msg({
+      message: "Near-neutral light gray with a steel-blue accent.",
+      comment: "@context: Ink color theme preview body",
+    }),
+    help: msg({
+      message: "Minimal color, low distraction.",
+      comment: "@context: Ink color theme preview help line",
+    }),
+  },
+  slate: {
+    title: msg({
+      message: "Cool blue-gray",
+      comment: "@context: Slate color theme preview title",
+    }),
+    body: msg({
+      message: "Light blue-gray background, cool and even.",
+      comment: "@context: Slate color theme preview body",
+    }),
+    help: msg({
+      message: "A calm, cool backdrop.",
+      comment: "@context: Slate color theme preview help line",
+    }),
+  },
+  sage: {
+    title: msg({
+      message: "Soft green",
+      comment: "@context: Sage color theme preview title",
+    }),
+    body: msg({
+      message: "Light sage-green with a matching green accent.",
+      comment: "@context: Sage color theme preview body",
+    }),
+    help: msg({
+      message: "Calm and natural, easy on the eyes.",
+      comment: "@context: Sage color theme preview help line",
+    }),
+  },
+  clay: {
+    title: msg({
+      message: "Warm terracotta",
+      comment: "@context: Clay color theme preview title",
+    }),
+    body: msg({
+      message: "Muted red-brown background, earthy and warm.",
+      comment: "@context: Clay color theme preview body",
+    }),
+    help: msg({
+      message: "An earthier, warmer tone.",
+      comment: "@context: Clay color theme preview help line",
+    }),
+  },
+  ember: {
+    title: msg({
+      message: "Warm orange",
+      comment: "@context: Ember color theme preview title",
+    }),
+    body: msg({
+      message: "Orange-tinted background. The warmest palette.",
+      comment: "@context: Ember color theme preview body",
+    }),
+    help: msg({
+      message: "Cozy and bold among the warm tones.",
+      comment: "@context: Ember color theme preview help line",
+    }),
+  },
+  paper: {
+    title: msg({
+      message: "Bright paper white",
+      comment: "@context: Paper color theme preview title",
+    }),
+    body: msg({
+      message: "Bright warm-white with a moss-green accent.",
+      comment: "@context: Paper color theme preview body",
+    }),
+    help: msg({
+      message: "Clean and high-contrast, close to white.",
+      comment: "@context: Paper color theme preview help line",
+    }),
+  },
+  snow: {
+    title: msg({
+      message: "Pure white",
+      comment: "@context: Snow color theme preview title",
+    }),
+    body: msg({
+      message: "Pure white with neutral grays. No color tint.",
+      comment: "@context: Snow color theme preview body",
+    }),
+    help: msg({
+      message: "The cleanest, most neutral option.",
+      comment: "@context: Snow color theme preview help line",
+    }),
+  },
+  espresso: {
+    title: msg({
+      message: "Cream and coffee brown",
+      comment: "@context: Espresso color theme preview title",
+    }),
+    body: msg({
+      message: "Warm cream background with deep coffee-brown accents.",
+      comment: "@context: Espresso color theme preview body",
+    }),
+    help: msg({
+      message: "Warm and rich, with strong brown tones.",
+      comment: "@context: Espresso color theme preview help line",
+    }),
+  },
+};
+
+const EXAMPLE_LINK = msg({
+  message: "Example link",
+  comment:
+    "@context: Placeholder link label shown in color theme preview cards",
+});
+
+const ACCENT_LABEL = msg({
+  message: "Accent",
+  comment:
+    "@context: Label next to the theme accent-color swatch in a color theme preview card",
+});
+
+const FALLBACK_COPY: ThemeCopy = {
+  title: msg({
+    message: "This palette",
+    comment: "@context: Fallback color theme preview title",
+  }),
+  body: msg({
+    message: "Headings, body text, and links in this theme.",
+    comment: "@context: Fallback color theme preview body",
+  }),
+  help: msg({
+    message: "Pick the one that fits your writing.",
+    comment: "@context: Fallback color theme preview help line",
+  }),
+};
+
 function ThemePreview({ theme }: { theme: ColorTheme }) {
   const { i18n } = useLingui();
+  const copy = THEME_COPY[theme.id] ?? FALLBACK_COPY;
 
   return (
     <div class="min-w-0">
@@ -129,39 +382,21 @@ function ThemePreview({ theme }: { theme: ColorTheme }) {
       </div>
 
       <div class="theme-preview-divider mt-2 border-t pt-2">
-        <h3 class="theme-preview-title text-[0.98rem]">
-          {i18n._(
-            msg({
-              message: "Field notes on quiet design",
-              comment: "@context: Color theme preview card title",
-            }),
-          )}
-        </h3>
+        <h3 class="theme-preview-title text-[0.98rem]">{i18n._(copy.title)}</h3>
 
         <p class="theme-preview-body mt-2 text-[0.84rem]">
-          {i18n._(
-            msg({
-              message: "Soft color should still carry a clear reading rhythm.",
-              comment: "@context: Color theme preview card body sentence",
-            }),
-          )}
+          {i18n._(copy.body)}{" "}
+          <a class="theme-preview-link" tabIndex={-1}>
+            {i18n._(EXAMPLE_LINK)}
+          </a>{" "}
+          <span aria-hidden="true">&middot;</span>{" "}
+          <span class="theme-preview-accent">
+            <span class="theme-preview-swatch" aria-hidden="true"></span>
+            {i18n._(ACCENT_LABEL)}
+          </span>
         </p>
         <p class="theme-preview-meta mt-1.5 text-[0.8rem]">
-          {i18n._(
-            msg({
-              message: "Quiet surfaces let writing lead.",
-              comment: "@context: Color theme preview card secondary sentence",
-            }),
-          )}{" "}
-          <a class="theme-preview-link" tabIndex={-1}>
-            {i18n._(
-              msg({
-                message: "Read why",
-                comment: "@context: Color theme preview inline link label",
-              }),
-            )}
-          </a>
-          .
+          {i18n._(copy.help)}
         </p>
 
         <div class="theme-preview-divider mt-3 border-t pt-2">

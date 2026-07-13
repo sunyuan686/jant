@@ -5,7 +5,7 @@
  */
 
 import type { Context } from "hono";
-import type { Collection, FeedKind, NavItem, NavItemView } from "../types.js";
+import type { Collection, NavItem, NavItemView } from "../types.js";
 import { toNavItemViews } from "./view.js";
 import { render as renderMarkdown, toPlainText } from "./markdown.js";
 
@@ -23,22 +23,9 @@ export interface NavigationData {
   siteDescriptionHtml?: string;
   isAuthenticated: boolean;
   collections: Collection[];
-  homeDefaultView: FeedKind;
   siteAvatarUrl?: string;
   showHeaderAvatar?: boolean;
   siteFooterHtml?: string;
-}
-
-export function getHomeDefaultViewFromNavItems(
-  items: Pick<NavItem, "type" | "systemKey">[],
-): FeedKind {
-  const homeFeedItem = items.find(
-    (item) =>
-      item.type === "system" &&
-      (item.systemKey === "latest" || item.systemKey === "featured"),
-  );
-
-  return homeFeedItem?.systemKey === "featured" ? "featured" : "latest";
 }
 
 /**
@@ -62,18 +49,16 @@ export function getHomeDefaultViewFromNavItems(
  */
 export async function getNavigationData(
   c: Context,
-  options?: { preloadedItems?: NavItem[] },
+  options?: { preloadedItems?: NavItem[]; includeCollections?: boolean },
 ): Promise<NavigationData> {
-  // Callers that already fetched nav items (e.g. home route, which needs
-  // `homeDefaultView` before deciding which timeline to assemble) can pass
-  // them in to avoid a redundant DB round-trip.
+  // Callers that already fetched nav items can pass them in to avoid a
+  // redundant DB round-trip.
   const items =
     options?.preloadedItems ?? (await c.var.services.navItems.list());
   const currentPath = c.var.publicPath;
   const appConfig = c.var.appConfig;
 
   const siteName = appConfig.siteName;
-  const homeDefaultView = getHomeDefaultViewFromNavItems(items);
   const siteFooter = appConfig.siteFooter;
 
   // Only include description if explicitly set (DB or env), not the default
@@ -112,7 +97,6 @@ export async function getNavigationData(
   const links = toNavItemViews(
     items,
     currentPath,
-    homeDefaultView,
     isAuthenticated,
     appConfig.sitePathPrefix,
     collectionFreshness,
@@ -120,7 +104,7 @@ export async function getNavigationData(
   );
 
   // Only load collections when authenticated (for compose dialog)
-  if (isAuthenticated) {
+  if (isAuthenticated && options?.includeCollections !== false) {
     collections = await c.var.services.collections.listByRecentActivity();
   }
 
@@ -133,7 +117,6 @@ export async function getNavigationData(
     siteDescriptionHtml,
     isAuthenticated,
     collections,
-    homeDefaultView,
     siteAvatarUrl,
     showHeaderAvatar: showHeaderAvatar && !!siteAvatarUrl,
     siteFooterHtml,

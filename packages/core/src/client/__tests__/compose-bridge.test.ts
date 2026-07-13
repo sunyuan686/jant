@@ -459,6 +459,111 @@ describe("compose bridge", () => {
     expect(composeEl.clearLocalDraftFromStorage).not.toHaveBeenCalled();
   });
 
+  it("re-binds the thread-context Show more toggle after a reply swaps in a thread preview", async () => {
+    document.body.innerHTML = `
+      <div data-timeline-item data-thread-root-id="pst_root">
+        <div data-timeline-item-content>
+          <article data-post data-post-id="pst_root">Root</article>
+        </div>
+      </div>
+    `;
+
+    const composeEl = document.createElement(
+      "jant-compose-dialog",
+    ) as ComposeHarness;
+    composeEl.refreshCollections = vi.fn(async () => true);
+    composeEl.pageMode = false;
+    document.body.appendChild(composeEl);
+
+    // The freshly rendered thread preview carries the collapsed ancestor shell
+    // plus its "Show more" toggle — the markup the bug left inert until reload.
+    const threadPreviewHtml = `
+      <div class="thread-group thread-group-preview">
+        <div class="thread-context-shell" data-thread-context data-collapsed="">
+          <div class="thread-item"><article data-post>Root</article></div>
+        </div>
+        <button
+          type="button"
+          class="thread-context-toggle"
+          data-thread-context-toggle
+          data-label-more="Show more"
+          data-label-less="Show less"
+          aria-expanded="false"
+        >
+          <span class="thread-context-toggle-label">Show more</span>
+        </button>
+        <div class="thread-item thread-item-hero"><article data-post>Reply</article></div>
+      </div>
+    `;
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const raw =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      const url = new URL(raw, "http://localhost");
+
+      if (url.pathname === "/compose") {
+        return new Response(
+          JSON.stringify({ status: "published", permalink: "/the-reply" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (url.pathname === "/_/timeline-item/pst_root") {
+        return new Response(threadPreviewHtml, {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url.pathname}`);
+    });
+
+    composeEl.dispatchEvent(
+      new CustomEvent("jant:compose-submit-deferred", {
+        bubbles: true,
+        detail: {
+          format: "note",
+          title: "",
+          body: "A reply",
+          url: "",
+          quoteText: "",
+          quoteAuthor: "",
+          slug: "",
+          status: "published",
+          visibility: "public",
+          rating: 0,
+          collectionIds: [],
+          attachments: [],
+          pendingAttachments: [],
+          replyToId: "pst_parent",
+          replyThreadRootId: "pst_root",
+          replyRefreshKind: "timeline-item",
+          replyRefreshId: "pst_root",
+        },
+      }),
+    );
+
+    await flushBridgeWork();
+
+    const toggle = document.querySelector<HTMLElement>(
+      "[data-thread-context-toggle]",
+    );
+    const shell = document.querySelector<HTMLElement>("[data-thread-context]");
+    expect(toggle).not.toBeNull();
+    expect(shell).not.toBeNull();
+    // setupThreadContexts ran on the swapped-in markup.
+    expect(toggle?.dataset.threadContextToggleBound).toBe("1");
+
+    // And the bound listener actually toggles the collapsed state.
+    toggle?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(shell?.dataset.collapsed).toBeUndefined();
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+  });
+
   it("sends nulls for cleared quote attribution fields when editing", async () => {
     const composeEl = document.createElement(
       "jant-compose-dialog",

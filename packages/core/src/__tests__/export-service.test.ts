@@ -281,7 +281,6 @@ describe("createExportService (Hugo)", () => {
       makeSiteConfig({
         siteName: "My Site",
         siteUrl: "https://my.example",
-        homeDefaultView: "featured",
       }),
     );
     const files = filesToMap(await service.generateHugoFiles());
@@ -292,7 +291,7 @@ describe("createExportService (Hugo)", () => {
     expect(toml).toContain('theme = "jant"');
     expect(toml).toMatch(/\[permalinks\][\s\S]*post = "\/:slug\/"/);
     expect(toml).toContain("[params]");
-    expect(toml).toContain('home_default_view = "featured"');
+    expect(toml).not.toContain("home_default_view");
   });
 
   it("configures hugo.toml for Atom RSS output with per-section opt-in", async () => {

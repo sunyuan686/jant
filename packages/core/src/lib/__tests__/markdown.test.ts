@@ -66,7 +66,7 @@ describe("render", () => {
     const html = render("Body copy[^1]\n\n[^1]: Footnote body");
 
     expect(html).toContain(
-      '<label for="sn-1" class="margin-toggle sidenote-number">',
+      '<label for="sn-1" class="margin-toggle sidenote-number footref">',
     );
     expect(html).toContain('<span class="sidenote">Footnote body</span>');
     expect(html).not.toContain('<section class="footnotes"');

@@ -228,12 +228,12 @@ export interface ApiToken {
   updatedAt: number;
 }
 
-/** Latest-reply context for a thread root, used in timeline display */
+/** Bounded reply context for a thread root, used in timeline display. */
 export interface ThreadTimelineContext {
-  /** Second chronological post in the thread (the first published reply). */
-  secondReply: Post | null;
-  /** Penultimate chronological post in the thread, when distinct from latest. */
-  penultimateReply: Post | null;
+  /** Earliest published replies, in chronological order. */
+  leadingReplies: Post[];
+  /** Published replies immediately before latest, in chronological order. */
+  trailingReplies: Post[];
   latestReply: Post;
   totalReplyCount: number;
 }

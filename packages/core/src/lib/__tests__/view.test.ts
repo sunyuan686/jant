@@ -271,16 +271,121 @@ describe("toPostView", () => {
     );
   });
 
-  it("does not compute summaryHtml for posts without title", () => {
+  it("does not attach summaryHtml for short untitled notes", () => {
+    const body = JSON.stringify({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Just a note" }] },
+      ],
+    });
     const view = toPostView(
       makePostWithMedia({
         title: null,
+        body,
         bodyHtml: "<p>Just a note</p>",
+      }),
+      EMPTY_CTX,
+    );
+    // Untitled notes render their body in full unless it is long enough to
+    // truncate, so a short note carries no summary.
+    expect(view.summaryHtml).toBeUndefined();
+    expect(view.summaryHasMore).toBeUndefined();
+  });
+
+  it("marks the summary boundary on long untitled notes", () => {
+    const textA = "A".repeat(1000);
+    const textB = "B".repeat(1000);
+    const body = JSON.stringify({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: textA }] },
+        { type: "paragraph", content: [{ type: "text", text: textB }] },
+      ],
+    });
+    const p1 = `<p>${textA}</p>`;
+    const p2 = `<p>${textB}</p>`;
+    const view = toPostView(
+      makePostWithMedia({ title: null, body, bodyHtml: p1 + p2 }),
+      EMPTY_CTX,
+    );
+    // Untitled notes carry no excerpt — the card renders the full body and the
+    // marker tells the feed where to clamp the tail for expand-in-place.
+    expect(view.summaryHtml).toBeUndefined();
+    expect(view.summaryHasMore).toBe(true);
+    expect(view.bodyHtml).toBe(`${p1}<span data-note-break></span>${p2}`);
+  });
+
+  it("uses the larger untitled limits before truncating", () => {
+    // Seven ~100-char blocks (700 chars) fit the note limits (10 blocks /
+    // 1500 chars) but would have exceeded the old article limits (5 / 500).
+    const texts = Array.from({ length: 7 }, (_, i) => `${i}`.padEnd(100, "x"));
+    const body = JSON.stringify({
+      type: "doc",
+      content: texts.map((text) => ({
+        type: "paragraph",
+        content: [{ type: "text", text }],
+      })),
+    });
+    const view = toPostView(
+      makePostWithMedia({
+        title: null,
+        body,
+        bodyHtml: texts.map((t) => `<p>${t}</p>`).join(""),
       }),
       EMPTY_CTX,
     );
     expect(view.summaryHtml).toBeUndefined();
     expect(view.summaryHasMore).toBeUndefined();
+  });
+
+  it("does not truncate an untitled note to hide a tiny tail", () => {
+    const body = JSON.stringify({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "A".repeat(1400) }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "B".repeat(150) }],
+        },
+      ],
+    });
+    const view = toPostView(
+      makePostWithMedia({
+        title: null,
+        body,
+        bodyHtml: `<p>${"A".repeat(1400)}</p><p>${"B".repeat(150)}</p>`,
+      }),
+      EMPTY_CTX,
+    );
+    expect(view.summaryHtml).toBeUndefined();
+    expect(view.summaryHasMore).toBeUndefined();
+  });
+
+  it("honors moreBreak on untitled notes regardless of tail size", () => {
+    const body = JSON.stringify({
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "Lead" }] },
+        { type: "moreBreak" },
+        { type: "paragraph", content: [{ type: "text", text: "tiny" }] },
+      ],
+    });
+    const view = toPostView(
+      makePostWithMedia({
+        title: null,
+        body,
+        bodyHtml: "<p>Lead</p><!--more--><p>tiny</p>",
+      }),
+      EMPTY_CTX,
+    );
+    expect(view.summaryHtml).toBeUndefined();
+    expect(view.summaryHasMore).toBe(true);
+    expect(view.bodyHtml).toBe(
+      "<p>Lead</p><span data-note-break></span><!--more--><p>tiny</p>",
+    );
   });
 
   it("does not compute summaryHtml for posts without body", () => {
@@ -618,7 +723,6 @@ describe("toNavItemView", () => {
     const view = toNavItemView(
       makeNavItem({ url: "https://example.com/about" }),
       "/about",
-      "latest",
       false,
       "",
       undefined,
@@ -633,7 +737,6 @@ describe("toNavItemView", () => {
     const view = toNavItemView(
       makeNavItem({ url: "https://other.com/about" }),
       "/about",
-      "latest",
       false,
       "",
       undefined,
@@ -650,7 +753,6 @@ describe("toNavItemView", () => {
     const view = toNavItemView(
       makeNavItem({ url: "https://jant.example/about" }),
       "/about",
-      "latest",
       false,
       "",
       undefined,
@@ -665,7 +767,6 @@ describe("toNavItemView", () => {
     const view = toNavItemView(
       makeNavItem({ url: "https://example.com/blog/about" }),
       "/blog/about",
-      "latest",
       false,
       "/blog",
       undefined,
@@ -694,7 +795,6 @@ describe("toNavItemView", () => {
         url: "/settings",
       }),
       "/signin",
-      "latest",
       false,
     );
 
@@ -712,7 +812,6 @@ describe("toNavItemView", () => {
         url: "/settings",
       }),
       "/settings",
-      "latest",
       true,
     );
 
@@ -721,7 +820,7 @@ describe("toNavItemView", () => {
     expect(view.isActive).toBe(true);
   });
 
-  it("resolves the latest built-in item to / when it is the home default", () => {
+  it("resolves the latest built-in item to /", () => {
     const view = toNavItemView(
       makeNavItem({
         type: "system",
@@ -730,30 +829,13 @@ describe("toNavItemView", () => {
         url: "/latest",
       }),
       "/",
-      "latest",
     );
 
     expect(view.url).toBe("/");
     expect(view.isActive).toBe(true);
   });
 
-  it("keeps the latest built-in item on /latest when featured owns the homepage", () => {
-    const view = toNavItemView(
-      makeNavItem({
-        type: "system",
-        systemKey: "latest",
-        label: "Latest",
-        url: "/latest",
-      }),
-      "/latest",
-      "featured",
-    );
-
-    expect(view.url).toBe("/latest");
-    expect(view.isActive).toBe(true);
-  });
-
-  it("resolves the featured built-in item to / when it is the home default", () => {
+  it("resolves the featured built-in item to /featured", () => {
     const view = toNavItemView(
       makeNavItem({
         type: "system",
@@ -761,11 +843,10 @@ describe("toNavItemView", () => {
         label: "Featured",
         url: "/featured",
       }),
-      "/",
-      "featured",
+      "/featured",
     );
 
-    expect(view.url).toBe("/");
+    expect(view.url).toBe("/featured");
     expect(view.isActive).toBe(true);
   });
 
@@ -798,9 +879,9 @@ describe("toNavItemViews", () => {
       makeNavItem({ id: UUID_NAV_2, url: "/archive" }),
       makeNavItem({ id: UUID_NAV_3, url: "https://github.com" }),
     ];
-    const views = toNavItemViews(items, "/archive", "featured");
+    const views = toNavItemViews(items, "/archive");
     expect(views).toHaveLength(3);
-    expect(views[0]?.url).toBe("/latest");
+    expect(views[0]?.url).toBe("/");
     expect(views[0]).toHaveProperty("isActive", false);
     expect(views[1]).toHaveProperty("isActive", true);
     expect(views[2]).toHaveProperty("isExternal", true);

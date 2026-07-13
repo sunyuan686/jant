@@ -51,7 +51,7 @@ export function SettingsRootContent({
       )
     : i18n._(
         msg({
-          message: "Sessions and password",
+          message: "Sign-in, export, and deletion",
           comment:
             "@context: Settings item description for account settings on the settings home page",
         }),
@@ -171,7 +171,7 @@ export function SettingsRootContent({
           )}
           description={i18n._(
             msg({
-              message: "Header links, home feed, and overflow menu",
+              message: "Header links, built-in destinations, and overflow menu",
               comment: "@context: Settings item description for navigation",
             }),
           )}
@@ -333,7 +333,7 @@ export function SettingsRootContent({
           tone="subtle"
           name={i18n._(
             msg({
-              message: "Account",
+              message: "Account & Data",
               comment: "@context: Settings item — account settings",
             }),
           )}

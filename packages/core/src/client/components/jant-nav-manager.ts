@@ -7,7 +7,7 @@
  * - SortableJS drag-and-drop reorder with immediate preview update
  * - Add link forms
  * - System nav item toggles with immediate list/preview update
- * - Dispatches events for update/delete (handled by bridge)
+ * - Applies server-rendered site header fragments after saved changes
  *
  * Light DOM only — BaseCoat and Tailwind classes apply directly.
  */
@@ -27,14 +27,23 @@ import {
 import { showConfirmDialog } from "../confirm.js";
 import { showToast } from "../toast.js";
 import { publicPath } from "../runtime-paths.js";
+import { destroySiteHeaderNav, initSiteHeaderNav } from "../site-header-nav.js";
 import type {
   NavManagerCollection,
   NavManagerItem,
   NavManagerLabels,
-  NavManagerUpdateDetail,
-  NavManagerDeleteDetail,
+  NavManagerSuggestedLink,
   SystemNavConfig,
 } from "./nav-manager-types.js";
+
+const SITE_HEADER_REQUEST_HEADER = "X-Jant-Site-Header";
+const INCLUDE_SITE_HEADER_RESPONSE = "include";
+
+type NavManagerMutationResponse<T extends object> = T & {
+  headerHtml?: string;
+};
+
+type SortableEndEvent = Parameters<NonNullable<SortableOptions["onEnd"]>>[0];
 
 export class JantNavManager extends LitElement {
   static properties = {
@@ -42,6 +51,7 @@ export class JantNavManager extends LitElement {
     labels: { type: Object },
     systemNavItems: { type: Array, attribute: "system-nav-items" },
     collections: { type: Array },
+    suggestedLinks: { type: Array, attribute: "suggested-links" },
     siteName: { type: String, attribute: "site-name" },
 
     _items: { state: true },
@@ -56,12 +66,14 @@ export class JantNavManager extends LitElement {
     _showPreviewMore: { state: true },
     _addingCollectionId: { state: true },
     _showCollectionPicker: { state: true },
+    _addingSuggestedKey: { state: true },
   };
 
   declare items: NavManagerItem[];
   declare labels: NavManagerLabels;
   declare systemNavItems: SystemNavConfig[];
   declare collections: NavManagerCollection[];
+  declare suggestedLinks: NavManagerSuggestedLink[];
   declare siteName: string;
 
   declare _items: NavManagerItem[];
@@ -78,6 +90,8 @@ export class JantNavManager extends LitElement {
   /** ID of the collection currently being added (for loading state) */
   declare _addingCollectionId: string | null;
   declare _showCollectionPicker: boolean;
+  /** Key of the suggested link currently being added */
+  declare _addingSuggestedKey: string | null;
 
   #sortableHeader: { destroy(): void } | null = null;
   #sortableMore: { destroy(): void } | null = null;
@@ -124,6 +138,7 @@ export class JantNavManager extends LitElement {
     this.labels = {} as NavManagerLabels;
     this.systemNavItems = [];
     this.collections = [];
+    this.suggestedLinks = [];
     this.siteName = "";
 
     this._items = [];
@@ -138,6 +153,7 @@ export class JantNavManager extends LitElement {
     this._showPreviewMore = false;
     this._addingCollectionId = null;
     this._showCollectionPicker = false;
+    this._addingSuggestedKey = null;
   }
 
   protected update(changedProperties: PropertyValueMap<JantNavManager>): void {
@@ -164,6 +180,69 @@ export class JantNavManager extends LitElement {
     document.removeEventListener("click", this.#closeLinkForm);
     document.removeEventListener("click", this.#closeCollectionPicker);
     this.#closePreviewMore();
+  }
+
+  #jsonMutationHeaders(): Record<string, string> {
+    return {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      [SITE_HEADER_REQUEST_HEADER]: INCLUDE_SITE_HEADER_RESPONSE,
+    };
+  }
+
+  #deleteMutationHeaders(): Record<string, string> {
+    return {
+      Accept: "application/json",
+      [SITE_HEADER_REQUEST_HEADER]: INCLUDE_SITE_HEADER_RESPONSE,
+    };
+  }
+
+  #stripHeaderHtml<T extends object>(
+    response: NavManagerMutationResponse<T>,
+  ): T {
+    const body = { ...response };
+    delete (body as { headerHtml?: string }).headerHtml;
+    return body as T;
+  }
+
+  #normalizeItem(item: NavManagerItem): NavManagerItem {
+    const systemLabel =
+      item.type === "system"
+        ? this.systemNavItems.find((config) => config.key === item.systemKey)
+            ?.label
+        : undefined;
+    const displayLabel =
+      item.label.trim() || systemLabel || item.displayLabel || item.label;
+
+    return { ...item, displayLabel };
+  }
+
+  #applySiteHeaderHtml(headerHtml: string | undefined) {
+    if (!headerHtml) return;
+
+    const template = document.createElement("template");
+    template.innerHTML = headerHtml.trim();
+
+    const selectors = [
+      '[data-site-header-fragment="header"]',
+      '[data-site-header-fragment="drawer-backdrop"]',
+      '[data-site-header-fragment="drawer"]',
+    ];
+    let replaced = false;
+
+    destroySiteHeaderNav(document);
+    for (const selector of selectors) {
+      const current = document.querySelector<HTMLElement>(selector);
+      const next = template.content.querySelector<HTMLElement>(selector);
+      if (!current || !next) continue;
+
+      current.replaceWith(next);
+      replaced = true;
+    }
+
+    if (replaced) {
+      initSiteHeaderNav(document);
+    }
   }
 
   // ===========================================================================
@@ -203,119 +282,115 @@ export class JantNavManager extends LitElement {
         this.#revertNextSibling = captureSortableRevertNextSibling(evt);
       },
       onEnd: (evt) => {
-        const targetList = evt.to;
-        const sourceList = evt.from;
-        const crossList = sourceList !== targetList;
-        const targetPlacement: "header" | "more" =
-          targetList.id === "nav-items-header" ? "header" : "more";
-        const headerList = this.querySelector<HTMLElement>("#nav-items-header");
-        const moreList = this.querySelector<HTMLElement>("#nav-items-more");
-
-        const movedId = evt.item?.dataset?.navId;
-        if (!movedId || !headerList || !moreList) {
-          this.#revertNextSibling = null;
-          return;
-        }
-
-        const headerIds = readSortableDataIds(
-          headerList,
-          "[data-nav-id]",
-          "navId",
-        );
-        const moreIds = readSortableDataIds(moreList, "[data-nav-id]", "navId");
-
-        if (crossList) {
-          evt.item.parentNode?.removeChild(evt.item);
-          if (this.#revertNextSibling) {
-            sourceList.insertBefore(evt.item, this.#revertNextSibling);
-          } else if (
-            evt.oldIndex != null &&
-            evt.oldIndex < sourceList.children.length
-          ) {
-            sourceList.insertBefore(
-              evt.item,
-              sourceList.children[evt.oldIndex] ?? null,
-            );
-          } else {
-            sourceList.appendChild(evt.item);
-          }
-        } else {
-          revertSortableDomMove(targetList, evt, this.#revertNextSibling);
-        }
-
-        this.#revertNextSibling = null;
-        this.#destroySortables();
-
-        const orderedIds = [...new Set([...headerIds, ...moreIds])];
-        const itemMap = new Map(
-          this._items.map((item) => [
-            item.id,
-            item.id === movedId
-              ? { ...item, placement: targetPlacement }
-              : { ...item },
-          ]),
-        );
-        const reorderedItems = orderedIds
-          .map((id) => itemMap.get(id))
-          .filter((item): item is NavManagerItem => item !== undefined);
-        const remainingItems = this._items
-          .filter((item) => !orderedIds.includes(item.id))
-          .map((item) =>
-            item.id === movedId
-              ? { ...item, placement: targetPlacement }
-              : { ...item },
-          );
-        this._items = [...reorderedItems, ...remainingItems];
-
-        const targetIds = targetPlacement === "header" ? headerIds : moreIds;
-        const {
-          movedId: persistedId,
-          afterId,
-          beforeId,
-        } = getSortableMove(targetIds, evt.newIndex);
-        if (!persistedId) return;
-
-        if (crossList) {
-          fetch(`/api/nav-items/${movedId}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ placement: targetPlacement }),
-          })
-            .then(async (res) => {
-              if (!res.ok) return false;
-
-              const moveRes = await fetch(
-                `/api/nav-items/${persistedId}/move`,
-                {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    after: afterId ?? null,
-                    before: beforeId ?? null,
-                  }),
-                },
-              );
-              return moveRes.ok;
-            })
-            .then((ok) => {
-              if (ok) showToast(this.labels.placementSaved);
-              else showToast(this.labels.saveFailed, "error");
-            });
-        } else {
-          fetch(`/api/nav-items/${persistedId}/move`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              after: afterId ?? null,
-              before: beforeId ?? null,
-            }),
-          }).then((res) => {
-            if (res.ok) showToast(this.labels.orderSaved);
-            else showToast(this.labels.saveFailed, "error");
-          });
-        }
+        void this.#handleSortableEnd(evt);
       },
     };
+  }
+
+  async #handleSortableEnd(evt: SortableEndEvent) {
+    const targetList = evt.to;
+    const sourceList = evt.from;
+    const crossList = sourceList !== targetList;
+    const targetPlacement: "header" | "more" =
+      targetList.id === "nav-items-header" ? "header" : "more";
+    const headerList = this.querySelector<HTMLElement>("#nav-items-header");
+    const moreList = this.querySelector<HTMLElement>("#nav-items-more");
+    const previousItems = this._items.map((item) => ({ ...item }));
+
+    const movedId = evt.item?.dataset?.navId;
+    if (!movedId || !headerList || !moreList) {
+      this.#revertNextSibling = null;
+      return;
+    }
+
+    const headerIds = readSortableDataIds(headerList, "[data-nav-id]", "navId");
+    const moreIds = readSortableDataIds(moreList, "[data-nav-id]", "navId");
+
+    if (crossList) {
+      evt.item.parentNode?.removeChild(evt.item);
+      if (this.#revertNextSibling) {
+        sourceList.insertBefore(evt.item, this.#revertNextSibling);
+      } else if (
+        evt.oldIndex != null &&
+        evt.oldIndex < sourceList.children.length
+      ) {
+        sourceList.insertBefore(
+          evt.item,
+          sourceList.children[evt.oldIndex] ?? null,
+        );
+      } else {
+        sourceList.appendChild(evt.item);
+      }
+    } else {
+      revertSortableDomMove(targetList, evt, this.#revertNextSibling);
+    }
+
+    this.#revertNextSibling = null;
+    this.#destroySortables();
+
+    const orderedIds = [...new Set([...headerIds, ...moreIds])];
+    const itemMap = new Map(
+      this._items.map((item) => [
+        item.id,
+        item.id === movedId
+          ? { ...item, placement: targetPlacement }
+          : { ...item },
+      ]),
+    );
+    const reorderedItems = orderedIds
+      .map((id) => itemMap.get(id))
+      .filter((item): item is NavManagerItem => item !== undefined);
+    const remainingItems = this._items
+      .filter((item) => !orderedIds.includes(item.id))
+      .map((item) =>
+        item.id === movedId
+          ? { ...item, placement: targetPlacement }
+          : { ...item },
+      );
+    this._items = [...reorderedItems, ...remainingItems];
+
+    const targetIds = targetPlacement === "header" ? headerIds : moreIds;
+    const {
+      movedId: persistedId,
+      afterId,
+      beforeId,
+    } = getSortableMove(targetIds, evt.newIndex);
+    if (!persistedId) return;
+
+    try {
+      if (crossList) {
+        const placementRes = await fetch(`/api/nav-items/${movedId}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ placement: targetPlacement }),
+        });
+        if (!placementRes.ok) throw new Error(`HTTP ${placementRes.status}`);
+      }
+
+      const moveRes = await fetch(`/api/nav-items/${persistedId}/move`, {
+        method: "PUT",
+        headers: this.#jsonMutationHeaders(),
+        body: JSON.stringify({
+          after: afterId ?? null,
+          before: beforeId ?? null,
+        }),
+      });
+      if (!moveRes.ok) throw new Error(`HTTP ${moveRes.status}`);
+
+      const moved =
+        (await moveRes.json()) as NavManagerMutationResponse<NavManagerItem>;
+      this.#applySiteHeaderHtml(moved.headerHtml);
+      showToast(
+        crossList ? this.labels.placementSaved : this.labels.orderSaved,
+      );
+    } catch {
+      this.#destroySortables();
+      this._items = previousItems;
+      showToast(this.labels.saveFailed, "error");
+    }
   }
 
   // ===========================================================================
@@ -332,25 +407,36 @@ export class JantNavManager extends LitElement {
     }
   }
 
-  #handleUpdate(item: NavManagerItem) {
+  async #handleUpdate(item: NavManagerItem) {
     const label = this._editLabel.trim();
     if (!label && item.type !== "system") {
       showToast(this.labels.labelRequired, "error");
       return;
     }
 
-    const detail: NavManagerUpdateDetail = {
-      id: item.id,
-      label,
-      ...(item.type === "link" && { url: this._editUrl.trim() }),
-    };
+    try {
+      const res = await fetch(`/api/nav-items/${item.id}`, {
+        method: "PUT",
+        headers: this.#jsonMutationHeaders(),
+        body: JSON.stringify({
+          label,
+          ...(item.type === "link" && { url: this._editUrl.trim() }),
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    this.dispatchEvent(
-      new CustomEvent<NavManagerUpdateDetail>("jant:nav-update", {
-        bubbles: true,
-        detail,
-      }),
-    );
+      const response =
+        (await res.json()) as NavManagerMutationResponse<NavManagerItem>;
+      const updated = this.#normalizeItem(this.#stripHeaderHtml(response));
+      this.#destroySortables();
+      this._items = this._items.map((current) =>
+        current.id === updated.id ? updated : current,
+      );
+      this._editingId = null;
+      this.#applySiteHeaderHtml(response.headerHtml);
+    } catch {
+      showToast(this.labels.saveFailed, "error");
+    }
   }
 
   async #handleDelete(item: NavManagerItem) {
@@ -368,12 +454,23 @@ export class JantNavManager extends LitElement {
     });
     if (!confirmed) return;
 
-    this.dispatchEvent(
-      new CustomEvent<NavManagerDeleteDetail>("jant:nav-delete", {
-        bubbles: true,
-        detail: { id: item.id },
-      }),
-    );
+    try {
+      const res = await fetch(`/api/nav-items/${item.id}`, {
+        method: "DELETE",
+        headers: this.#deleteMutationHeaders(),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const response = (await res.json()) as NavManagerMutationResponse<{
+        success: true;
+      }>;
+      this.#destroySortables();
+      this._items = this._items.filter((current) => current.id !== item.id);
+      this._editingId = null;
+      this.#applySiteHeaderHtml(response.headerHtml);
+    } catch {
+      showToast(this.labels.deleteFailed, "error");
+    }
   }
 
   // ===========================================================================
@@ -392,21 +489,21 @@ export class JantNavManager extends LitElement {
     try {
       const res = await fetch("/api/nav-items", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: this.#jsonMutationHeaders(),
         body: JSON.stringify({ type: "link", label, url, placement: "header" }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      const created: NavManagerItem = await res.json();
+      const response =
+        (await res.json()) as NavManagerMutationResponse<NavManagerItem>;
+      const created = this.#normalizeItem(this.#stripHeaderHtml(response));
       this.#destroySortables();
       this._items = [...this._items, created];
       this._newLinkLabel = "";
       this._newLinkUrl = "";
       this._showLinkForm = false;
       document.removeEventListener("click", this.#closeLinkForm);
+      this.#applySiteHeaderHtml(response.headerHtml);
     } catch {
       showToast(this.labels.saveFailed, "error");
     } finally {
@@ -425,10 +522,7 @@ export class JantNavManager extends LitElement {
     try {
       const res = await fetch("/api/nav-items", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: this.#jsonMutationHeaders(),
         body: JSON.stringify({
           type: "collection",
           collectionId,
@@ -437,14 +531,110 @@ export class JantNavManager extends LitElement {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      const created: NavManagerItem = await res.json();
+      const response =
+        (await res.json()) as NavManagerMutationResponse<NavManagerItem>;
+      const created = this.#normalizeItem(this.#stripHeaderHtml(response));
       this.#destroySortables();
       this._items = [...this._items, created];
       this.#closeCollectionPicker();
+      this.#applySiteHeaderHtml(response.headerHtml);
     } catch {
       showToast(this.labels.saveFailed, "error");
     } finally {
       this._addingCollectionId = null;
+    }
+  }
+
+  // ===========================================================================
+  // Suggested link handlers
+  // ===========================================================================
+
+  #getComparableInternalPath(url: string): string | null {
+    if (
+      url.startsWith("http://") ||
+      url.startsWith("https://") ||
+      url.startsWith("//") ||
+      url.startsWith("mailto:") ||
+      url.startsWith("tel:") ||
+      url.startsWith("#")
+    ) {
+      return null;
+    }
+
+    try {
+      const pathname = new URL(url, "https://jant.invalid").pathname;
+      const normalized = pathname
+        .trim()
+        .toLowerCase()
+        .replace(/^\/+|\/+$/g, "")
+        .replace(/\/+/g, "/");
+      return normalized ? `/${normalized}` : "/";
+    } catch {
+      return null;
+    }
+  }
+
+  #isSuggestedLinkAdded(link: NavManagerSuggestedLink): boolean {
+    const path = this.#getComparableInternalPath(link.url);
+    const hasMatchingPath =
+      path !== null &&
+      this._items.some(
+        (item) => this.#getComparableInternalPath(item.url) === path,
+      );
+    if (hasMatchingPath) return true;
+
+    return Boolean(
+      link.collectionId &&
+      this._items.some(
+        (item) =>
+          item.type === "collection" && item.collectionId === link.collectionId,
+      ),
+    );
+  }
+
+  get #availableSuggestedLinks(): NavManagerSuggestedLink[] {
+    return (this.suggestedLinks ?? []).filter(
+      (link) => !this.#isSuggestedLinkAdded(link),
+    );
+  }
+
+  async #handleAddSuggestedLink(link: NavManagerSuggestedLink) {
+    if (this._addingSuggestedKey) return;
+
+    this._addingSuggestedKey = link.key;
+    try {
+      const body =
+        link.navItemType === "collection" && link.collectionId
+          ? {
+              type: "collection",
+              collectionId: link.collectionId,
+              placement: "header",
+            }
+          : {
+              type: "link",
+              label: link.label,
+              url: link.url,
+              placement: "header",
+            };
+
+      const res = await fetch("/api/nav-items", {
+        method: "POST",
+        headers: this.#jsonMutationHeaders(),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const response =
+        (await res.json()) as NavManagerMutationResponse<NavManagerItem>;
+      const created = this.#normalizeItem(this.#stripHeaderHtml(response));
+      this.#destroySortables();
+      this._items = [...this._items, created];
+      this.#applySiteHeaderHtml(response.headerHtml);
+      showToast(this.labels.suggestedLinkAdded);
+    } catch {
+      showToast(this.labels.saveFailed, "error");
+    } finally {
+      this._addingSuggestedKey = null;
     }
   }
 
@@ -465,10 +655,7 @@ export class JantNavManager extends LitElement {
       if (enabled) {
         const res = await fetch("/api/nav-items", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
+          headers: this.#jsonMutationHeaders(),
           body: JSON.stringify({
             type: "system",
             systemKey: config.key,
@@ -476,12 +663,12 @@ export class JantNavManager extends LitElement {
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-        const created: NavManagerItem = await res.json();
+        const response =
+          (await res.json()) as NavManagerMutationResponse<NavManagerItem>;
+        const created = this.#normalizeItem(this.#stripHeaderHtml(response));
         this.#destroySortables();
-        this._items = [
-          ...this._items,
-          { ...created, displayLabel: config.label },
-        ];
+        this._items = [...this._items, created];
+        this.#applySiteHeaderHtml(response.headerHtml);
       } else {
         const existing = this._items.find(
           (item) => item.type === "system" && item.systemKey === config.key,
@@ -489,12 +676,16 @@ export class JantNavManager extends LitElement {
         if (existing) {
           const res = await fetch(`/api/nav-items/${existing.id}`, {
             method: "DELETE",
-            headers: { Accept: "application/json" },
+            headers: this.#deleteMutationHeaders(),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
+          const response = (await res.json()) as NavManagerMutationResponse<{
+            success: true;
+          }>;
           this.#destroySortables();
           this._items = this._items.filter((item) => item.id !== existing.id);
+          this.#applySiteHeaderHtml(response.headerHtml);
         }
       }
     } catch {
@@ -831,6 +1022,45 @@ export class JantNavManager extends LitElement {
         </div>
         ${this.#renderEditPanel(item)}
       </div>
+    `;
+  }
+
+  #renderSuggestedLinksSection() {
+    const available = this.#availableSuggestedLinks;
+    if (available.length === 0) return nothing;
+
+    return html`
+      <section class="mt-8">
+        <h2 class="text-lg font-semibold mb-1">
+          ${this.labels.suggestedLinks}
+        </h2>
+        <p class="text-sm text-muted-foreground mb-3">
+          ${this.labels.suggestedLinksDescription}
+        </p>
+        <div class="nav-suggestions-list">
+          ${available.map((link) => {
+            const adding = this._addingSuggestedKey === link.key;
+            return html`
+              <div class="nav-suggestion-item">
+                <div class="nav-suggestion-info">
+                  <span class="nav-suggestion-title">${link.label}</span>
+                  <span class="nav-suggestion-meta">
+                    ${link.url} · ${link.targetLabel}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  class="btn-sm"
+                  ?disabled=${adding || this._addingSuggestedKey !== null}
+                  @click=${() => this.#handleAddSuggestedLink(link)}
+                >
+                  ${this.labels.addSuggestedLink}
+                </button>
+              </div>
+            `;
+          })}
+        </div>
+      </section>
     `;
   }
 
@@ -1175,8 +1405,8 @@ export class JantNavManager extends LitElement {
         </div>
       </section>
 
-      ${this.#renderAddLinkSection()} ${this.#renderAddCollectionSection()}
-      ${this.#renderSystemToggles()}
+      ${this.#renderSuggestedLinksSection()} ${this.#renderAddLinkSection()}
+      ${this.#renderAddCollectionSection()} ${this.#renderSystemToggles()}
     `;
   }
 }

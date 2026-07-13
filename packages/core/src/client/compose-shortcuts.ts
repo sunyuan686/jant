@@ -2,6 +2,7 @@ import {
   getActiveCollectionId,
   getComposeDialog,
   getCurrentDetailPostArticle,
+  getReplyTargetArticle,
   openNewCompose,
   openReplyForArticle,
 } from "./compose-launch.js";
@@ -40,6 +41,34 @@ function shouldIgnoreShortcut(event: globalThis.KeyboardEvent): boolean {
     isInteractiveTarget(event.target) ||
     (activeTarget !== event.target && isInteractiveTarget(activeTarget))
   );
+}
+
+function hasEditQueryParam(): boolean {
+  return new URL(window.location.href).searchParams.get("edit") === "1";
+}
+
+function consumeEditQueryParam() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("edit");
+  const nextSearch = url.searchParams.toString();
+  globalThis.history.replaceState(
+    globalThis.history.state,
+    "",
+    `${url.pathname}${nextSearch ? `?${nextSearch}` : ""}${url.hash}`,
+  );
+}
+
+function openEditFromQueryParam() {
+  if (!document.body?.hasAttribute("data-authenticated")) return;
+  if (!hasEditQueryParam()) return;
+
+  const article = getCurrentDetailPostArticle();
+  const postId = article?.dataset.postId;
+  const composeEl = getComposeDialog();
+  if (!postId || !composeEl) return;
+
+  consumeEditQueryParam();
+  void composeEl.openEdit(postId);
 }
 
 async function toggleFeatured(
@@ -93,14 +122,16 @@ document.addEventListener("keydown", (event: globalThis.KeyboardEvent) => {
     return;
   }
 
-  const article = getCurrentDetailPostArticle();
-  if (!article) return;
-
   if (key === "r") {
+    const article = getReplyTargetArticle();
+    if (!article) return;
     event.preventDefault();
     void openReplyForArticle(article);
     return;
   }
+
+  const article = getCurrentDetailPostArticle();
+  if (!article) return;
 
   if (key === "e") {
     const postId = article.dataset.postId;
@@ -131,3 +162,15 @@ document.addEventListener("keydown", (event: globalThis.KeyboardEvent) => {
     return;
   }
 });
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", openEditFromQueryParam, {
+    once: true,
+  });
+} else {
+  openEditFromQueryParam();
+}
+
+export const __testOnly = {
+  openEditFromQueryParam,
+};

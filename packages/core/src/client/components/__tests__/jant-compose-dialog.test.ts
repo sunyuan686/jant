@@ -230,7 +230,23 @@ const labels: ComposeLabels = {
   showMore: "Show more",
   showLess: "Show less",
   newThread: "New Thread",
+  replyTitle: "Reply",
+  editTitle: "Edit",
   slashHint: "Type / for commands",
+  tableControls: {
+    toolbarLabel: "Table controls",
+    addRowAbove: "Add row above",
+    addRowBelow: "Add row below",
+    addColumnBefore: "Add column before",
+    addColumnAfter: "Add column after",
+    options: "Table options",
+    deleteRow: "Delete row",
+    deleteColumn: "Delete column",
+    toggleHeaderRow: "Toggle header row",
+    deleteTable: "Delete table",
+    sizePickerLabel: "Choose table size",
+    insertTableSize: "Insert %rows% by %cols% table",
+  },
   collectionFormLabels: {
     titleLabel: "Title",
     titlePlaceholder: "My Collection",
@@ -599,6 +615,320 @@ describe("JantComposeDialog", () => {
     await flushUpdates(el);
 
     expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  function mockEditPost(post: Record<string, unknown>) {
+    return vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "pst_123", ...post }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  }
+
+  it("shows the format switcher instead of a title while editing", async () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+    mockEditPost({ format: "note", title: "Hello", body: null });
+
+    const el = await createElement();
+    await el.openEdit("pst_123");
+    await flushUpdates(el);
+
+    expect(el.querySelector(".compose-segmented")).not.toBeNull();
+    // The "Edit post" title is gone — the switcher takes the center slot.
+    expect(el.querySelector(".compose-dialog-title")).toBeNull();
+  });
+
+  it("shows a Reply title with the format selector above the post when replying", async () => {
+    const el = await createElement();
+    await el.openReply("019ce8ce-d6d8-7fda-a5df-c2da2bef5ade", {
+      contentHtml: "<p>Parent</p>",
+      dateText: "Mar 14",
+    });
+    await flushUpdates(el);
+
+    expect(el.querySelector(".compose-dialog-title")?.textContent?.trim()).toBe(
+      "Reply",
+    );
+    // The header center no longer hosts the format selector...
+    expect(
+      el.querySelector(".compose-dialog-header-center .compose-segmented"),
+    ).toBeNull();
+    // ...it sits inline above the reply editor instead.
+    expect(el.querySelector(".compose-thread-post-header")).not.toBeNull();
+    expect(
+      el.querySelector(".compose-thread-layout.compose-reply-compose-layout"),
+    ).not.toBeNull();
+  });
+
+  it("shows an Edit title with the format selector above the post when editing a reply", async () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+    const parentId = "019ce8ce-d6d8-7fda-a5df-c2da2bef5ade";
+    // A fresh Response per call: openEdit reads the edited post, then
+    // _fetchReplyContext reads the parent — a single shared Response body can
+    // only be consumed once.
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      const json = url.includes(parentId)
+        ? { id: parentId, bodyHtml: "<p>Parent</p>", format: "note" }
+        : {
+            id: "pst_123",
+            format: "note",
+            title: "Hello",
+            body: null,
+            replyToId: parentId,
+          };
+      return Promise.resolve(
+        new Response(JSON.stringify(json), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    });
+
+    const el = await createElement();
+    await el.openEdit("pst_123");
+    await flushUpdates(el);
+
+    expect(el.querySelector(".compose-dialog-title")?.textContent?.trim()).toBe(
+      "Edit",
+    );
+    expect(
+      el.querySelector(".compose-dialog-header-center .compose-segmented"),
+    ).toBeNull();
+    expect(el.querySelector(".compose-thread-post-header")).not.toBeNull();
+  });
+
+  it("switches format from the inline selector when replying", async () => {
+    const el = await createElement();
+    await el.openReply("019ce8ce-d6d8-7fda-a5df-c2da2bef5ade", {
+      contentHtml: "<p>Parent</p>",
+      dateText: "Mar 14",
+    });
+    await flushUpdates(el);
+
+    const items = el.querySelectorAll<HTMLButtonElement>(
+      ".compose-thread-post-header .compose-segmented-item",
+    );
+    // note / link / quote
+    expect(items.length).toBe(3);
+    items[1].click(); // link
+    await flushUpdates(el);
+
+    expect(el._format).toBe("link");
+  });
+
+  it("edit-mode format switch folds quote fields into the body", async () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+    mockEditPost({
+      format: "quote",
+      quoteText: "Stay hungry",
+      sourceName: "Jobs",
+      body: null,
+    });
+
+    const el = await createElement();
+    await el.openEdit("pst_123");
+    await flushUpdates(el);
+
+    const editor = requireElement(
+      el.querySelector<JantComposeEditor>("jant-compose-editor"),
+      "expected compose editor",
+    );
+    expect(editor._quoteText).toBe("Stay hungry");
+
+    // Click the Note segmented button.
+    el.querySelectorAll<HTMLButtonElement>(
+      ".compose-segmented-item",
+    )[0].click();
+    await flushUpdates(el);
+
+    expect(el._format).toBe("note");
+    expect(editor._quoteText).toBe("");
+    expect(editor._quoteAuthor).toBe("");
+    expect(editor._bodyJson?.content?.[0]?.type).toBe("blockquote");
+  });
+
+  it("edit-mode format switch marks the post as having unsaved changes", async () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+    mockEditPost({ format: "note", title: "Hello", body: null });
+
+    const el = await createElement();
+    await el.openEdit("pst_123");
+    await flushUpdates(el);
+
+    const hasUnsaved = (el as unknown as { _hasUnsavedChanges(): boolean })
+      ._hasUnsavedChanges;
+    expect(hasUnsaved.call(el)).toBe(false);
+
+    el.querySelectorAll<HTMLButtonElement>(
+      ".compose-segmented-item",
+    )[2].click();
+    await flushUpdates(el);
+
+    expect(el._format).toBe("quote");
+    expect(hasUnsaved.call(el)).toBe(true);
+  });
+
+  it("edit-mode autosave writes to the edit-specific draft key", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+        cb(0);
+        return 1;
+      });
+      mockEditPost({ format: "note", title: "Hello", body: null });
+
+      const el = await createElement();
+      await el.openEdit("pst_123");
+      await el.updateComplete;
+
+      const editor = requireElement(
+        el.querySelector<JantComposeEditor>("jant-compose-editor"),
+        "expected compose editor",
+      );
+      editor._bodyJson = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Edited body" }],
+          },
+        ],
+      };
+      await editor.updateComplete;
+
+      vi.advanceTimersByTime(1000);
+
+      expect(
+        globalThis.localStorage.getItem("jant:compose-edit:pst_123"),
+      ).not.toBeNull();
+      expect(globalThis.localStorage.getItem("jant:compose-draft")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("autosaves only on a real edit, not on open or a bare format switch", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+        cb(0);
+        return 1;
+      });
+      mockEditPost({
+        format: "note",
+        title: null,
+        body: JSON.stringify({
+          type: "doc",
+          content: [
+            { type: "paragraph", content: [{ type: "text", text: "hi" }] },
+          ],
+        }),
+      });
+
+      const el = await createElement();
+      await el.openEdit("pst_123");
+      await el.updateComplete;
+      const editor = requireElement(
+        el.querySelector<JantComposeEditor>("jant-compose-editor"),
+        "expected compose editor",
+      );
+      await editor.updateComplete;
+
+      // Opening a post for edit must not persist a local draft on its own.
+      vi.advanceTimersByTime(1000);
+      expect(
+        globalThis.localStorage.getItem("jant:compose-edit:pst_123"),
+      ).toBeNull();
+
+      // Switching format only must not persist either.
+      el.querySelectorAll<HTMLButtonElement>(
+        ".compose-segmented-item",
+      )[2].click();
+      await el.updateComplete;
+      await editor.updateComplete;
+      vi.advanceTimersByTime(1000);
+      expect(
+        globalThis.localStorage.getItem("jant:compose-edit:pst_123"),
+      ).toBeNull();
+
+      // A real edit afterwards persists as usual, with the switched format.
+      editor._quoteText = "now editing";
+      await editor.updateComplete;
+      vi.advanceTimersByTime(1000);
+
+      const saved = globalThis.localStorage.getItem(
+        "jant:compose-edit:pst_123",
+      );
+      expect(saved).not.toBeNull();
+      expect(JSON.parse(saved as string).format).toBe("quote");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("enables the publish button right after an edit-mode switch to quote", async () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+    // A note whose body is a blockquote + paragraph — switching to quote
+    // extracts the blockquote into the quote-text field.
+    mockEditPost({
+      format: "note",
+      title: null,
+      body: JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "blockquote",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: "quote2233" }],
+              },
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: "— author1" }],
+              },
+            ],
+          },
+          { type: "paragraph", content: [{ type: "text", text: "这个22" }] },
+        ],
+      }),
+    });
+
+    const el = await createElement();
+    await el.openEdit("pst_123");
+    await flushUpdates(el);
+
+    el.querySelectorAll<HTMLButtonElement>(
+      ".compose-segmented-item",
+    )[2].click();
+    await flushUpdates(el);
+
+    const editor = requireElement(
+      el.querySelector<JantComposeEditor>("jant-compose-editor"),
+      "expected compose editor",
+    );
+    expect(el._format).toBe("quote");
+    expect(editor._quoteText).toBe("quote2233");
+    // The submit button must reflect the now-valid quote, not the stale
+    // pre-switch format.
+    expect(
+      el.querySelector<HTMLButtonElement>(".compose-publish-main")?.disabled,
+    ).toBe(false);
   });
 
   it("submit dispatches jant:compose-submit-deferred with correct payload", async () => {
@@ -2048,6 +2378,34 @@ describe("JantComposeDialog", () => {
     expect(el._threadItems).toHaveLength(MAX_THREAD_POSTS);
   });
 
+  it("scrolls the thread composer to the bottom after adding an item", async () => {
+    const el = await createElement();
+    el._threadItems = [
+      { id: "thread-1", format: "note" },
+      { id: "thread-2", format: "note" },
+    ];
+    await el.updateComplete;
+
+    const threadLayout = requireElement(
+      el.querySelector<HTMLElement>(".compose-thread-compose-layout"),
+      "expected thread compose layout",
+    );
+    Object.defineProperty(threadLayout, "scrollHeight", {
+      configurable: true,
+      value: 640,
+    });
+    threadLayout.scrollTop = 120;
+
+    (
+      el as unknown as {
+        _addThreadItem: () => void;
+      }
+    )._addThreadItem();
+    await flushUpdates(el);
+
+    expect(threadLayout.scrollTop).toBe(640);
+  });
+
   it("omits visibility from locked edit submissions", async () => {
     const el = await createElement();
     const editor = requireElement(
@@ -2751,6 +3109,39 @@ describe("JantComposeDialog", () => {
     expect(css).toMatch(/\.compose-tools-row\s*\{[\s\S]*flex-shrink:\s*0;/);
     expect(css).toMatch(
       /\.compose-editor-row\s+\.compose-attachments-dock\s*\{[\s\S]*max-height:\s*min\(240px,\s*34dvh\);[\s\S]*overflow-y:\s*auto;/,
+    );
+    expect(css).toMatch(
+      /\.compose-reply-compose-layout\s+\.compose-editor-row\s+\.compose-attachments-dock\s*\{[\s\S]*--compose-reply-attachment-width:\s*96px;[\s\S]*--compose-reply-attachment-height:\s*72px;[\s\S]*max-height:\s*min\(116px,\s*18dvh\);/,
+    );
+    expect(css).toMatch(
+      /\.compose-reply-compose-layout[\s\S]*\.compose-attachment:only-child[\s\S]*\.compose-attachment-img,[\s\S]*\.compose-reply-compose-layout[\s\S]*\.compose-attachment:not\(:only-child\)[\s\S]*\.compose-attachment-img\s*\{[\s\S]*height:\s*var\(--compose-reply-attachment-height\);[\s\S]*object-fit:\s*cover;/,
+    );
+    expect(css).toMatch(
+      /\.compose-reply-compose-layout\s+\.compose-thread-post-header\s*\+\s*\.compose-body\s*\{[\s\S]*padding-top:\s*12px;/,
+    );
+    expect(css).toMatch(
+      /@media \(max-width:\s*760px\),\s*\(hover:\s*none\) and \(pointer:\s*coarse\)\s*\{[\s\S]*\.compose-thread-layout\s*\{[\s\S]*padding-top:\s*0\.75rem;[\s\S]*\.compose-thread-layout::before\s*\{[\s\S]*top:\s*0\.75rem;/,
+    );
+    expect(css).toMatch(
+      /\.compose-dialog,[\s\S]*\.compose-page-shell\s*>\s*jant-compose-dialog\s*\{[\s\S]*--compose-quote-input-size:\s*var\(--type-content-subtitle\);[\s\S]*--compose-quote-input-leading:\s*1\.32;/,
+    );
+    expect(css).toMatch(
+      /\.compose-quote-text\s*\{[\s\S]*font-size:\s*var\(--compose-quote-input-size\);[\s\S]*line-height:\s*var\(--compose-quote-input-leading\);/,
+    );
+    expect(css).toMatch(
+      /\.compose-reply-compose-layout\s*\{[\s\S]*--compose-title-input-size:\s*var\(--type-content-subtitle\);[\s\S]*--compose-quote-input-size:\s*calc\(var\(--type-content-body\) \* 1\.06\);[\s\S]*--compose-quote-input-leading:\s*1\.42;[\s\S]*--compose-inline-input-size:\s*var\(--type-base\);/,
+    );
+    expect(css).toMatch(
+      /\.compose-reply-compose-layout\s+\.compose-quote-wrap\s*\{[\s\S]*margin-top:\s*0\.4rem;[\s\S]*padding:\s*24px 18px 18px;[\s\S]*border-radius:\s*0\.95rem;/,
+    );
+    expect(css).toMatch(
+      /\.compose-reply-compose-layout\s+\.compose-link-url-wrap\s*\{[\s\S]*margin-top:\s*0\.4rem;/,
+    );
+    expect(css).toMatch(
+      /\.compose-reply-compose-layout\s+\.compose-quote-text\s*\{[\s\S]*min-height:\s*6\.5rem;[\s\S]*padding-top:\s*0\.35rem;/,
+    );
+    expect(css).toMatch(
+      /\.compose-reply-compose-layout\s+\.compose-tiptap-body\s+\.tiptap\s*\{[\s\S]*font-size:\s*var\(--type-content-body\);/,
     );
   });
 
@@ -3527,6 +3918,57 @@ describe("JantComposeDialog", () => {
     expect(requestCloseSpy).not.toHaveBeenCalled();
     expect(el._confirmPanelOpen).toBe(false);
     expect(document.querySelector(".tiptap-slash-menu")).toBeNull();
+    expect(tiptap.getText()).toBe("");
+  });
+
+  it("Escape cancels the table size picker without closing compose", async () => {
+    const el = await createElement();
+    const editor = requireElement(
+      el.querySelector<JantComposeEditor>("jant-compose-editor"),
+      "expected compose editor",
+    );
+    const tiptap = requireEditor(editor);
+
+    tiptap.commands.focus("end");
+    tiptap.commands.insertContent("/tab");
+    await flushUpdates(el);
+
+    const tableItem = Array.from(
+      document.querySelectorAll<HTMLElement>(".tiptap-slash-item"),
+    ).find((item) => item.textContent?.includes("Table"));
+    requireElement(
+      tableItem ?? null,
+      "expected Table slash item",
+    ).dispatchEvent(
+      new globalThis.MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector(".tiptap-table-size-picker"),
+      ).not.toBeNull();
+    });
+
+    const requestCloseSpy = vi.spyOn(el, "requestClose");
+    const currentSize = requireElement(
+      document.querySelector<HTMLButtonElement>(
+        ".tiptap-table-size-cell.is-current",
+      ),
+      "expected current table size",
+    );
+    const escapeEvent = new globalThis.KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    currentSize.dispatchEvent(escapeEvent);
+    await flushUpdates(el);
+
+    expect(escapeEvent.defaultPrevented).toBe(true);
+    expect(requestCloseSpy).not.toHaveBeenCalled();
+    expect(document.querySelector(".tiptap-table-size-picker")).toBeNull();
     expect(tiptap.getText()).toBe("");
   });
 

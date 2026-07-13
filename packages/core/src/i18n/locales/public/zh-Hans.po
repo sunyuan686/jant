@@ -33,6 +33,11 @@ msgstr ""
 msgid "{count, plural, one {Found # result} other {Found # results}}"
 msgstr ""
 
+#. @context: Toast when several pasted remote images couldn't be rehosted; {count} is the number of images
+#: src/ui/compose/ComposeDialog.tsx
+msgid "{count} images couldn't be saved to your library — their original links were kept."
+msgstr "有 {count} 张图片无法转存到你的媒体库，已保留原链接。"
+
 #. @context: Placeholder for the custom collections link URL
 #: src/ui/shared/collection-management-labels.ts
 msgid "/archive?format=quote or https://example.com"
@@ -158,9 +163,29 @@ msgstr ""
 msgid "Add Collection"
 msgstr ""
 
+#. @context: Compose table action
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Add column after"
+msgstr ""
+
+#. @context: Compose table action
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Add column before"
+msgstr ""
+
 #. @context: Primary action to add a custom link on collections page
 #: src/ui/shared/collection-management-labels.ts
 msgid "Add Link"
+msgstr ""
+
+#. @context: Compose table action
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Add row above"
+msgstr ""
+
+#. @context: Compose table action
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Add row below"
 msgstr ""
 
 #. @context: Archive filter - collection dropdown default
@@ -192,6 +217,11 @@ msgstr ""
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "An abstract editorial layout in warm paper colors"
 msgstr ""
+
+#. @context: Toast when a single pasted remote image couldn't be rehosted (e.g. blocked by the source's hotlink protection)
+#: src/ui/compose/ComposeDialog.tsx
+msgid "An image couldn't be saved to your library — its original link was kept."
+msgstr "有一张图片无法转存到你的媒体库，已保留原链接。"
 
 #. @context: Sample link post body suffix on the theme sample page
 #: src/ui/pages/ThemeSamplePage.tsx
@@ -342,6 +372,11 @@ msgstr ""
 msgid "Choose a new password."
 msgstr ""
 
+#. @context: Accessible title for the table dimension picker
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Choose table size"
+msgstr ""
+
 #. @context: Body copy for the logo downloads section
 #: src/ui/pages/BrandPage.tsx
 msgid "Choose the standard logo for most placements and the reverse logo when you need more contrast."
@@ -462,6 +497,11 @@ msgstr ""
 msgid "Confirm Password"
 msgstr ""
 
+#. @context: Feed link from a truncated article excerpt to its full page
+#: src/ui/feed/NoteCard.tsx
+msgid "Continue →"
+msgstr ""
+
 #. @context: Controls section heading on sample page
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "Controls"
@@ -555,9 +595,29 @@ msgstr ""
 msgid "Delete"
 msgstr ""
 
+#. @context: Compose table action
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Delete column"
+msgstr ""
+
 #. @context: Draft item action
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Delete Draft"
+msgstr ""
+
+#. @context: Inline editor button label for removing a broken image
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Delete image"
+msgstr ""
+
+#. @context: Compose table action
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Delete row"
+msgstr ""
+
+#. @context: Destructive compose table action
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Delete table"
 msgstr ""
 
 #. @context: Confirm dialog for deleting a collection
@@ -705,9 +765,11 @@ msgstr ""
 msgid "Drag collections, links, and dividers into the order you want."
 msgstr ""
 
+#. @context: Compose dialog header title when editing a post
 #. @context: Per-collection edit action
 #. @context: Per-collection edit action
 #. @context: Per-collection edit action
+#: src/ui/compose/ComposeDialog.tsx
 #: src/ui/pages/CollectionEditorPage.tsx
 #: src/ui/pages/CollectionEditorPage.tsx
 #: src/ui/shared/collection-management-labels.ts
@@ -802,12 +864,10 @@ msgstr ""
 
 #. @context: Archive visibility filter - featured posts
 #. @context: Browser page title for the featured feed
-#. @context: Browser page title for the featured feed
 #. @context: Inactive browse tab label on sample page
 #. @context: Page heading for the featured posts feed
 #. @context: Tooltip and screen reader label for the featured-post icon in the post footer when no featured date is available
 #: src/routes/pages/featured.tsx
-#: src/routes/pages/home.tsx
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/FeaturedPage.tsx
 #: src/ui/pages/ThemeSamplePage.tsx
@@ -963,6 +1023,11 @@ msgstr ""
 msgid "If this page feels too branded, the first place to soften is the default theme’s site accent, not the border or body text."
 msgstr ""
 
+#. @context: Inline editor placeholder title shown when an image cannot load
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Image unavailable"
+msgstr ""
+
 #. @context: Archive media filter - images
 #: src/ui/pages/ArchivePage.tsx
 msgid "Images"
@@ -986,6 +1051,11 @@ msgstr ""
 #. @context: Table cell in the sample detail article
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "Inline link"
+msgstr ""
+
+#. @context: Accessible label for a table size option. %rows% and %cols% are replaced with dimensions
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Insert %rows% by %cols% table"
 msgstr ""
 
 #. @context: Sample note summary suffix on the theme sample page
@@ -1047,10 +1117,8 @@ msgstr ""
 
 #. @context: Active browse tab label on sample page
 #. @context: Browser page title for the latest feed
-#. @context: Browser page title for the latest feed
 #. @context: Page heading for the latest posts feed
 #: src/routes/pages/home.tsx
-#: src/routes/pages/latest.tsx
 #: src/ui/pages/HomePage.tsx
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "Latest"
@@ -1378,6 +1446,11 @@ msgstr ""
 msgid "Open external link"
 msgstr ""
 
+#. @context: Inline editor button label for opening the original URL of a broken image
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Open image URL"
+msgstr ""
+
 #. @context: Button label to open a raw brand asset in the browser
 #: src/ui/pages/BrandPage.tsx
 msgid "Open raw asset"
@@ -1576,6 +1649,16 @@ msgstr ""
 msgid "Rate"
 msgstr ""
 
+#. @context: Collapse an expanded untitled note back to its preview in the feed
+#: src/ui/feed/NoteCard.tsx
+msgid "Read less"
+msgstr ""
+
+#. @context: Expand the rest of a truncated untitled note in place in the feed
+#: src/ui/feed/NoteCard.tsx
+msgid "Read more"
+msgstr ""
+
 #. @context: Ordered list item in the sample detail article
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "Read the page from top to bottom without looking at the swatches."
@@ -1621,6 +1704,11 @@ msgstr ""
 msgid "Remove this link from Collections? The destination won't change."
 msgstr ""
 
+#. @context: Inline editor button label for replacing a broken image
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Replace image"
+msgstr ""
+
 #. @context: Archive tile label for multiple thread replies
 #: src/ui/pages/ArchivePage.tsx
 msgid "Replies"
@@ -1628,7 +1716,9 @@ msgstr ""
 
 #. @context: Archive tile label for a single thread reply
 #. @context: Compose button - reply to post
+#. @context: Compose dialog header title when replying to a post
 #. @context: Reply button label in the post footer
+#: src/ui/compose/ComposeDialog.tsx
 #: src/ui/compose/ComposeDialog.tsx
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/shared/PostFooter.tsx
@@ -1934,6 +2024,16 @@ msgstr ""
 msgid "Switch to the white logo when the standard green version would lose contrast."
 msgstr ""
 
+#. @context: Accessible label for the compose table toolbar
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Table controls"
+msgstr ""
+
+#. @context: Compose table menu button label
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Table options"
+msgstr ""
+
 #. @context: Label on failed upload overlay button, tells user tapping retries the upload
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Tap to retry"
@@ -2134,6 +2234,11 @@ msgstr ""
 #. @context: Sample quote commentary suffix on the theme sample page
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "to make sure both still feel like they belong to the same product."
+msgstr ""
+
+#. @context: Compose table action
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Toggle header row"
 msgstr ""
 
 #. @context: Usage label for the square logo PNG asset card

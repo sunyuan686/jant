@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "../../../__tests__/helpers/app.js";
 import type {
   PresignedPutOptions,
@@ -135,6 +135,68 @@ function createMockStorage(options?: {
     },
   };
 }
+
+describe("POST /api/uploads/sideload", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function pngBytes(): Uint8Array {
+    return new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+      0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x06,
+      0x08, 0x06, 0x00, 0x00, 0x00,
+    ]);
+  }
+
+  it("rehosts a remote image and returns its stored URL", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(pngBytes(), {
+            headers: { "content-type": "image/png" },
+          }),
+      ),
+    );
+    const storage = createMockStorage();
+    const { app, services } = createTestApp({ authenticated: true, storage });
+    app.route("/api/uploads", uploadsApiRoutes);
+
+    const res = await app.request("/api/uploads/sideload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com/photo.png" }),
+    });
+
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      id: string;
+      url: string;
+      mimeType: string;
+      width: number;
+      height: number;
+    };
+    expect(data.mimeType).toBe("image/png");
+    expect(data.width).toBe(4);
+    expect(data.height).toBe(6);
+    const media = await services.media.getById(data.id);
+    expect(media?.mimeType).toBe("image/png");
+  });
+
+  it("requires authentication", async () => {
+    const { app } = createTestApp({ authenticated: false });
+    app.route("/api/uploads", uploadsApiRoutes);
+
+    const res = await app.request("/api/uploads/sideload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com/photo.png" }),
+    });
+
+    expect(res.status).toBe(401);
+  });
+});
 
 describe("Upload Session API Routes", () => {
   it("completes a relay image upload and stores inline media metadata", async () => {

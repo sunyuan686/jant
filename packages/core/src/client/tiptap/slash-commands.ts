@@ -14,6 +14,8 @@ import Suggestion, {
 import type { Editor, Range } from "@tiptap/core";
 import { Plugin, PluginKey, type EditorState } from "@tiptap/pm/state";
 import { escapeHtml } from "../../lib/html.js";
+import { getConfiguredTableControlLabels } from "./table-controls.js";
+import { openTableSizePicker } from "./table-size-picker.js";
 import { getBestFieldSearchRank, normalizeSearch } from "../search-rank.js";
 import {
   getFixedFloatingContainerRect,
@@ -165,11 +167,16 @@ const SLASH_COMMANDS: SlashCommandItem[] = [
   },
   {
     label: "Table",
-    description: "Insert a 3 by 3 table.",
+    description: "Insert a table.",
     group: "structure",
     keywords: ["grid", "rows", "columns", "spreadsheet"],
     icon: ICONS.table,
     command: (editor, range) => {
+      const labels = getConfiguredTableControlLabels(editor);
+      if (labels) {
+        openTableSizePicker(editor, range, labels);
+        return;
+      }
       editor
         .chain()
         .focus()

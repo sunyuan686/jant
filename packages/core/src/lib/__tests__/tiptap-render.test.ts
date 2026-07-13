@@ -84,8 +84,8 @@ describe("renderTiptapDocument", () => {
     );
 
     expect(html).toBe(
-      '<p>Body copy<label for="sn-1" class="margin-toggle sidenote-number"></label>' +
-        '<input type="checkbox" id="sn-1" class="margin-toggle"/>' +
+      '<p>Body copy<label for="sn-1" class="margin-toggle sidenote-number footref"></label>' +
+        '<input type="checkbox" id="sn-1" class="margin-toggle footref-toggle"/>' +
         '<span class="sidenote">Footnote body</span></p>',
     );
   });
@@ -101,8 +101,8 @@ describe("renderTiptapDocument", () => {
     );
 
     expect(html).toBe(
-      '<p>Body copy<label for="sn-1" class="margin-toggle sidenote-number"></label>' +
-        '<input type="checkbox" id="sn-1" class="margin-toggle"/>' +
+      '<p>Body copy<label for="sn-1" class="margin-toggle sidenote-number footref"></label>' +
+        '<input type="checkbox" id="sn-1" class="margin-toggle footref-toggle"/>' +
         '<span class="sidenote"></span></p>',
     );
   });

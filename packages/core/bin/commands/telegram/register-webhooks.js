@@ -34,11 +34,17 @@ export async function run(argv) {
       "Registers a webhook for every bot in TELEGRAM_BOT_TOKENS, pointing at",
     );
     console.log("<base-url>/api/telegram/webhook/<bot_id> with the shared");
-    console.log("TELEGRAM_WEBHOOK_SECRET. Run once after configuring the pool.");
+    console.log(
+      "TELEGRAM_WEBHOOK_SECRET. Run once after configuring the pool.",
+    );
     console.log("");
     console.log("Environment (also read from .env.node):");
-    console.log("  TELEGRAM_BOT_TOKENS      Comma-separated <bot_id>:<secret> tokens");
-    console.log("  TELEGRAM_WEBHOOK_SECRET  Shared secret_token for the webhooks");
+    console.log(
+      "  TELEGRAM_BOT_TOKENS      Comma-separated <bot_id>:<secret> tokens",
+    );
+    console.log(
+      "  TELEGRAM_WEBHOOK_SECRET  Shared secret_token for the webhooks",
+    );
     process.exit(values.help ? 0 : 1);
   }
 

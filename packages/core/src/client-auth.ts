@@ -26,7 +26,6 @@ import "./client/collection-form-bridge.js";
 import "./client/components/jant-post-form.js";
 import "./client/post-form-bridge.js";
 import "./client/components/jant-nav-manager.js";
-import "./client/nav-manager-bridge.js";
 import "./client/components/jant-post-menu.js";
 import "./client/collection-page-actions.js";
 import "./client/custom-url-menu.js";

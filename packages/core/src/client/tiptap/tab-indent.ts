@@ -24,7 +24,10 @@ export const TabIndent = Extension.create({
       Tab: ({ editor }) => {
         // ── Lists ──────────────────────────────────────────────────
         if (editor.isActive("listItem")) {
-          return editor.commands.sinkListItem("listItem");
+          editor.commands.sinkListItem("listItem");
+          // Keep browser focus navigation from taking over when the current
+          // item cannot sink, such as the first item in a list.
+          return true;
         }
 
         // ── Code blocks ────────────────────────────────────────────
@@ -90,7 +93,10 @@ export const TabIndent = Extension.create({
       "Shift-Tab": ({ editor }) => {
         // ── Lists ──────────────────────────────────────────────────
         if (editor.isActive("listItem")) {
-          return editor.commands.liftListItem("listItem");
+          editor.commands.liftListItem("listItem");
+          // Consume the shortcut in list context even when the item is
+          // already at the outermost level and cannot lift any further.
+          return true;
         }
 
         // ── Code blocks ────────────────────────────────────────────

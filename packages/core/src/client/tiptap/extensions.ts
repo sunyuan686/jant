@@ -14,17 +14,23 @@ import { BubbleMenu } from "./bubble-menu.js";
 import { LinkToolbar } from "./link-toolbar.js";
 import { ExitableMarks } from "./exitable-marks.js";
 import { TabIndent } from "./tab-indent.js";
+import { ListParagraphBackspace } from "./list-paragraph-backspace.js";
 import { LinkInputRules } from "./link-input-rules.js";
 import { WrappingInputRules } from "./wrapping-input-rules.js";
 import { InsertParagraphAround } from "./insert-paragraph-around.js";
 import { Footnotes } from "./footnotes.js";
 import type { FormattingToolbarMode } from "./toolbar-mode.js";
-import { ImageNode } from "./image-node.js";
+import { ImageNode, type ImageNodeLabels } from "./image-node.js";
 import { MoreBreak } from "./more-break.js";
 import { EmbedNode } from "./embed-node.js";
 import { HtmlBlockNode } from "./html-block-node.js";
 import { EmbedPaste } from "./embed-paste.js";
+import { RehostImages } from "./rehost-images.js";
+import type { RehostImagesOptions } from "./rehost-images.js";
 import { MarkdownClipboard } from "./markdown-clipboard.js";
+import { ImageInputRules } from "./image-input-rules.js";
+import { TableControls } from "./table-controls.js";
+import type { TableControlLabels } from "./table-control-labels.js";
 import {
   MARKDOWN_MARKED_OPTIONS,
   createMarkdownContentExtensions,
@@ -34,6 +40,9 @@ export interface EditorExtensionOptions {
   placeholder?: string;
   toolbarMode?: FormattingToolbarMode;
   pasteMedia?: PasteMediaOptions;
+  rehostImages?: RehostImagesOptions;
+  imageNodeLabels?: Partial<ImageNodeLabels>;
+  tableControlLabels?: TableControlLabels;
 }
 
 /**
@@ -82,6 +91,7 @@ export function createSettingsEditorExtensions(
     MarkdownClipboard,
     ExitableMarks,
     InsertParagraphAround,
+    ListParagraphBackspace,
     BubbleMenu.configure({
       toolbarMode: "compose",
     }),
@@ -94,7 +104,9 @@ export function createEditorExtensions(
 ): Extensions {
   return [
     ...createMarkdownContentExtensions({
-      imageExtension: ImageNode,
+      imageExtension: ImageNode.configure({
+        labels: options.imageNodeLabels,
+      }),
       moreBreakExtension: MoreBreak,
       embedExtension: EmbedNode,
       htmlBlockExtension: HtmlBlockNode,
@@ -107,18 +119,24 @@ export function createEditorExtensions(
       placeholder: options.placeholder ?? "Write something…",
     }),
     Footnotes,
+    ImageInputRules,
     LinkInputRules,
     WrappingInputRules,
     MarkdownClipboard,
     SlashCommands,
+    ...(options.tableControlLabels
+      ? [TableControls.configure({ labels: options.tableControlLabels })]
+      : []),
     EmbedPaste,
     PasteMedia.configure(options.pasteMedia ?? {}),
+    RehostImages.configure(options.rehostImages ?? {}),
     BubbleMenu.configure({
       toolbarMode: options.toolbarMode ?? "default",
     }),
     LinkToolbar,
     ExitableMarks,
     InsertParagraphAround,
+    ListParagraphBackspace,
     TabIndent,
   ];
 }

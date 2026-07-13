@@ -30,6 +30,11 @@ import type {
   ComposeEditorSelection,
   ComposeFullscreenOpenDetail,
 } from "./compose-types.js";
+import type { ComposeConvertFields } from "./compose-format-convert.js";
+import {
+  promoteLeadingH1Title as getLeadingH1TitlePromotion,
+  type LeadingH1TitlePromotion,
+} from "./compose-title-from-heading.js";
 import {
   UPLOAD_ACCEPT,
   getMediaCategory,
@@ -45,7 +50,11 @@ import { createTiptapEditor } from "../tiptap/create-editor.js";
 import {
   uploadAndInsertInlineImage,
   adoptPendingInlineImageUploads,
+  rehostInlineImage,
+  sideloadImage,
 } from "../tiptap/inline-image-upload.js";
+import { clearRehostInFlight } from "../tiptap/rehost-images.js";
+import { uploadWithMetadata } from "../upload-with-metadata.js";
 import { getClipboardFiles } from "../tiptap/paste-media.js";
 import { isSafeAbsoluteUrl } from "../../lib/url.js";
 import { randomUUID } from "../random-uuid.js";
@@ -54,6 +63,7 @@ import {
   markSlashCommandDiscovered,
   scheduleSlashCommandHint,
 } from "../slash-discovery.js";
+import { getInlineImageNodeLabels } from "./inline-image-issues.js";
 
 interface ComposeFilePickerCloseDetail {
   cancelled: boolean;
@@ -178,6 +188,7 @@ export class JantComposeEditor extends LitElement {
     uploadMaxFileSize: { type: Number },
     threadItem: { type: Boolean, attribute: "thread-item" },
     removable: { type: Boolean },
+    inlineFormat: { type: Boolean, attribute: "inline-format" },
     slashCommandDiscovered: { type: Boolean },
     _title: { state: true },
     _bodyJson: { state: true },
@@ -203,6 +214,7 @@ export class JantComposeEditor extends LitElement {
   declare uploadMaxFileSize: number;
   declare threadItem: boolean;
   declare removable: boolean;
+  declare inlineFormat: boolean;
   declare slashCommandDiscovered: boolean;
   declare _title: string;
   declare _bodyJson: JSONContent | null;
@@ -234,8 +246,18 @@ export class JantComposeEditor extends LitElement {
   private _scrollBufferApplied = false;
   private _filePickerCleanup: (() => void) | null = null;
   private _suppressAttachedTextOpenUntil = 0;
+  /**
+   * Set by {@link applyConvertedFields} so the format-conversion content writes
+   * don't emit a content-changed event (which would schedule a draft autosave).
+   * A bare format switch shouldn't persist a local draft — see `_switchFormat`.
+   * Always consumed: a switch also changes `format`, so `updated()` is guaranteed
+   * to run this cycle.
+   */
+  private _suppressContentChangedOnce = false;
   #inlineImageUploadGeneration = 0;
   #inlineImageUploadPromises = new Set<Promise<void>>();
+  #rehostFailureCount = 0;
+  #rehostFailureNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   #sortable: { destroy(): void } | null = null;
   #revertNextSibling: globalThis.Node | null = null;
 
@@ -250,6 +272,7 @@ export class JantComposeEditor extends LitElement {
     this.uploadMaxFileSize = 1024;
     this.threadItem = false;
     this.removable = false;
+    this.inlineFormat = false;
     this.slashCommandDiscovered = false;
     this._title = "";
     this._bodyJson = null;
@@ -417,6 +440,102 @@ export class JantComposeEditor extends LitElement {
     return uploadPromise;
   }
 
+  /**
+   * Decide whether a pasted image node's `src` should be rehosted into our own
+   * storage. Skips images that are already ours (same-origin or on the
+   * configured media CDN), relative paths, and `blob:` placeholders (handled by
+   * the insert flow). Remote `http(s)` and inline `data:` srcs are rehosted.
+   */
+  #shouldRehostSrc(src: string): boolean {
+    if (src.startsWith("data:")) return true;
+    if (!/^https?:\/\//i.test(src)) return false;
+    let origin: string;
+    try {
+      origin = new URL(src).origin;
+    } catch {
+      return false;
+    }
+    if (origin === window.location.origin) return false;
+    const mediaBase = document.documentElement.dataset.mediaBase;
+    if (mediaBase && src.startsWith(mediaBase)) return false;
+    return true;
+  }
+
+  /**
+   * Rehost a pasted inline image into our storage and swap its `src`. Remote
+   * URLs go through the server sideload endpoint (bypasses CORS); `data:` URLs
+   * are decoded locally and run through the normal client upload pipeline
+   * (gaining WebP/resize/blurhash). Tracked like other inline uploads so submit
+   * waits for it; failures leave the node with its original src.
+   */
+  #rehostInlineImage(src: string) {
+    const editor = this._editor;
+    if (!editor) {
+      clearRehostInFlight(src);
+      return;
+    }
+
+    const resolver = src.startsWith("data:")
+      ? async () => {
+          const blob = await (await fetch(src)).blob();
+          const file = new File([blob], "pasted-image", {
+            type: blob.type || "image/png",
+          });
+          return (await uploadWithMetadata(file)).url;
+        }
+      : async () => (await sideloadImage(src)).url;
+
+    // Surface failures so a blocked rehost (e.g. a host's hotlink protection)
+    // isn't silent — the node keeps its original link, but the author is told.
+    const trackedResolver = async () => {
+      try {
+        return await resolver();
+      } catch (error) {
+        this.#noteRehostFailure();
+        throw error;
+      }
+    };
+
+    const generation = this.#inlineImageUploadGeneration;
+    const rehostPromise = rehostInlineImage(
+      editor,
+      src,
+      trackedResolver,
+    ).finally(() => {
+      clearRehostInFlight(src);
+      if (generation !== this.#inlineImageUploadGeneration) return;
+      this.#inlineImageUploadPromises.delete(rehostPromise);
+    });
+    this.#inlineImageUploadPromises.add(rehostPromise);
+  }
+
+  /** Count a failed rehost and debounce a single batched notice. */
+  #noteRehostFailure() {
+    this.#rehostFailureCount += 1;
+    if (this.#rehostFailureNoticeTimer !== undefined) return;
+    this.#rehostFailureNoticeTimer = setTimeout(() => {
+      this.#flushRehostFailureNotice();
+    }, 800);
+  }
+
+  /** Show one toast summarizing all rehost failures collected in the window. */
+  #flushRehostFailureNotice() {
+    this.#rehostFailureNoticeTimer = undefined;
+    const count = this.#rehostFailureCount;
+    this.#rehostFailureCount = 0;
+    if (count <= 0 || !this.isConnected) return;
+
+    const message =
+      count === 1
+        ? (this.labels.imageNotRehosted ??
+          "An image couldn't be saved to your library — its original link was kept.")
+        : (
+            this.labels.imagesNotRehosted ??
+            "{count} images couldn't be saved to your library — their original links were kept."
+          ).replace("{count}", String(count));
+    showToast(message, "error");
+  }
+
   hasPendingInlineImageUploads(): boolean {
     return this.#inlineImageUploadPromises.size > 0;
   }
@@ -434,6 +553,11 @@ export class JantComposeEditor extends LitElement {
   #clearPendingInlineImageUploads() {
     this.#inlineImageUploadGeneration += 1;
     this.#inlineImageUploadPromises.clear();
+    if (this.#rehostFailureNoticeTimer !== undefined) {
+      clearTimeout(this.#rehostFailureNoticeTimer);
+      this.#rehostFailureNoticeTimer = undefined;
+    }
+    this.#rehostFailureCount = 0;
   }
 
   /** Adopt in-flight inline image uploads from another editor (e.g. fullscreen). */
@@ -510,6 +634,67 @@ export class JantComposeEditor extends LitElement {
   private _normalizeDocJson(json: JSONContent | null): JSONContent | null {
     if (!json) return null;
     return this._isEmptyDoc(json) ? null : json;
+  }
+
+  private _isSelectionInsideTopLevelBlock(index: number): boolean {
+    const editor = this._editor;
+    if (!editor) return false;
+    return editor.state.selection.$from.index(0) === index;
+  }
+
+  private _removedTopLevelSize(promotion: LeadingH1TitlePromotion): number {
+    const doc = this._editor?.state.doc;
+    if (!doc) return 0;
+
+    let size = 0;
+    for (let index = 0; index <= promotion.headingIndex; index += 1) {
+      size += doc.child(index)?.nodeSize ?? 0;
+    }
+    return size;
+  }
+
+  promoteLeadingH1Title(options: { force?: boolean } = {}): boolean {
+    if (this.format !== "note" || this._title.trim()) return false;
+
+    const currentBodyJson = this._editor?.getJSON() ?? this._bodyJson;
+    const promotion = getLeadingH1TitlePromotion(currentBodyJson);
+    if (!promotion) return false;
+
+    if (
+      !options.force &&
+      this._isSelectionInsideTopLevelBlock(promotion.headingIndex)
+    ) {
+      return false;
+    }
+
+    const editor = this._editor;
+    const wasFocused = Boolean(editor?.isFocused);
+    const previousSelectionFrom = editor?.state.selection.from ?? null;
+    const removedSize = this._removedTopLevelSize(promotion);
+
+    this._title = promotion.title;
+    this._showTitle = true;
+    this._bodyJson = promotion.bodyJson;
+
+    if (editor) {
+      if (promotion.bodyJson) {
+        editor.commands.setContent(promotion.bodyJson);
+      } else {
+        editor.commands.clearContent();
+      }
+
+      if (wasFocused && previousSelectionFrom !== null) {
+        const max = editor.state.doc.content.size;
+        if (max > 0) {
+          editor.commands.setTextSelection(
+            Math.max(1, Math.min(previousSelectionFrom - removedSize, max)),
+          );
+          editor.commands.focus();
+        }
+      }
+    }
+
+    return true;
   }
 
   getNormalizedBodyJson(): JSONContent | null {
@@ -794,6 +979,7 @@ export class JantComposeEditor extends LitElement {
       onUpdate: (json) => {
         this._bodyJson = json;
         this._ensureScrollBuffer();
+        this.promoteLeadingH1Title();
         hideSlashCommandHint(this);
       },
       onFocus: () => {
@@ -801,6 +987,9 @@ export class JantComposeEditor extends LitElement {
         if (this._editor?.isEmpty) {
           scheduleSlashCommandHint(this);
         }
+      },
+      onBlur: () => {
+        this.promoteLeadingH1Title({ force: true });
       },
       onSelectionUpdate: (selection) => {
         this._lastEditorSelection = selection;
@@ -812,6 +1001,12 @@ export class JantComposeEditor extends LitElement {
           this.addFiles(files);
         },
       },
+      rehostImages: {
+        shouldRehost: (src) => this.#shouldRehostSrc(src),
+        rehost: (src) => this.#rehostInlineImage(src),
+      },
+      imageNodeLabels: getInlineImageNodeLabels(this.labels),
+      tableControlLabels: this.labels.tableControls,
     });
     this._lastEditorSelection = this._readEditorSelection();
 
@@ -903,13 +1098,19 @@ export class JantComposeEditor extends LitElement {
       }
     }
 
-    // Notify parent dialog of content changes for draft auto-save
-    for (const key of changed.keys()) {
-      if (JantComposeEditor._CONTENT_PROPS.has(key as string)) {
-        this.dispatchEvent(
-          new Event("jant:compose-content-changed", { bubbles: true }),
-        );
-        break;
+    // Notify parent dialog of content changes for draft auto-save. A format
+    // conversion writes content fields too, but it's not a user edit, so skip
+    // the notification once when asked.
+    if (this._suppressContentChangedOnce) {
+      this._suppressContentChangedOnce = false;
+    } else {
+      for (const key of changed.keys()) {
+        if (JantComposeEditor._CONTENT_PROPS.has(key as string)) {
+          this.dispatchEvent(
+            new Event("jant:compose-content-changed", { bubbles: true }),
+          );
+          break;
+        }
       }
     }
   }
@@ -922,6 +1123,39 @@ export class JantComposeEditor extends LitElement {
       showTitle: this._showTitle,
       selection: this.getEditorSelection(),
     };
+  }
+
+  /**
+   * Raw field values for format conversion. Unlike {@link getData}, this returns
+   * every field regardless of the current format (so a hidden quote/url survives
+   * a switch) plus the freshest, normalized body.
+   */
+  getConvertibleFields(): ComposeConvertFields {
+    return {
+      title: this._title,
+      url: this._url,
+      quoteText: this._quoteText,
+      quoteAuthor: this._quoteAuthor,
+      showTitle: this._showTitle,
+      bodyJson: this._normalizeDocJson(
+        this._editor?.getJSON() ?? this._bodyJson,
+      ),
+    };
+  }
+
+  /**
+   * Write back fields produced by `convertComposeFormat`. The body is applied via
+   * `_bodyJson` only — the imminent format change recreates the editor from it, so
+   * calling `setContent` here would be redundant.
+   */
+  applyConvertedFields(fields: ComposeConvertFields): void {
+    this._suppressContentChangedOnce = true;
+    this._title = fields.title;
+    this._url = fields.url;
+    this._quoteText = fields.quoteText;
+    this._quoteAuthor = fields.quoteAuthor;
+    this._showTitle = fields.showTitle;
+    this._bodyJson = fields.bodyJson;
   }
 
   /** Pre-fill all fields for edit mode or draft restore */
@@ -1689,11 +1923,14 @@ export class JantComposeEditor extends LitElement {
   }
 
   private _renderAttachmentPreviewFallback(category: "image" | "video") {
+    const unavailableLabel =
+      this.labels.brokenImageUnavailable ?? "Image unavailable";
+
     return html`
       <div
         class="compose-attachment-preview-fallback"
         data-preview-failed=${category}
-        aria-hidden="true"
+        aria-label=${unavailableLabel}
       >
         <svg
           width="28"
@@ -1709,6 +1946,9 @@ export class JantComposeEditor extends LitElement {
           <circle cx="9" cy="10" r="1.25" />
           <path d="m7 16 3.4-3.45 2.65 2.45 2.45-3.05 1.95 2.5" />
         </svg>
+        <span class="compose-attachment-preview-fallback-label">
+          ${unavailableLabel}
+        </span>
         ${category === "video"
           ? html`
               <div class="compose-attachment-play-icon">
@@ -2433,7 +2673,7 @@ export class JantComposeEditor extends LitElement {
     `;
   }
 
-  private _renderThreadPostHeader() {
+  private _renderFormatHeader() {
     const formatLabels: Record<ComposeFormat, string> = {
       note: this.labels.note,
       link: this.labels.link,
@@ -2463,7 +2703,7 @@ export class JantComposeEditor extends LitElement {
                 @click=${() => {
                   if (this.format !== f) {
                     this.dispatchEvent(
-                      new CustomEvent("jant:thread-format-change", {
+                      new CustomEvent("jant:format-change", {
                         bubbles: true,
                         detail: { format: f },
                       }),
@@ -2518,7 +2758,9 @@ export class JantComposeEditor extends LitElement {
 
   render() {
     return html`
-      ${this.threadItem ? this._renderThreadPostHeader() : nothing}
+      ${this.threadItem || this.inlineFormat
+        ? this._renderFormatHeader()
+        : nothing}
       <section class="compose-body">
         ${this.format === "note"
           ? this._renderNoteFields()

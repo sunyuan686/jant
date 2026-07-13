@@ -35,6 +35,7 @@ import {
   createSiteProfileService,
   type SiteProfileService,
 } from "./site-profile.js";
+import { createAboutPageService, type AboutPageService } from "./about-page.js";
 import {
   createUploadSessionService,
   type UploadSessionService,
@@ -64,6 +65,7 @@ export interface Services {
   siteAdmin: SiteAdminService;
   siteMembers: SiteMemberService;
   siteProfile: SiteProfileService;
+  aboutPage: AboutPageService;
   githubAppInstallations: GitHubAppInstallationsService;
   telegram: TelegramService;
 }
@@ -88,6 +90,23 @@ export function createServices(
   const settings = createSettingsService(db, siteId, databaseSchema, dialect);
   const paths = createPathService(db, siteId, databaseSchema);
   const navItems = createNavItemService(db, siteId, databaseSchema);
+  const posts = createPostService(
+    db,
+    {
+      slugIdLength: config?.slugIdLength ?? 5,
+      databaseDialect: dialect,
+    },
+    siteId,
+    paths,
+    databaseSchema,
+  );
+  const collections = createCollectionService(
+    db,
+    siteId,
+    paths,
+    databaseSchema,
+    dialect,
+  );
   const media = createMediaService(db, siteId, databaseSchema, dialect, {
     enforceHostedQuota: config?.enforceHostedMediaQuota ?? false,
     hostedControlPlane: config?.hostedControlPlane ?? null,
@@ -97,26 +116,11 @@ export function createServices(
     settings,
     site,
     paths,
-    posts: createPostService(
-      db,
-      {
-        slugIdLength: config?.slugIdLength ?? 5,
-        databaseDialect: dialect,
-      },
-      siteId,
-      paths,
-      databaseSchema,
-    ),
+    posts,
     customUrls: createCustomUrlService(db, siteId, paths, databaseSchema),
     media,
     uploads: createUploadSessionService(db, siteId, media, databaseSchema),
-    collections: createCollectionService(
-      db,
-      siteId,
-      paths,
-      databaseSchema,
-      dialect,
-    ),
+    collections,
     search: createSearchService(rawQuery, siteId, dialect),
     navItems,
     auth: createAuthService(
@@ -148,6 +152,11 @@ export function createServices(
         );
       },
     }),
+    aboutPage: createAboutPageService({
+      paths,
+      posts,
+      collections,
+    }),
     githubAppInstallations: createGitHubAppInstallationsService(
       db,
       databaseSchema,
@@ -166,6 +175,7 @@ export type { UploadSessionService } from "./upload-session.js";
 export type { CollectionService } from "./collection.js";
 export type { SearchService, SearchResult, SearchOptions } from "./search.js";
 export type { NavItemService } from "./navigation.js";
+export type { AboutPageService, AboutPageStatus } from "./about-page.js";
 export type { AuthService, DeleteAccountDeps } from "./auth.js";
 export type { ApiTokenService } from "./api-token.js";
 export type {

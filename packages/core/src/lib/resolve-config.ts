@@ -12,6 +12,7 @@
 import type { Bindings } from "../types/bindings.js";
 import type { AppConfig } from "../types/config.js";
 import { CONFIG_FIELDS } from "../types/config.js";
+import type { FeedKind } from "../types/constants.js";
 import { ASSET_BASE_SEGMENT, getPublicAssetBasePath } from "./asset-path.js";
 import {
   getAuthSecret,
@@ -75,6 +76,10 @@ function resolveFallback(key: string, env: Bindings): string {
 function parseConfigInt(value: string, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseFeedKind(value: string, fallback: FeedKind): FeedKind {
+  return value === "latest" || value === "featured" ? value : fallback;
 }
 
 /**
@@ -142,9 +147,12 @@ export function resolveConfig(
     siteDescription: resolve("SITE_DESCRIPTION", allSettings, env),
     siteDescriptionExplicit,
     siteLanguage: resolve("SITE_LANGUAGE", allSettings, env),
+    dashboardLanguage: resolve("DASHBOARD_LANGUAGE", allSettings, env),
     cjkSerifFont: resolve("CJK_SERIF_FONT", allSettings, env),
-    homeDefaultView: resolve("HOME_DEFAULT_VIEW", allSettings, env),
-    mainRssFeed: resolve("MAIN_RSS_FEED", allSettings, env),
+    mainRssFeed: parseFeedKind(
+      resolve("MAIN_RSS_FEED", allSettings, env),
+      "featured",
+    ),
     timeZone: normalizeTimeZone(resolve("TIME_ZONE", allSettings, env)),
     siteFooter: resolve("SITE_FOOTER", allSettings, env),
     showJantBrandingOnHome:

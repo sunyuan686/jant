@@ -41,6 +41,7 @@ describe("jant uploads cleanup", () => {
         JSON.stringify({
           abortedMultipartUploads: 1,
           deletedSessions: 3,
+          deletedOrphanMedia: 2,
         }),
         {
           status: 200,
@@ -73,5 +74,6 @@ describe("jant uploads cleanup", () => {
     );
     expect(logSpy).toHaveBeenNthCalledWith(2, "Deleted sessions: 3");
     expect(logSpy).toHaveBeenNthCalledWith(3, "Aborted multipart uploads: 1");
+    expect(logSpy).toHaveBeenNthCalledWith(4, "Orphaned media deleted: 2");
   });
 });

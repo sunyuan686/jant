@@ -3,6 +3,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type SiteHeaderInit = typeof import("../site-header-nav.js").initSiteHeaderNav;
+type SiteHeaderDestroy =
+  typeof import("../site-header-nav.js").destroySiteHeaderNav;
 
 function createDrawerDOM(): HTMLElement {
   const root = document.createElement("div");
@@ -50,13 +52,15 @@ function createMoreDropdownDOM(): HTMLElement {
 
 describe("site header more dropdown", () => {
   let initSiteHeaderNav: SiteHeaderInit;
+  let destroySiteHeaderNav: SiteHeaderDestroy;
   let root: HTMLElement;
 
   beforeEach(async () => {
     document.body.innerHTML = "";
     vi.resetModules();
     root = createMoreDropdownDOM();
-    ({ initSiteHeaderNav } = await import("../site-header-nav.js"));
+    ({ initSiteHeaderNav, destroySiteHeaderNav } =
+      await import("../site-header-nav.js"));
     initSiteHeaderNav(root);
   });
 
@@ -130,10 +134,26 @@ describe("site header more dropdown", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(popover.getAttribute("aria-hidden")).toBe("true");
   });
+
+  it("removes dropdown listeners when destroyed", () => {
+    const trigger = root.querySelector(
+      ".site-header-more-btn",
+    ) as HTMLButtonElement;
+    const popover = root.querySelector(
+      ".site-header-more-popover",
+    ) as HTMLElement;
+
+    destroySiteHeaderNav(root);
+    trigger.click();
+
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(popover.getAttribute("aria-hidden")).toBe("true");
+  });
 });
 
 describe("site header nav drawer", () => {
   let initSiteHeaderNav: SiteHeaderInit;
+  let destroySiteHeaderNav: SiteHeaderDestroy;
   let root: HTMLElement;
 
   beforeEach(async () => {
@@ -141,7 +161,8 @@ describe("site header nav drawer", () => {
     document.documentElement.classList.remove("drawer-open");
     vi.resetModules();
     root = createDrawerDOM();
-    ({ initSiteHeaderNav } = await import("../site-header-nav.js"));
+    ({ initSiteHeaderNav, destroySiteHeaderNav } =
+      await import("../site-header-nav.js"));
     initSiteHeaderNav(root);
   });
 
@@ -243,6 +264,19 @@ describe("site header nav drawer", () => {
 
     hamburger.click();
     link.click();
+
+    expect(drawer.getAttribute("aria-hidden")).toBe("true");
+    expect(hamburger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("removes drawer listeners when destroyed", () => {
+    const hamburger = root.querySelector(
+      ".site-header-hamburger",
+    ) as HTMLButtonElement;
+    const drawer = root.querySelector("#site-nav-drawer") as HTMLElement;
+
+    destroySiteHeaderNav(root);
+    hamburger.click();
 
     expect(drawer.getAttribute("aria-hidden")).toBe("true");
     expect(hamburger.getAttribute("aria-expanded")).toBe("false");

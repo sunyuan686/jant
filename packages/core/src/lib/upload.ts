@@ -13,6 +13,20 @@ const MEDIA_POSTERS_STORAGE_PREFIX = "posters";
 const MEDIA_ASSET_STORAGE_PREFIX = "assets";
 const MEDIA_PREVIEWS_STORAGE_PREFIX = "previews";
 
+/**
+ * SQL `LIKE` pattern matching site asset objects (avatars, favicons) stored
+ * under `media/<siteId>/assets/<kind>/...`.
+ *
+ * These assets are referenced from site settings (`SITE_AVATAR`,
+ * `SITE_FAVICON_*`), not from posts, so they are intentionally persisted with
+ * `postId = null`. The orphan-media reaper must exclude them — otherwise it
+ * deletes avatars and favicons as if they were abandoned compose uploads.
+ *
+ * @example
+ * media.storageKey LIKE this pattern → it is a site asset, never an orphan.
+ */
+export const SITE_ASSET_STORAGE_KEY_LIKE_PATTERN = `%/${MEDIA_ASSET_STORAGE_PREFIX}/%`;
+
 /** MIME types — images */
 const IMAGE_MIME_TYPES = [
   "image/jpeg",
@@ -261,6 +275,117 @@ export function toMediaKind(mimeType: string): MediaKind {
  */
 export function isImageMimeType(mimeType: string): boolean {
   return mimeType.startsWith("image/");
+}
+
+/** Image MIME types accepted by the remote-image sideload path. */
+const SIDELOAD_IMAGE_MIME_TYPES = new Set<string>(IMAGE_MIME_TYPES);
+
+/** Map of sideload-accepted image MIME types to their file extensions. */
+const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+  "image/avif": "avif",
+  "image/bmp": "bmp",
+  "image/x-icon": "ico",
+};
+
+/**
+ * Whether a MIME type may be rehosted via remote-image sideload.
+ *
+ * Unlike {@link getStoredUploadPolicy} (which only allows webp/png/jpeg because
+ * the normal upload path re-encodes everything to WebP client-side), the
+ * sideload path stores the original remote bytes, so it accepts the full set of
+ * image formats Jant can display.
+ *
+ * @param contentType - The MIME type to check
+ * @returns Whether the type is an accepted sideload image
+ * @example
+ * ```ts
+ * isAllowedSideloadImageType("image/gif"); // true
+ * isAllowedSideloadImageType("text/html"); // false
+ * ```
+ */
+export function isAllowedSideloadImageType(contentType: string): boolean {
+  return SIDELOAD_IMAGE_MIME_TYPES.has(contentType);
+}
+
+/**
+ * Returns the file extension for a sideload-accepted image MIME type.
+ *
+ * @param contentType - The image MIME type
+ * @returns Extension without a dot, or null if the type isn't sideloadable
+ * @example
+ * ```ts
+ * imageExtensionForMimeType("image/jpeg"); // "jpg"
+ * ```
+ */
+export function imageExtensionForMimeType(contentType: string): string | null {
+  return IMAGE_MIME_EXTENSIONS[contentType] ?? null;
+}
+
+/**
+ * Identify an image format from its leading bytes (magic numbers), so a remote
+ * sideload can trust the actual content rather than the server's content-type
+ * header. Recognizes every {@link isAllowedSideloadImageType} format.
+ *
+ * @param bytes - The leading bytes of the file (≥ ~256 bytes recommended)
+ * @returns The detected image MIME type, or null if unrecognized
+ * @example
+ * ```ts
+ * sniffImageMimeType(pngBytes); // "image/png"
+ * ```
+ */
+export function sniffImageMimeType(bytes: Uint8Array): string | null {
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return "image/jpeg";
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    readAscii(bytes, 1, 3) === "PNG"
+  ) {
+    return "image/png";
+  }
+  if (bytes.length >= 6 && /^GIF8[79]a$/.test(readAscii(bytes, 0, 6))) {
+    return "image/gif";
+  }
+  if (
+    bytes.length >= 12 &&
+    readAscii(bytes, 0, 4) === "RIFF" &&
+    readAscii(bytes, 8, 4) === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  if (bytes.length >= 12 && readAscii(bytes, 4, 4) === "ftyp") {
+    const brand = readAscii(bytes, 8, 4);
+    if (brand === "avif" || brand === "avis") return "image/avif";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+    return "image/bmp";
+  }
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x00 &&
+    bytes[1] === 0x00 &&
+    bytes[2] === 0x01 &&
+    bytes[3] === 0x00
+  ) {
+    return "image/x-icon";
+  }
+  // SVG is text — look for an <svg> root in the leading bytes.
+  const head = new TextDecoder().decode(bytes.subarray(0, 1024)).toLowerCase();
+  if (head.includes("<svg")) {
+    return "image/svg+xml";
+  }
+  return null;
 }
 
 export interface ValidateUploadOptions {

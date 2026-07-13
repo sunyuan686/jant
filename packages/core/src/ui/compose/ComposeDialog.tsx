@@ -13,6 +13,7 @@ import type { FC } from "hono/jsx";
 import { MAX_THREAD_POSTS, type Collection } from "../../types.js";
 import { useLingui } from "../../i18n/context.js";
 import { getCollectionFormLabels } from "../shared/collection-management-labels.js";
+import type { ComposeLabels } from "../../client/components/compose-types.js";
 
 export interface ComposeDialogProps {
   collections?: Collection[];
@@ -36,11 +37,55 @@ export const ComposeForm: FC<ComposeFormProps> = ({
 }) => {
   const { i18n } = useLingui();
 
-  const labels = JSON.stringify({
+  const labelsObject = {
     cancel: i18n._(
       msg({
         message: "Cancel",
         comment: "@context: Close compose dialog",
+      }),
+    ),
+    imageNotRehosted: i18n._(
+      msg({
+        message:
+          "An image couldn't be saved to your library — its original link was kept.",
+        comment:
+          "@context: Toast when a single pasted remote image couldn't be rehosted (e.g. blocked by the source's hotlink protection)",
+      }),
+    ),
+    imagesNotRehosted: i18n._(
+      msg({
+        message:
+          "{count} images couldn't be saved to your library — their original links were kept.",
+        comment:
+          "@context: Toast when several pasted remote images couldn't be rehosted; {count} is the number of images",
+      }),
+    ),
+    brokenImageUnavailable: i18n._(
+      msg({
+        message: "Image unavailable",
+        comment:
+          "@context: Inline editor placeholder title shown when an image cannot load",
+      }),
+    ),
+    brokenImageDelete: i18n._(
+      msg({
+        message: "Delete image",
+        comment:
+          "@context: Inline editor button label for removing a broken image",
+      }),
+    ),
+    brokenImageReplace: i18n._(
+      msg({
+        message: "Replace image",
+        comment:
+          "@context: Inline editor button label for replacing a broken image",
+      }),
+    ),
+    brokenImageOpen: i18n._(
+      msg({
+        message: "Open image URL",
+        comment:
+          "@context: Inline editor button label for opening the original URL of a broken image",
       }),
     ),
     note: i18n._(
@@ -743,6 +788,19 @@ export const ComposeForm: FC<ComposeFormProps> = ({
           "@context: Compose dialog header title when composing a thread",
       }),
     ),
+    replyTitle: i18n._(
+      msg({
+        message: "Reply",
+        comment:
+          "@context: Compose dialog header title when replying to a post",
+      }),
+    ),
+    editTitle: i18n._(
+      msg({
+        message: "Edit",
+        comment: "@context: Compose dialog header title when editing a post",
+      }),
+    ),
     slashHint: i18n._(
       msg({
         message: "Type / for commands",
@@ -750,8 +808,84 @@ export const ComposeForm: FC<ComposeFormProps> = ({
           "@context: First-use hint shown over the compose editor to surface the slash command menu",
       }),
     ),
+    tableControls: {
+      toolbarLabel: i18n._(
+        msg({
+          message: "Table controls",
+          comment: "@context: Accessible label for the compose table toolbar",
+        }),
+      ),
+      addRowAbove: i18n._(
+        msg({
+          message: "Add row above",
+          comment: "@context: Compose table action",
+        }),
+      ),
+      addRowBelow: i18n._(
+        msg({
+          message: "Add row below",
+          comment: "@context: Compose table action",
+        }),
+      ),
+      addColumnBefore: i18n._(
+        msg({
+          message: "Add column before",
+          comment: "@context: Compose table action",
+        }),
+      ),
+      addColumnAfter: i18n._(
+        msg({
+          message: "Add column after",
+          comment: "@context: Compose table action",
+        }),
+      ),
+      options: i18n._(
+        msg({
+          message: "Table options",
+          comment: "@context: Compose table menu button label",
+        }),
+      ),
+      deleteRow: i18n._(
+        msg({
+          message: "Delete row",
+          comment: "@context: Compose table action",
+        }),
+      ),
+      deleteColumn: i18n._(
+        msg({
+          message: "Delete column",
+          comment: "@context: Compose table action",
+        }),
+      ),
+      toggleHeaderRow: i18n._(
+        msg({
+          message: "Toggle header row",
+          comment: "@context: Compose table action",
+        }),
+      ),
+      deleteTable: i18n._(
+        msg({
+          message: "Delete table",
+          comment: "@context: Destructive compose table action",
+        }),
+      ),
+      sizePickerLabel: i18n._(
+        msg({
+          message: "Choose table size",
+          comment: "@context: Accessible title for the table dimension picker",
+        }),
+      ),
+      insertTableSize: i18n._(
+        msg({
+          message: "Insert %rows% by %cols% table",
+          comment:
+            "@context: Accessible label for a table size option. %rows% and %cols% are replaced with dimensions",
+        }),
+      ),
+    },
     collectionFormLabels: getCollectionFormLabels(i18n),
-  }).replace(/</g, "\\u003c");
+  } satisfies ComposeLabels;
+  const labels = JSON.stringify(labelsObject).replace(/</g, "\\u003c");
 
   const collectionsJson = JSON.stringify(
     (collections ?? []).map((c) => ({

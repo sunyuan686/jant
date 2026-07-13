@@ -77,6 +77,32 @@ describe("Nav Items API Routes", () => {
       expect(body.label).toBe("GitHub");
       expect(body.url).toBe("https://github.com");
       expect(body.type).toBe("link");
+      expect(body.headerHtml).toBeUndefined();
+    });
+
+    it("includes a site header fragment for navigation editor requests", async () => {
+      const { app } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+
+      const res = await app.request("/api/nav-items", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Jant-Site-Header": "include",
+        },
+        body: JSON.stringify({
+          type: "link",
+          label: "Docs",
+          url: "/docs",
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.label).toBe("Docs");
+      expect(body.headerHtml).toContain('data-site-header-fragment="header"');
+      expect(body.headerHtml).toContain('data-site-header-fragment="drawer"');
+      expect(body.headerHtml).toContain("Docs");
     });
 
     it("creates a system nav item when authenticated", async () => {

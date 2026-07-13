@@ -123,6 +123,9 @@ export function createTestApp(options: TestAppOptions = {}) {
     c.set("appConfig", resolveConfig(c.env, allSettings));
     c.set("storage", options.storage ?? null);
     c.set("rateLimiter", rateLimiter);
+    const publicRequestUrl = c.req.url;
+    c.set("publicRequestUrl", publicRequestUrl);
+    c.set("publicPath", new URL(publicRequestUrl).pathname);
 
     // i18n (English default for tests)
     const i18n = createI18n("en");

@@ -1,21 +1,18 @@
 /**
- * Wrapping Input Rules (no auto-join)
+ * Blockquote Input Rule (no auto-join)
  *
- * TipTap's built-in input rules for blockquote, bulletList, and orderedList
- * use `wrappingInputRule`, which auto-joins the newly wrapped node with a
- * same-type sibling immediately before it. That behavior matches CommonMark
- * semantics but conflicts with the WYSIWYG mental model in Jant's compose
- * editor, where TipTap JSON (not Markdown) is the canonical storage and
- * pressing Enter is a hard block break.
+ * TipTap's built-in blockquote input rule auto-joins a newly created quote
+ * with a quote immediately before it. That conflicts with the WYSIWYG mental
+ * model in Jant's compose editor, where TipTap JSON (not Markdown) is the
+ * canonical storage and pressing Enter is a hard block break.
  *
- * This extension registers alternate input rules with the same regex as the
- * StarterKit defaults but without the join step, and runs at a higher priority
- * so its handler fires first. Since ProseMirror stops after the first rule
- * that returns a transaction, the StarterKit versions never see the input.
+ * This extension overrides only the blockquote rule. Lists intentionally keep
+ * TipTap's standard input rules so typing the expected next ordered-list
+ * number joins the existing list instead of creating adjacent `<ol>` nodes
+ * whose numbering appears to restart unexpectedly.
  *
- * Result: typing `> `, `- `/`* `, or `1. ` at the start of a paragraph wraps
- * only that paragraph, matching the behavior of the slash command and the
- * bubble menu's toggleBlockquote / toggleBulletList / toggleOrderedList.
+ * Result: typing `> ` at the start of a paragraph wraps only that paragraph.
+ * Typing `- ` or `1. ` continues to use StarterKit's list semantics.
  */
 
 import { Extension, InputRule, callOrReturn } from "@tiptap/core";
@@ -72,27 +69,6 @@ export const WrappingInputRules = Extension.create({
         wrappingInputRuleNoJoin({
           find: /^\s*>\s$/,
           type: blockquote,
-        }),
-      );
-    }
-
-    const bulletList = schema.nodes.bulletList;
-    if (bulletList) {
-      rules.push(
-        wrappingInputRuleNoJoin({
-          find: /^\s*([-+*])\s$/,
-          type: bulletList,
-        }),
-      );
-    }
-
-    const orderedList = schema.nodes.orderedList;
-    if (orderedList) {
-      rules.push(
-        wrappingInputRuleNoJoin({
-          find: /^(\d+)\.\s$/,
-          type: orderedList,
-          getAttributes: (match) => ({ start: Number(match[1]) }),
         }),
       );
     }
