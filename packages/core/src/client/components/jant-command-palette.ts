@@ -177,17 +177,18 @@ export class JantCommandPalette extends LitElement {
     this._loading = false;
   }
 
-  connectedCallback() {
-    super.connectedCallback();
-    void this.#prefetch();
-  }
-
   // -----------------------------------------------------------------------
   // Public API
   // -----------------------------------------------------------------------
 
-  async #prefetch() {
+  /**
+   * Load palette items on demand when the dialog opens. Do not prefetch on
+   * connect — that request was blocking every authenticated page navigation
+   * on cold Workers isolates.
+   */
+  async #ensureItems() {
     if (this.#itemsCache) return;
+
     try {
       const res = await fetch("/api/palette");
       if (res.ok) {
@@ -204,10 +205,9 @@ export class JantCommandPalette extends LitElement {
   async open() {
     if (this._open) return;
 
-    // Ensure data is loaded (normally already prefetched)
     if (!this.#itemsCache) {
       this._loading = true;
-      await this.#prefetch();
+      await this.#ensureItems();
       this._loading = false;
     }
 
