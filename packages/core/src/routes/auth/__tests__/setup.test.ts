@@ -38,14 +38,13 @@ describe("Setup bootstrap logic", () => {
     };
   });
 
-  it("creates six nav items with the built-in default navigation", async () => {
+  it("creates the five-item default navigation without Latest", async () => {
     await runSetupBootstrap(services);
 
     const navItemsList = await services.db.select().from(navItems);
-    expect(navItemsList).toHaveLength(6);
+    expect(navItemsList).toHaveLength(5);
 
     expect(navItemsList.map((item) => item.systemKey)).toEqual([
-      "latest",
       "featured",
       "collections",
       "archive",
@@ -125,7 +124,11 @@ describe("Setup bootstrap logic", () => {
     const navItemsList = await services.db.select().from(navItems);
     const systemItems = navItemsList.filter((item) => item.type === "system");
 
-    expect(systemItems).toHaveLength(6);
+    expect(systemItems).toHaveLength(5);
+    expect(systemItems.map((item) => item.systemKey)).not.toContain("latest");
+    expect(
+      systemItems.find((item) => item.systemKey === "collections")?.label,
+    ).toBe("Collections");
   });
 
   it("creates a site shell when setup runs after a factory reset", async () => {

@@ -1,6 +1,6 @@
 # Writing and organizing
 
-Jant's publishing model has just one primitive: the post. A post comes in one of three formats (Note, Link, Quote), can carry attachments, and can carry a rating. If a few posts were written as a continuous train of thought, you can string them into a Thread. If a few posts share a topic, you can group them into a Collection. Everything else is an extension of those two ideas.
+Jant's publishing model has just one primitive: the post. A post comes in one of three formats (Note, Link, Quote), can carry attachments, and can carry a rating. If a few posts were written as a continuous train of thought, you can string them into a Thread. If Threads share a topic, you can group them into a Collection. Everything else is an extension of those two ideas.
 
 ## Post formats
 
@@ -49,6 +49,12 @@ A post's URL is generated from its title by default. Expand **Custom link** to s
 
 This is the simplest way to lock in a link when you first publish. Note: **changing this link after publishing makes the old address 404** — Jant won't redirect it. To change the URL of a post that's already published, use [Custom URLs](#custom-urls) below instead, which 301-redirects the old address to the new one.
 
+### Preview a draft
+
+Save the post, open **Drafts**, then choose **… → Preview** on its row. Jant opens `/preview/{slug}` in a new tab using the same Note, Link, Quote, media, and Thread rendering as the published page. A status bar marks the page as a draft preview.
+
+Preview URLs require sign-in and are never indexed or cached. They are working URLs for the author, not public links to share.
+
 ## Threads
 
 A Thread is a structure that strings multiple posts together in chronological order — you write a root post, and each subsequent post is a "reply" attached to it.
@@ -61,7 +67,7 @@ To extend a Thread, click "Reply" at the bottom of the post detail page.
 
 ## Collections
 
-A Collection is a curated grouping organized under `/{slug}`. The same post can belong to multiple Collections.
+A Collection is a curated grouping organized under `/{slug}`. The same Thread can belong to multiple Collections; its root and replies always share one membership set.
 
 Good for:
 
@@ -78,8 +84,9 @@ You can also combine multiple Collections in the URL:
 
 Jant treats this as a combined view across multiple Collections:
 
-- Shows the union of posts across the listed Collections
+- Shows the union of complete Threads across the listed Collections
 - A Thread that belongs to more than one of those Collections shows up only once
+- Every matching Thread is shown in full, including all of its published replies
 - The same pattern works for feeds: `/collections/{slug1}+{slug2}/feed`
 
 ## Make a standalone page (About)
@@ -98,7 +105,7 @@ Once published, the page lives at `/about` — Jant derives the slug from the ti
 A post has four publishing states:
 
 - **`Public`**: public, appears on the homepage Latest, visible to anonymous visitors.
-- **`Hidden from Latest`**: hidden from the homepage, but still public — direct links work, it can belong to a Collection, and it appears in `/archive`.
+- **`Hidden from Latest`**: hidden from the homepage, but still public — direct links work, its Thread can belong to a Collection, and it appears in `/archive`.
 - **`Private`**: visible only after sign-in.
 - **`Draft`**: unpublished, visible only to you.
 
@@ -106,9 +113,9 @@ A post has four publishing states:
 
 ### Featured
 
-Marking a post as Featured does two things at once: it adds the post to the `/featured` page, and it pushes the post into the default `/feed` that goes to your subscribers.
+Marking a post as Featured does two things at once: it highlights that exact post on the `/featured` page, and it includes its Thread in the default `/feed` that goes to your subscribers. The page and feed show each Thread once even when several of its posts are Featured.
 
-- Featured posts appear on the Featured page
+- The Featured page groups selected posts by Thread and orders Threads by the newest selected post's publication time
 - The Featured feed lives at `/featured/feed`
 - The main `/feed` can point at Featured or Latest, and defaults to Featured
 
@@ -122,7 +129,7 @@ One of Jant's core design choices is to separate "publishing" from "broadcasting
 
 In Jant these two are independent:
 
-- A post marked `Hidden from Latest` is hidden from the homepage, but the content itself stays public: direct links work, it can belong to a Collection, and it appears in `/archive`.
+- A post marked `Hidden from Latest` is hidden from the homepage, but the content itself stays public: direct links work, its Thread can belong to a Collection, and it appears in `/archive`.
 - A `Public` post appears on the homepage Latest, but **does not** enter the default `/feed`.
 - Only posts marked `Featured` enter `/feed` and reach subscribers.
 
@@ -157,10 +164,17 @@ Feeds:
 
 - `/feed` uses your currently configured main feed
 - `/latest/feed` returns posts that appear on the homepage Latest (excludes `Hidden from Latest`)
-- `/featured/feed` returns Featured posts
+- `/featured/feed` returns one entry per Thread containing Featured posts
 - `/archive/feed` returns every public post (including `Hidden from Latest`), and supports filters like `?year=`, `?format=`, `?collection=`, `?media=`
 - `/{slug}/feed` returns the feed for a single Collection
 - `/collections/{slug1}+{slug2}/feed` returns the feed for a combined Collection view
+
+All dynamic Atom feeds generated by Jant use the same publication grace
+period. New posts and replies appear on the website immediately but become
+eligible for feeds after five minutes by default. This gives you time to check
+the published content, fix mistakes, or unpublish it before a feed reader can
+fetch it. See
+[Configuration § Feed defaults](configuration.md#feed-defaults-optional).
 
 ## Custom URLs
 
@@ -212,7 +226,9 @@ If you really do edit the slug field directly in the editor, note that Jant won'
 
 The following top-level paths are used by Jant itself and can't be used as custom URLs:
 
-`featured`, `latest`, `signin`, `signout`, `setup`, `settings`, `dash`, `api`, `feed`, `search`, `archive`, `media`, `pages`, `reset`, `collections`, `compose`, `new`, `static`, `assets`, `_assets`, `healthz`, `readyz`
+`featured`, `latest`, `signin`, `signout`, `setup`, `settings`, `dash`, `api`, `feed`, `search`, `archive`, `media`, `pages`, `reset`, `collections`, `compose`, `preview`, `new`, `static`, `assets`, `_assets`, `healthz`, `readyz`
+
+If an older site already uses `/preview` as a post or custom URL, that stored record is left unchanged but the old link becomes a 404. Older custom URLs below that prefix also stop resolving as custom URLs because the whole namespace now belongs to authenticated previews. Jant doesn't generate a replacement slug or redirect; edit the conflicting post or custom URL yourself if you want a new public address.
 
 Custom paths can only contain lowercase letters, digits, hyphens (`-`), slashes (`/`), and dots (`.`). The first character must be a letter or digit.
 

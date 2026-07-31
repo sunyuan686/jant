@@ -139,10 +139,10 @@ describe("system nav labels", () => {
 
   it("translates system nav descriptions", () => {
     expect(getSystemNavDescription("latest", i18n)).toBe(
-      "translated:Link to your latest posts. If it comes before Featured, the homepage opens here.",
+      "translated:Link to your latest posts. Your homepage shows this feed.",
     );
     expect(getSystemNavDescription("featured", i18n)).toBe(
-      "translated:Link to your featured posts. If it comes before Latest, the homepage opens here.",
+      "translated:Link to posts you've marked as featured.",
     );
     expect(getSystemNavDescription("archive", i18n)).toBe(
       "translated:Link to the post archive",

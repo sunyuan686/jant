@@ -40,6 +40,48 @@ describe("Nav Items API Routes", () => {
     });
   });
 
+  describe("GET /api/nav-items/pages", () => {
+    it("requires authentication", async () => {
+      const { app } = createTestApp({ authenticated: false });
+      app.route("/api/nav-items", navItemsApiRoutes);
+
+      const res = await app.request("/api/nav-items/pages");
+
+      expect(res.status).toBe(401);
+    });
+
+    it("searches eligible page candidates", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+      const page = await services.posts.create({
+        format: "note",
+        title: "About this site",
+        slug: "about-this-site",
+        visibility: "latest_hidden",
+      });
+      await services.posts.create({
+        format: "link",
+        title: "About elsewhere",
+        slug: "about-elsewhere",
+        url: "https://example.com",
+      });
+
+      const res = await app.request("/api/nav-items/pages?q=ABOUT");
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        pages: [
+          {
+            id: page.id,
+            title: "About this site",
+            slug: "about-this-site",
+            updatedAt: expect.any(Number),
+          },
+        ],
+      });
+    });
+  });
+
   describe("POST /api/nav-items", () => {
     it("returns 401 when not authenticated", async () => {
       const { app } = createTestApp({ authenticated: false });
@@ -429,6 +471,55 @@ describe("Nav Items API Routes", () => {
           type: "collection",
           collectionId: collection.id,
         }),
+      });
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("POST /api/nav-items (page)", () => {
+    it("derives the page label and URL from the selected post", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+      const page = await services.posts.create({
+        format: "note",
+        title: "About me",
+        slug: "about-me",
+        visibility: "latest_hidden",
+      });
+
+      const res = await app.request("/api/nav-items", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Jant-Site-Header": "include",
+        },
+        body: JSON.stringify({ type: "page", postId: page.id }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(await res.json()).toMatchObject({
+        type: "page",
+        postId: page.id,
+        label: "About me",
+        url: "/about-me",
+        headerHtml: expect.stringContaining("About me"),
+      });
+    });
+
+    it("rejects a Link post as a page", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+      const link = await services.posts.create({
+        format: "link",
+        title: "Elsewhere",
+        url: "https://example.com",
+      });
+
+      const res = await app.request("/api/nav-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "page", postId: link.id }),
       });
 
       expect(res.status).toBe(400);

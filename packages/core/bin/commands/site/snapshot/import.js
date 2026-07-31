@@ -28,6 +28,7 @@ import {
   remapSnapshotObjectKey,
   rewriteLegacySnapshotSql,
   rewriteSnapshotSiteIdentifiers,
+  upgradeSnapshotSql,
   validateSnapshotTargetSite,
 } from "../../../lib/site-snapshot.js";
 import {
@@ -69,7 +70,7 @@ async function createNodeImportContext() {
       return nodeDatabase.query(sql);
     },
     async execute(sql) {
-      await nodeDatabase.execute(sql);
+      await nodeDatabase.executeAtomically(sql);
     },
     async uploadObject(key, filePath, contentType) {
       if (!storage) {
@@ -334,6 +335,18 @@ export async function run(argv) {
       join(materialized.rootDir, "db.sql"),
       "utf-8",
     );
+    const siteScopedDbSql = snapshotSite
+      ? shouldRemapSite
+        ? rewriteSnapshotSiteIdentifiers(
+            rawDbSql,
+            snapshotSite.id,
+            targetSite.id,
+          )
+        : rawDbSql
+      : rewriteLegacySnapshotSql(rawDbSql, targetSite.id);
+    // Upgrade compatibility SQL before touching target rows or storage.
+    // A malformed v1 post_collection reference therefore fails safely.
+    const dbSql = upgradeSnapshotSql(siteScopedDbSql, meta.version);
 
     // Preflight: every storage_key/poster_key referenced by db.sql must have
     // a corresponding file in objects/, or we'll end up with broken media
@@ -389,15 +402,6 @@ export async function run(argv) {
       );
     }
 
-    const dbSql = snapshotSite
-      ? shouldRemapSite
-        ? rewriteSnapshotSiteIdentifiers(
-            rawDbSql,
-            snapshotSite.id,
-            targetSite.id,
-          )
-        : rawDbSql
-      : rewriteLegacySnapshotSql(rawDbSql, targetSite.id);
     await context.execute(`${buildReplaceSql(targetSite.id)}\n${dbSql}`);
 
     const keysToDelete = [...currentKeys].filter(

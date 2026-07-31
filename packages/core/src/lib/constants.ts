@@ -22,12 +22,14 @@ export const RESERVED_PATHS = [
   "reset",
   "collections",
   "compose",
+  "preview",
   "new",
   "static",
   "assets",
   "_assets",
   "healthz",
   "readyz",
+  "skill.md",
 ] as const;
 
 export type ReservedPath = (typeof RESERVED_PATHS)[number];

@@ -69,7 +69,7 @@ Non-images default to 1024 MB; tune it with `UPLOAD_MAX_FILE_SIZE_MB`. See [Conf
 
 ## Can deleted posts be recovered?
 
-No. Deletion is permanent — the post row, its paths, its Collection memberships, and its attachment media are all cleaned up together (inline media embedded in the body is left alone). The UI asks for explicit confirmation before deleting.
+No. Deletion is permanent — the post row, its paths, and its attachment media are cleaned up together (inline media embedded in the body is left alone). Deleting a Thread root also deletes the Thread's Collection memberships; deleting only a reply leaves the shared memberships intact. The UI asks for explicit confirmation before deleting.
 
 ## Is multi-language supported?
 
@@ -87,6 +87,18 @@ No. Multi-author needs roles, review, attribution, notifications — a full set 
 ## Why does `/feed` default to Featured instead of Latest?
 
 Jant treats "publish to the site" and "broadcast to subscribers" as two separate things. The default `/feed` points at Featured so you can write small everyday notes without spamming subscribers. To switch back to traditional behavior, change **Settings → General → Feeds → Main RSS feed** to Latest. The three feeds (`/featured/feed`, `/latest/feed`, `/archive/feed`) each cover a different slice. See [Writing and organizing § Why the default feed is Featured](writing-and-organizing.md#why-the-default-feed-is-featured).
+
+## Why doesn't a newly published post appear in RSS right away?
+
+Jant gives new posts and replies a five-minute correction window before they
+can enter its Atom feeds. The content appears on your website immediately;
+only feed delivery waits. This gives you time to fix a mistake or unpublish the
+content before a feed reader can fetch it.
+
+Feed caching and each reader's polling schedule can make the content appear
+later. Change `RSS_PUBLISH_DELAY_SECONDS` in **Settings → Advanced → Config
+Editor** to any whole number from `0` to `7200`; `0` disables the delay. See
+[Configuration § Feed defaults](configuration.md#feed-defaults-optional).
 
 ## Can I host under a subpath (e.g., `example.com/blog`)?
 
@@ -136,7 +148,7 @@ Possibly, but only when warranted. Every breaking change is documented in the co
 
 ## How do I move my old blog into Jant (WordPress, Tumblr, etc.)?
 
-There's no fixed importer — every platform exports differently. The easiest path is to hand [`jant.me/skill.md`](https://jant.me/skill.md) to an AI assistant: it's an import guide written for AI, covering Jant's data model, how to map common source formats, and which API calls to make. Give the assistant your export file and a site API token, and let it run the migration. See [Export and import](export-and-import.md#coming-from-another-blog-or-cms).
+There's no fixed importer — every platform exports differently. The easiest path is to hand your site's `/skill.md` URL (for example, `https://example.com/skill.md`) to an AI assistant. This site-bound Jant guide includes a dedicated import workflow covering the data model, source-format mapping, resumable writes, and verification. Give the assistant your export file and a site API token, and let it run the migration. See [Export and import](export-and-import.md#coming-from-another-blog-or-cms).
 
 ## Can I migrate back to WordPress / Ghost?
 

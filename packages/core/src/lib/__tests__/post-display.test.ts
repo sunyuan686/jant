@@ -97,4 +97,68 @@ describe("post display assembly", () => {
     expect(display?.threadPostViews).toHaveLength(2);
     expect(display?.threadPostViews?.[1]?.id).toBe(reply.id);
   });
+
+  it("includes draft thread members only for an authenticated preview", async () => {
+    const root = await postService.create({
+      format: "note",
+      bodyMarkdown: "Draft root",
+      status: "draft",
+    });
+    const reply = await postService.create({
+      format: "note",
+      bodyMarkdown: "Draft reply",
+      status: "draft",
+      replyToId: root.id,
+    });
+
+    const preview = await assemblePostPageDisplay(createContext(), root.id, {
+      isAuthenticated: true,
+      allowDraft: true,
+      includeDraftThread: true,
+    });
+    const normal = await assemblePostPageDisplay(createContext(), root.id, {
+      isAuthenticated: true,
+    });
+
+    expect(preview?.threadPostViews?.map((post) => post.id)).toEqual([
+      root.id,
+      reply.id,
+    ]);
+    expect(normal).toBeNull();
+  });
+
+  it("keeps draft replies out of a published permalink outside preview", async () => {
+    const root = await postService.create({
+      format: "note",
+      bodyMarkdown: "Published root",
+      status: "published",
+    });
+    const draftReply = await postService.create({
+      format: "note",
+      bodyMarkdown: "Draft reply",
+      status: "draft",
+      replyToId: root.id,
+    });
+
+    const publicDisplay = await assemblePostPageDisplay(
+      createContext(),
+      root.id,
+      { isAuthenticated: true },
+    );
+    const previewDisplay = await assemblePostPageDisplay(
+      createContext(),
+      draftReply.id,
+      {
+        isAuthenticated: true,
+        allowDraft: true,
+        includeDraftThread: true,
+      },
+    );
+
+    expect(publicDisplay?.threadPostViews).toBeUndefined();
+    expect(previewDisplay?.threadPostViews?.map((post) => post.id)).toEqual([
+      root.id,
+      draftReply.id,
+    ]);
+  });
 });

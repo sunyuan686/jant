@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { requireAuthApi } from "../../middleware/auth.js";
+import { requirePublicApiAccess } from "../../middleware/public-content-access.js";
 import {
   CreateNavItemSchema,
   NavItemIdSchema,
@@ -31,6 +32,11 @@ const MoveSchema = z.object({
   before: NavItemIdSchema.nullable().optional(),
 });
 
+const PageCandidatesQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+
 async function withSiteHeaderHtml<T extends object>(
   c: Context<Env>,
   body: T,
@@ -48,9 +54,19 @@ async function withSiteHeaderHtml<T extends object>(
 }
 
 // List nav items
-navItemsApiRoutes.get("/", async (c) => {
+navItemsApiRoutes.get("/", requirePublicApiAccess(), async (c) => {
   const items = await c.var.services.navItems.list();
   return c.json({ navItems: items });
+});
+
+// Search published titled notes that can be added as pages (requires auth)
+navItemsApiRoutes.get("/pages", requireAuthApi(), async (c) => {
+  const query = parseValidated(PageCandidatesQuerySchema, c.req.query());
+  const pages = await c.var.services.navItems.listPageCandidates({
+    query: query.q,
+    limit: query.limit,
+  });
+  return c.json({ pages });
 });
 
 // Move nav item (requires auth) — must be before /:id
@@ -92,6 +108,13 @@ navItemsApiRoutes.post("/", requireAuthApi(), async (c) => {
       collectionId: body.collectionId,
       label: body.label || collection.title,
       url: getCollectionPagePath(collection.slug),
+      placement: body.placement,
+    });
+  } else if (body.type === "page") {
+    item = await c.var.services.navItems.create({
+      type: "page",
+      postId: body.postId,
+      label: body.label,
       placement: body.placement,
     });
   } else {

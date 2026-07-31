@@ -13,7 +13,10 @@ import { parseValidated } from "../../lib/schemas.js";
 import { ValidationError } from "../../lib/errors.js";
 import { syncHostedControlPlaneSiteAvatar } from "../../lib/hosted-control-plane-sync.js";
 import {
+  buildConfigEditorFields,
   buildEditableSettingsResponse,
+  demoLockedSettingKeys,
+  isResettableConfigEditorKey,
   partitionEditableSettingUpdates,
   partitionImportableSettingUpdates,
 } from "../../lib/api-settings.js";
@@ -31,6 +34,7 @@ settingsApiRoutes.get("/", requireAuthApi(), async (c) => {
     settings: buildEditableSettingsResponse(
       allSettings,
       c.var.appConfig.demoMode,
+      c.env,
     ),
   });
 });
@@ -61,6 +65,7 @@ settingsApiRoutes.put("/", requireAuthApi(), async (c) => {
     settings: buildEditableSettingsResponse(
       allSettings,
       c.var.appConfig.demoMode,
+      c.env,
     ),
     ...(rejectedKeys.length > 0 && { rejectedKeys }),
   });
@@ -215,4 +220,32 @@ settingsApiRoutes.delete("/avatar", requireAuthApi(), async (c) => {
     );
   }
   return c.json({ success: true });
+});
+
+// Remove one runtime override so the environment/default fallback applies.
+// Registered after the concrete avatar route so `DELETE /avatar` remains
+// unambiguous.
+settingsApiRoutes.delete("/:key", requireAuthApi(), async (c) => {
+  const key = c.req.param("key");
+  const demoMode = c.var.appConfig.demoMode;
+
+  if (
+    !isResettableConfigEditorKey(key) ||
+    (demoMode && demoLockedSettingKeys.has(key))
+  ) {
+    throw new ValidationError("This setting can't be reset.", {
+      rejectedKeys: [key],
+    });
+  }
+
+  await c.var.services.settings.remove(key);
+  const allSettings = await c.var.services.settings.getAll();
+  const setting = buildConfigEditorFields(allSettings, c.env, demoMode).find(
+    (field) => field.key === key,
+  );
+
+  return c.json({
+    settings: buildEditableSettingsResponse(allSettings, demoMode, c.env),
+    setting,
+  });
 });

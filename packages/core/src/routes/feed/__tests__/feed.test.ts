@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Bindings } from "../../../types.js";
@@ -43,6 +43,7 @@ function createFeedTestApp(envOverrides: Partial<Bindings> = {}) {
     const env = {
       SITE_ORIGIN: `http://localhost:${DEFAULT_APP_PORT}`,
       SITE_PATH_PREFIX: "",
+      RSS_PUBLISH_DELAY_SECONDS: 0,
       ...envOverrides,
     } as Bindings;
     c.env = env;
@@ -66,6 +67,10 @@ function createFeedTestApp(envOverrides: Partial<Bindings> = {}) {
 
   return { app, services, db: db as unknown as Database };
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("Atom Feed Routes", () => {
   describe("/feed — site main feed", () => {
@@ -170,9 +175,10 @@ describe("Atom Feed Routes", () => {
       expect(res.headers.get("Content-Type")).toBe(
         "application/atom+xml; charset=utf-8",
       );
+      expect(res.headers.get("Cache-Control")).toBe("public, max-age=60");
     });
 
-    it("orders featured items by featuredAt and preserves original publishedAt", async () => {
+    it("orders Featured Threads by selected Post publication time", async () => {
       const { app, services, db } = createFeedTestApp();
 
       const olderPublished = await services.posts.create({
@@ -203,11 +209,9 @@ describe("Atom Feed Routes", () => {
       expect(res.status).toBe(200);
 
       const xml = await res.text();
-      // Older published should appear first because it has a later featuredAt
-      expect(xml.indexOf("Older published")).toBeLessThan(
-        xml.indexOf("Newer published"),
+      expect(xml.indexOf("Newer published")).toBeLessThan(
+        xml.indexOf("Older published"),
       );
-      // <published> should reflect original publishedAt, not featuredAt
       expect(xml).toContain("<published>1970-01-01T00:16:40.000Z</published>");
       expect(xml).toContain("<published>1970-01-01T00:33:20.000Z</published>");
     });
@@ -352,6 +356,45 @@ describe("Atom Feed Routes", () => {
       expect(xml).toContain("Featured Post");
       expect(xml).not.toContain("Regular Post");
     });
+
+    it("deduplicates by Thread and orders from a Featured Child publication", async () => {
+      const { app, services } = createFeedTestApp();
+
+      const olderRoot = await services.posts.create({
+        format: "note",
+        title: "Older Thread Root",
+        bodyMarkdown: "Older root body",
+        status: "published",
+        publishedAt: 1000,
+      });
+      await services.posts.create({
+        format: "note",
+        title: "Featured Child",
+        bodyMarkdown: "Selected child body",
+        status: "published",
+        replyToId: olderRoot.id,
+        featured: true,
+        publishedAt: 3000,
+      });
+      await services.posts.create({
+        format: "note",
+        title: "Newer Root",
+        bodyMarkdown: "Newer root body",
+        status: "published",
+        featured: true,
+        publishedAt: 2000,
+      });
+
+      const res = await app.request("/featured/feed");
+      expect(res.status).toBe(200);
+
+      const xml = await res.text();
+      expect(xml.match(/<entry>/g)).toHaveLength(2);
+      expect(xml).toContain("Selected child body");
+      expect(xml.indexOf("Older Thread Root")).toBeLessThan(
+        xml.indexOf("Newer Root"),
+      );
+    });
   });
 
   describe("legacy feed path redirects", () => {
@@ -430,6 +473,33 @@ describe("Atom Feed Routes", () => {
       expect(res.status).toBe(308);
       expect(res.headers.get("Location")).toBe("/latest/feed");
     });
+  });
+
+  it("emits canonical v3 footnotes from a stale stored projection", async () => {
+    const { app, services, db } = createFeedTestApp();
+    const post = await services.posts.create({
+      format: "note",
+      title: "Footnote feed",
+      bodyMarkdown: "Feed body[^1]\n\n[^1]: Feed definition",
+      status: "published",
+    });
+    await db
+      .update(postTable)
+      .set({
+        bodyHtml: '<span class="sidenote">legacy</span>',
+        bodyHtmlVersion: 1,
+      })
+      .where(eq(postTable.id, post.id));
+
+    const response = await app.request("/latest/feed");
+    const xml = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(xml).toContain('role="doc-noteref"');
+    expect(xml).toContain('role="doc-endnotes"');
+    expect(xml).toMatch(/id="fn-[a-z0-9]{13}-1"/);
+    expect(xml).not.toContain(`fn-${post.id}`);
+    expect(xml).not.toContain("legacy");
   });
 
   describe("RSS_FEED_LIMIT env var", () => {
@@ -527,6 +597,85 @@ describe("Atom Feed Routes", () => {
     });
   });
 
+  describe("RSS_PUBLISH_DELAY_SECONDS env var", () => {
+    it("includes the exact 300-second boundary and excludes newer Posts", async () => {
+      const currentTime = 2_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(currentTime * 1000);
+      const { app, services } = createFeedTestApp({
+        RSS_PUBLISH_DELAY_SECONDS: 300,
+      });
+
+      await services.posts.create({
+        format: "note",
+        title: "Boundary Post",
+        bodyMarkdown: "Eligible at exactly five minutes",
+        status: "published",
+        publishedAt: currentTime - 300,
+      });
+      await services.posts.create({
+        format: "note",
+        title: "Recent Post",
+        bodyMarkdown: "Still inside the edit window",
+        status: "published",
+        publishedAt: currentTime - 299,
+      });
+
+      const xml = await (await app.request("/latest/feed")).text();
+
+      expect(xml).toContain("Boundary Post");
+      expect(xml).not.toContain("Recent Post");
+    });
+
+    it("applies the delay to Featured Posts", async () => {
+      const currentTime = 2_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(currentTime * 1000);
+      const { app, services } = createFeedTestApp({
+        RSS_PUBLISH_DELAY_SECONDS: 300,
+      });
+
+      await services.posts.create({
+        format: "note",
+        title: "Eligible Featured Post",
+        bodyMarkdown: "Old enough",
+        status: "published",
+        featured: true,
+        publishedAt: currentTime - 300,
+      });
+      await services.posts.create({
+        format: "note",
+        title: "Recent Featured Post",
+        bodyMarkdown: "Too new",
+        status: "published",
+        featured: true,
+        publishedAt: currentTime,
+      });
+
+      const xml = await (await app.request("/featured/feed")).text();
+
+      expect(xml).toContain("Eligible Featured Post");
+      expect(xml).not.toContain("Recent Featured Post");
+    });
+
+    it("lets zero disable the delay", async () => {
+      const currentTime = 2_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(currentTime * 1000);
+      const { app, services } = createFeedTestApp({
+        RSS_PUBLISH_DELAY_SECONDS: 0,
+      });
+      await services.posts.create({
+        format: "note",
+        title: "Immediate Post",
+        bodyMarkdown: "No edit window",
+        status: "published",
+        publishedAt: currentTime,
+      });
+
+      const xml = await (await app.request("/latest/feed")).text();
+
+      expect(xml).toContain("Immediate Post");
+    });
+  });
+
   describe("thread content in feed", () => {
     it("includes thread replies inline with hr separators", async () => {
       const { app, services } = createFeedTestApp();
@@ -551,6 +700,61 @@ describe("Atom Feed Routes", () => {
       expect(xml).toContain("Root content");
       expect(xml).toContain("Reply content");
       expect(xml).toContain("<hr/>");
+    });
+
+    it("delays new replies inside an already eligible Thread", async () => {
+      const currentTime = 2_000_000;
+      const dateNow = vi.spyOn(Date, "now").mockReturnValue(currentTime * 1000);
+      const { app, services } = createFeedTestApp({
+        RSS_PUBLISH_DELAY_SECONDS: 300,
+      });
+      const root = await services.posts.create({
+        format: "note",
+        title: "Eligible Thread Root",
+        bodyMarkdown: "Root content",
+        status: "published",
+        publishedAt: currentTime - 600,
+      });
+      await services.posts.create({
+        format: "note",
+        bodyMarkdown: "Recent reply content",
+        status: "published",
+        replyToId: root.id,
+        publishedAt: currentTime,
+      });
+
+      const beforeDelay = await (await app.request("/latest/feed")).text();
+      expect(beforeDelay).toContain("Root content");
+      expect(beforeDelay).not.toContain("Recent reply content");
+
+      dateNow.mockReturnValue((currentTime + 300) * 1000);
+      const afterDelay = await (await app.request("/latest/feed")).text();
+      expect(afterDelay).toContain("Recent reply content");
+    });
+
+    it("reflects eligible content edits in the Atom entry updated timestamp", async () => {
+      const currentTime = 2_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(currentTime * 1000);
+      const { app, services } = createFeedTestApp({
+        RSS_PUBLISH_DELAY_SECONDS: 300,
+      });
+      const root = await services.posts.create({
+        format: "note",
+        title: "Edited Post",
+        bodyMarkdown: "Original copy",
+        status: "published",
+        publishedAt: currentTime - 300,
+      });
+      await services.posts.update(root.id, {
+        bodyMarkdown: "Corrected copy",
+      });
+
+      const xml = await (await app.request("/latest/feed")).text();
+      const entry = xml.match(/<entry>[\s\S]*?<\/entry>/)?.[0];
+
+      expect(entry).toContain("Corrected copy");
+      expect(entry).not.toContain("Original copy");
+      expect(entry).toContain("<updated>1970-01-24T03:33:20.000Z</updated>");
     });
   });
 });

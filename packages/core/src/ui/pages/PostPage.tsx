@@ -12,10 +12,22 @@
 import { msg } from "@lingui/core/macro";
 import type { FC } from "hono/jsx";
 import { useLingui } from "../../i18n/context.js";
-import type { PostPageProps, PostView } from "../../types.js";
+import type {
+  PostPageProps,
+  PostView,
+  TimelineCardDisplayOptions,
+} from "../../types.js";
 import { TimelineItemFromPost } from "../feed/TimelineItem.js";
 
-const renderThreadItem = (tp: PostView, currentId: string) => {
+const PREVIEW_DISPLAY: TimelineCardDisplayOptions = {
+  footer: { hideActions: true, hideReply: true, hideTimestamp: false },
+};
+
+const renderThreadItem = (
+  tp: PostView,
+  currentId: string,
+  isPreview: boolean,
+) => {
   const isCurrent = tp.id === currentId;
   return (
     <div
@@ -27,16 +39,19 @@ const renderThreadItem = (tp: PostView, currentId: string) => {
       <TimelineItemFromPost
         post={tp}
         mode="detail"
-        display={{ footer: { hideTimestamp: false } }}
+        display={
+          isPreview ? PREVIEW_DISPLAY : { footer: { hideTimestamp: false } }
+        }
       />
     </div>
   );
 };
 
-const ThreadDetail: FC<{ post: PostView; threadPosts: PostView[] }> = ({
-  post,
-  threadPosts,
-}) => {
+const ThreadDetail: FC<{
+  post: PostView;
+  threadPosts: PostView[];
+  isPreview: boolean;
+}> = ({ post, threadPosts, isPreview }) => {
   const { i18n } = useLingui();
   const showMoreLabel = i18n._(
     msg({
@@ -66,7 +81,7 @@ const ThreadDetail: FC<{ post: PostView; threadPosts: PostView[] }> = ({
             data-thread-context
             data-collapsed=""
           >
-            {ancestors.map((tp) => renderThreadItem(tp, post.id))}
+            {ancestors.map((tp) => renderThreadItem(tp, post.id, isPreview))}
           </div>
           <button
             type="button"
@@ -94,12 +109,16 @@ const ThreadDetail: FC<{ post: PostView; threadPosts: PostView[] }> = ({
           </button>
         </>
       )}
-      {currentAndAfter.map((tp) => renderThreadItem(tp, post.id))}
+      {currentAndAfter.map((tp) => renderThreadItem(tp, post.id, isPreview))}
     </div>
   );
 };
 
-export const PostPage: FC<PostPageProps> = ({ post, threadPosts }) => {
+export const PostPage: FC<PostPageProps> = ({
+  post,
+  threadPosts,
+  isPreview = false,
+}) => {
   return (
     <div
       data-post-view
@@ -107,9 +126,17 @@ export const PostPage: FC<PostPageProps> = ({ post, threadPosts }) => {
       data-thread-root-id={post.threadRootId ?? post.id}
     >
       {threadPosts && threadPosts.length > 1 ? (
-        <ThreadDetail post={post} threadPosts={threadPosts} />
+        <ThreadDetail
+          post={post}
+          threadPosts={threadPosts}
+          isPreview={isPreview}
+        />
       ) : (
-        <TimelineItemFromPost post={post} mode="detail" />
+        <TimelineItemFromPost
+          post={post}
+          mode="detail"
+          display={isPreview ? PREVIEW_DISPLAY : undefined}
+        />
       )}
       {/* Public integration slot — code injection (giscus, Webmentions, etc.) appends here. */}
       <div data-post-end />

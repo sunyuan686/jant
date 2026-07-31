@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { Bindings, CollectionSortOrder } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { requireAuthApi } from "../../middleware/auth.js";
+import { requirePublicApiAccess } from "../../middleware/public-content-access.js";
 import {
   CollectionDirectoryItemIdSchema,
   CollectionDescriptionValueSchema,
@@ -30,8 +31,8 @@ const UpdateCollectionSchema = CreateCollectionSchema.partial().extend({
   sortOrder: CollectionSortOrderSchema.optional(),
 });
 
-const PostAssignSchema = z.object({
-  postId: PostIdSchema,
+const ThreadAssignSchema = z.object({
+  threadId: PostIdSchema,
 });
 
 const MoveSchema = z.object({
@@ -43,8 +44,8 @@ const ListCollectionsQuerySchema = z.object({
   view: z.enum(["compose"]).optional(),
 });
 
-// List collections (includes post counts and directory items)
-collectionsApiRoutes.get("/", async (c) => {
+// List collections (includes Thread counts and directory items)
+collectionsApiRoutes.get("/", requirePublicApiAccess(), async (c) => {
   const query = parseValidated(ListCollectionsQuerySchema, c.req.query());
 
   if (query.view === "compose") {
@@ -135,7 +136,7 @@ collectionsApiRoutes.delete(
 );
 
 // Get single collection
-collectionsApiRoutes.get("/:id", async (c) => {
+collectionsApiRoutes.get("/:id", requirePublicApiAccess(), async (c) => {
   const id = parseIdParam(c.req.param("id"), ID_PREFIX.collection);
   const collection = assertFound(
     await c.var.services.collections.getById(id),
@@ -181,56 +182,51 @@ collectionsApiRoutes.delete("/:id", requireAuthApi(), async (c) => {
   return c.json({ success: true });
 });
 
-// Add a post to a collection (requires auth)
-collectionsApiRoutes.post("/:id/posts", requireAuthApi(), async (c) => {
+// Add a thread to a collection (requires auth)
+collectionsApiRoutes.post("/:id/threads", requireAuthApi(), async (c) => {
   const id = parseIdParam(c.req.param("id"), ID_PREFIX.collection);
   assertFound(await c.var.services.collections.getById(id), "Collection");
 
-  const body = parseValidated(PostAssignSchema, await c.req.json());
-  assertFound(await c.var.services.posts.getById(body.postId), "Post");
-
-  await c.var.services.collections.addPost(id, body.postId);
+  const body = parseValidated(ThreadAssignSchema, await c.req.json());
+  await c.var.services.collections.addThread(id, body.threadId);
 
   return c.json({ success: true }, 201);
 });
 
-// Remove a post from a collection (requires auth)
+// Remove a thread from a collection (requires auth)
 collectionsApiRoutes.delete(
-  "/:id/posts/:postId",
+  "/:id/threads/:threadId",
   requireAuthApi(),
   async (c) => {
     const id = parseIdParam(c.req.param("id"), ID_PREFIX.collection);
-    const postId = parseIdParam(c.req.param("postId"), ID_PREFIX.post);
-
-    await c.var.services.collections.removePost(id, postId);
+    const threadId = parseIdParam(c.req.param("threadId"), ID_PREFIX.post);
+    await c.var.services.collections.removeThread(id, threadId);
 
     return c.json({ success: true });
   },
 );
 
-// Pin a post within a collection (requires auth)
+// Pin a thread within a collection (requires auth)
 collectionsApiRoutes.put(
-  "/:id/posts/:postId/pin",
+  "/:id/threads/:threadId/pin",
   requireAuthApi(),
   async (c) => {
     const id = parseIdParam(c.req.param("id"), ID_PREFIX.collection);
-    const postId = parseIdParam(c.req.param("postId"), ID_PREFIX.post);
-
-    await c.var.services.collections.pinPost(id, postId);
+    const threadId = parseIdParam(c.req.param("threadId"), ID_PREFIX.post);
+    await c.var.services.collections.pinThread(id, threadId);
 
     return c.json({ success: true });
   },
 );
 
-// Unpin a post within a collection (requires auth)
+// Unpin a thread within a collection (requires auth)
 collectionsApiRoutes.delete(
-  "/:id/posts/:postId/pin",
+  "/:id/threads/:threadId/pin",
   requireAuthApi(),
   async (c) => {
     const id = parseIdParam(c.req.param("id"), ID_PREFIX.collection);
-    const postId = parseIdParam(c.req.param("postId"), ID_PREFIX.post);
-
-    await c.var.services.collections.unpinPost(id, postId);
+    const threadId = parseIdParam(c.req.param("threadId"), ID_PREFIX.post);
+    await c.var.services.collections.unpinThread(id, threadId);
 
     return c.json({ success: true });
   },

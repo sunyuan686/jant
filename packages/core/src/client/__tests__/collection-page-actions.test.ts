@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../toast.js", () => ({
   showToast: vi.fn(),
+  showToastWithAction: vi.fn(),
 }));
 
 vi.mock("../confirm.js", () => ({
@@ -16,7 +17,8 @@ function createMarkup() {
     <div
       data-collection-page-actions
       data-collection-id="collection-1"
-      data-collection-page-labels='{"edit":"Edit","moreActions":"More actions","deleteCollection":"Delete","confirmDelete":"Delete this collection permanently? Posts inside won\\u0027t be removed.","cancel":"Cancel","saveFailed":"Couldn\\u0027t save. Try again in a moment.","deleted":"Deleted"}'
+      data-collection-page-labels='{"edit":"Edit","addToNavigation":"Add to Navigation","addingToNavigation":"Adding…","addedToNavigation":"Collection added to navigation.","editNavigation":"Edit Navigation","addToNavigationFailed":"Couldn\\u0027t add this collection to navigation. Try again.","moreActions":"More actions","deleteCollection":"Delete","confirmDelete":"Delete this collection permanently? Threads inside won\\u0027t be removed.","cancel":"Cancel","saveFailed":"Couldn\\u0027t save. Try again in a moment.","deleted":"Deleted"}'
+      data-collection-in-navigation="false"
       data-collection-page-redirect-url="/collections"
     >
       <button
@@ -33,6 +35,21 @@ function createMarkup() {
         <button
           type="button"
           role="menuitem"
+          data-collection-page-action="add-to-navigation"
+        >
+          <span class="collections-page-menu-item-label">Add to Navigation</span>
+        </button>
+        <a
+          href="/settings/navigation"
+          role="menuitem"
+          data-collection-page-edit-navigation
+          hidden
+        >
+          Edit Navigation
+        </a>
+        <button
+          type="button"
+          role="menuitem"
           data-collection-page-action="delete"
         >
           Delete
@@ -40,6 +57,11 @@ function createMarkup() {
       </div>
     </div>
   `;
+}
+
+async function flushAsyncWork() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe("collection detail page actions", () => {
@@ -98,7 +120,7 @@ describe("collection detail page actions", () => {
 
     expect(showConfirmDialog).toHaveBeenCalledWith({
       message:
-        "Delete this collection permanently? Posts inside won't be removed.",
+        "Delete this collection permanently? Threads inside won't be removed.",
       confirmLabel: "Delete",
       cancelLabel: "Cancel",
       tone: "danger",
@@ -108,5 +130,52 @@ describe("collection detail page actions", () => {
     });
     expect(showToast).toHaveBeenCalledWith("Deleted");
     expect(window.location.pathname).toBe("/collections");
+  });
+
+  it("adds the collection to navigation and reveals the settings action", async () => {
+    createMarkup();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "nav-1" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { showToastWithAction } = await import("../toast.js");
+    await import("../collection-page-actions.js");
+
+    const addButton = document.querySelector<HTMLButtonElement>(
+      "[data-collection-page-action='add-to-navigation']",
+    );
+    const editNavigationLink = document.querySelector<HTMLAnchorElement>(
+      "[data-collection-page-edit-navigation]",
+    );
+
+    addButton?.click();
+    await flushAsyncWork();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/nav-items", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-Jant-Site-Header": "include",
+      },
+      body: JSON.stringify({
+        type: "collection",
+        collectionId: "collection-1",
+        placement: "header",
+      }),
+    });
+    expect(addButton?.hidden).toBe(true);
+    expect(editNavigationLink?.hidden).toBe(false);
+    expect(showToastWithAction).toHaveBeenCalledWith(
+      "Collection added to navigation.",
+      {
+        label: "Edit Navigation",
+        href: "/settings/navigation",
+      },
+    );
   });
 });

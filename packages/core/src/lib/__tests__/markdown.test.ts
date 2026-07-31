@@ -26,6 +26,22 @@ describe("render", () => {
     expect(html).toContain(">link</a>");
   });
 
+  it("renders phone and messaging action links", () => {
+    expect(render("[Call](tel:+15551234567)")).toContain(
+      'href="tel:+15551234567"',
+    );
+    expect(render("[Message](sms:xxxxx@xx.com)")).toContain(
+      'href="sms:xxxxx@xx.com"',
+    );
+  });
+
+  it("strips executable link destinations", () => {
+    const html = render("[unsafe](javascript:alert(1))");
+
+    expect(html).not.toContain("javascript:");
+    expect(html).toContain('href=""');
+  });
+
   it("renders code blocks", () => {
     const html = render("```\nconst x = 1;\n```");
     expect(html).toContain("<code>");
@@ -62,14 +78,16 @@ describe("render", () => {
     expect(html).toBe("<p>Intro</p><!--more--><p>Rest</p>");
   });
 
-  it("renders footnote references as inline sidenotes", () => {
+  it("renders semantic footnote references and definitions", () => {
     const html = render("Body copy[^1]\n\n[^1]: Footnote body");
 
-    expect(html).toContain(
-      '<label for="sn-1" class="margin-toggle sidenote-number footref">',
-    );
-    expect(html).toContain('<span class="sidenote">Footnote body</span>');
-    expect(html).not.toContain('<section class="footnotes"');
+    expect(html).toContain('role="doc-noteref"');
+    expect(html).toContain('role="doc-endnotes"');
+    expect(html).toContain('class="footnote-list"');
+    expect(html).toContain("Footnote body");
+    expect(html).toContain('role="doc-backlink"');
+    expect(html.match(/<ol class="footnote-list">/g)).toHaveLength(1);
+    expect(html).not.toMatch(/footnote-document|data-footnote-|--footnote-/);
   });
 
   it("escapes raw HTML outside the supported markdown schema", () => {

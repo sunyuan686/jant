@@ -44,6 +44,20 @@ describe("SiteAdminService", () => {
       .all(created.site.id) as { key: string }[];
 
     expect(siteRows).toEqual([{ key: "demo-cloud" }]);
+
+    const navigationRows = sqlite
+      .prepare(
+        'SELECT "system_key" AS systemKey, "placement" FROM "nav_item" WHERE "site_id" = ? ORDER BY "position"',
+      )
+      .all(created.site.id) as { systemKey: string; placement: string }[];
+
+    expect(navigationRows).toEqual([
+      { systemKey: "featured", placement: "header" },
+      { systemKey: "collections", placement: "header" },
+      { systemKey: "archive", placement: "header" },
+      { systemKey: "rss", placement: "more" },
+      { systemKey: "settings", placement: "more" },
+    ]);
   });
 
   it("preserves valid browser timezones during managed site creation", async () => {
@@ -91,7 +105,7 @@ describe("SiteAdminService", () => {
   });
 
   it("returns the existing site when replayed with the same idempotency key", async () => {
-    const { db } = createTestDatabase();
+    const { db, sqlite } = createTestDatabase();
     const service = createSiteAdminService(db, sqliteSchemaBundle, "sqlite", {
       siteResolutionMode: "host-based",
     });
@@ -103,6 +117,12 @@ describe("SiteAdminService", () => {
       idempotencyKey: "job_abc",
     });
 
+    sqlite
+      .prepare(
+        'DELETE FROM "nav_item" WHERE "site_id" = ? AND "system_key" = \'featured\'',
+      )
+      .run(first.site.id);
+
     const second = await service.createManagedSite({
       key: "idem-site",
       primaryHost: "idem-site.example.com",
@@ -112,6 +132,62 @@ describe("SiteAdminService", () => {
 
     expect(second.site.id).toBe(first.site.id);
     expect(second.domain.id).toBe(first.domain.id);
+    const featuredCount = sqlite
+      .prepare(
+        'SELECT COUNT(*) AS count FROM "nav_item" WHERE "site_id" = ? AND "system_key" = \'featured\'',
+      )
+      .get(first.site.id) as { count: number };
+    expect(featuredCount.count).toBe(0);
+  });
+
+  it("recovers an incomplete idempotent provisioning attempt", async () => {
+    const { db, sqlite } = createTestDatabase();
+    const service = createSiteAdminService(db, sqliteSchemaBundle, "sqlite", {
+      siteResolutionMode: "host-based",
+    });
+
+    const first = await service.createManagedSite({
+      key: "recovery-site",
+      primaryHost: "recovery-site.example.com",
+      siteName: "Recovery Site",
+      idempotencyKey: "job_recovery",
+    });
+    sqlite
+      .prepare('DELETE FROM "nav_item" WHERE "site_id" = ?')
+      .run(first.site.id);
+    sqlite
+      .prepare(
+        'DELETE FROM "site_setting" WHERE "site_id" = ? AND "key" = \'ONBOARDING_STATUS\'',
+      )
+      .run(first.site.id);
+
+    const recovered = await service.createManagedSite({
+      key: "recovery-site",
+      primaryHost: "recovery-site.example.com",
+      siteName: "Recovery Site",
+      idempotencyKey: "job_recovery",
+    });
+
+    const navigationRows = sqlite
+      .prepare(
+        'SELECT "system_key" AS systemKey FROM "nav_item" WHERE "site_id" = ? ORDER BY "position"',
+      )
+      .all(first.site.id) as { systemKey: string }[];
+    const onboarding = sqlite
+      .prepare(
+        'SELECT "value" FROM "site_setting" WHERE "site_id" = ? AND "key" = \'ONBOARDING_STATUS\'',
+      )
+      .get(first.site.id) as { value: string };
+
+    expect(recovered.site.id).toBe(first.site.id);
+    expect(navigationRows.map((row) => row.systemKey)).toEqual([
+      "featured",
+      "collections",
+      "archive",
+      "rss",
+      "settings",
+    ]);
+    expect(onboarding.value).toBe("completed");
   });
 
   it("rejects reuse of an idempotency key with different key or primary host", async () => {

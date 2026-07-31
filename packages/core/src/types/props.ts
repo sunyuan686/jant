@@ -30,6 +30,8 @@ export interface HomePageProps {
 export interface PostPageProps {
   post: PostView;
   threadPosts?: PostView[];
+  /** Hide owner-only actions while preserving the public post rendering. */
+  isPreview?: boolean;
 }
 
 /** Props for the featured page component */
@@ -108,7 +110,10 @@ export interface CollectionPageProps {
   defaultSort: CollectionSortOrder;
   showRatingSort: boolean;
   isAuthenticated: boolean;
+  isInNavigation?: boolean;
   sitePathPrefix?: string;
+  /** Href for this collection selection's Atom feed when feeds are enabled. */
+  feedHref?: string;
 }
 
 /** Props for the collection editor page component */
@@ -123,6 +128,7 @@ export interface CollectionEditorPageProps {
 export interface CollectionsPageProps {
   items: CollectionDirectoryItem[];
   isAuthenticated: boolean;
+  navigationCollectionIds?: string[];
   sitePathPrefix?: string;
   siteOrigin?: string;
 }

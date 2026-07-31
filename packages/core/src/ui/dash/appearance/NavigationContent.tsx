@@ -17,7 +17,9 @@ import type {
   NavManagerSuggestedLink,
   SystemNavConfig,
 } from "../../../client/components/nav-manager-types.js";
+import type { CollectionFormLabels } from "../../../client/components/collection-types.js";
 import { toPublicHref, toPublicPath } from "../../../lib/url.js";
+import { getCollectionFormLabels } from "../../shared/collection-management-labels.js";
 import {
   getNavItemDisplayLabel,
   getSystemNavDescription,
@@ -34,6 +36,7 @@ export function NavigationContent({
   directoryData,
   suggestedLinks,
   mainRssFeed,
+  rssFeedsEnabled,
   siteName,
   sitePathPrefix = "",
 }: {
@@ -41,6 +44,7 @@ export function NavigationContent({
   directoryData: CollectionsDirectoryData;
   suggestedLinks: SuggestedNavLink[];
   mainRssFeed: string;
+  rssFeedsEnabled: boolean;
   siteName: string;
   sitePathPrefix?: string;
 }) {
@@ -64,6 +68,90 @@ export function NavigationContent({
     }),
   );
   const moreLabel = i18n._(NAV_MORE_LABEL);
+  const createCollectionLabel = i18n._(
+    msg({
+      message: "Create Collection",
+      comment:
+        "@context: Button and dialog title for quick collection creation in Navigation settings",
+    }),
+  );
+  const collectionFormLabels: CollectionFormLabels = {
+    ...getCollectionFormLabels(i18n),
+    titleLabel: i18n._(
+      msg({
+        message: "Title",
+        comment: "@context: Collection title field in Navigation settings",
+      }),
+    ),
+    titlePlaceholder: i18n._(
+      msg({
+        message: "My Collection",
+        comment:
+          "@context: Collection title placeholder in Navigation settings",
+      }),
+    ),
+    slugLabel: i18n._(
+      msg({
+        message: "Collection link",
+        comment: "@context: Collection slug field in Navigation settings",
+      }),
+    ),
+    slugHelp: i18n._(
+      msg({
+        message: "This is the last part of the collection link.",
+        comment: "@context: Collection slug help text in Navigation settings",
+      }),
+    ),
+    slugInvalidHelp: i18n._(
+      msg({
+        message: "Use lowercase letters, numbers, and hyphens only.",
+        comment:
+          "@context: Collection slug validation error in Navigation settings",
+      }),
+    ),
+    slugReservedHelp: i18n._(
+      msg({
+        message: "This link is reserved. Choose something else.",
+        comment:
+          "@context: Reserved collection slug error in Navigation settings",
+      }),
+    ),
+    slugTooLongHelp: i18n._(
+      msg({
+        message: "Keep this link under 200 characters.",
+        comment: "@context: Long collection slug error in Navigation settings",
+      }),
+    ),
+    editSlugLabel: i18n._(
+      msg({
+        message: "Edit link",
+        comment:
+          "@context: Button to edit the generated collection slug in Navigation settings",
+      }),
+    ),
+    resetSlugLabel: i18n._(
+      msg({
+        message: "Reset link",
+        comment:
+          "@context: Button to reset the collection slug in Navigation settings",
+      }),
+    ),
+    quickHint: i18n._(
+      msg({
+        message: "More options are available after you create it.",
+        comment:
+          "@context: Helper text in quick collection creation in Navigation settings",
+      }),
+    ),
+    quickSubmitLabel: createCollectionLabel,
+    createdLabel: i18n._(
+      msg({
+        message: "Collection created.",
+        comment:
+          "@context: Heading after quick collection creation in Navigation settings",
+      }),
+    ),
+  };
 
   const suggestedTargetLabels = {
     page: i18n._(
@@ -98,6 +186,7 @@ export function NavigationContent({
       type: item.type,
       systemKey: item.systemKey,
       collectionId: item.collectionId,
+      postId: item.postId,
       label: item.label,
       displayLabel: getNavItemDisplayLabel(item, i18n, sitePathPrefix),
       url,
@@ -185,6 +274,12 @@ export function NavigationContent({
         comment: "@context: Nav item type badge",
       }),
     ),
+    page: i18n._(
+      msg({
+        message: "page",
+        comment: "@context: Nav item type badge for page items",
+      }),
+    ),
     system: i18n._(
       msg({
         message: "system",
@@ -233,6 +328,13 @@ export function NavigationContent({
           "Delete this navigation link? Visitors won't see it in your site header anymore.",
         comment:
           "@context: Confirm dialog for deleting a custom navigation link",
+      }),
+    ),
+    confirmDeletePage: i18n._(
+      msg({
+        message:
+          "Remove this page from navigation? The page itself won't be deleted.",
+        comment: "@context: Confirm dialog for removing a page from navigation",
       }),
     ),
     orderSaved: i18n._(
@@ -353,6 +455,182 @@ export function NavigationContent({
         comment: "@context: Toast after adding a suggested nav link",
       }),
     ),
+    addPageToNavigation: i18n._(
+      msg({
+        message: "Add page to navigation",
+        comment: "@context: Section heading for adding a page to navigation",
+      }),
+    ),
+    addPageDescription: i18n._(
+      msg({
+        message:
+          "Choose a titled note that isn't already in navigation, or create a new page.",
+        comment: "@context: Description for adding a page to navigation",
+      }),
+    ),
+    addPage: i18n._(
+      msg({
+        message: "Add Page",
+        comment: "@context: Button that opens the navigation page picker",
+      }),
+    ),
+    searchPages: i18n._(
+      msg({
+        message: "Search pages",
+        comment: "@context: Placeholder for the navigation page search",
+      }),
+    ),
+    recentPages: i18n._(
+      msg({
+        message: "Recently updated",
+        comment: "@context: Heading above recent pages in the page picker",
+      }),
+    ),
+    searchingPages: i18n._(
+      msg({
+        message: "Searching pages…",
+        comment: "@context: Loading state in the navigation page picker",
+      }),
+    ),
+    noMatchingPages: i18n._(
+      msg({
+        message:
+          "No matching pages available to add. Try another title or create a new page.",
+        comment: "@context: Empty search results in the page picker",
+      }),
+    ),
+    noPages: i18n._(
+      msg({
+        message: "No pages available. Create one to add it to navigation.",
+        comment: "@context: Empty state in the navigation page picker",
+      }),
+    ),
+    pageSearchFailed: i18n._(
+      msg({
+        message: "Couldn't load pages. Try again in a moment.",
+        comment: "@context: Error shown when navigation page search fails",
+      }),
+    ),
+    createNewPage: i18n._(
+      msg({
+        message: "Create new page",
+        comment: "@context: Action at the bottom of the navigation page picker",
+      }),
+    ),
+    createPage: i18n._(
+      msg({
+        message: "Create Page",
+        comment: "@context: Button and dialog title for quick page creation",
+      }),
+    ),
+    createPageDescription: i18n._(
+      msg({
+        message: "Create a public page that won't appear in Latest.",
+        comment: "@context: Description in the quick-create page dialog",
+      }),
+    ),
+    pageTitle: i18n._(
+      msg({
+        message: "Title",
+        comment: "@context: Title field label in quick page creation",
+      }),
+    ),
+    pageAddress: i18n._(
+      msg({
+        message: "Page address",
+        comment: "@context: Slug field label in quick page creation",
+      }),
+    ),
+    pageVisibilityHint: i18n._(
+      msg({
+        message: "The page is public but stays out of Latest.",
+        comment: "@context: Visibility note in quick page creation",
+      }),
+    ),
+    titleRequired: i18n._(
+      msg({
+        message: "Enter a page title.",
+        comment: "@context: Validation error for an empty quick page title",
+      }),
+    ),
+    slugInvalid: i18n._(
+      msg({
+        message: "Use lowercase letters, numbers, and hyphens.",
+        comment: "@context: Validation error for an invalid page slug",
+      }),
+    ),
+    slugReserved: i18n._(
+      msg({
+        message: "That address is reserved. Choose another one.",
+        comment: "@context: Validation error for a reserved page slug",
+      }),
+    ),
+    slugTooLong: i18n._(
+      msg({
+        message: "Keep the page address under 200 characters.",
+        comment: "@context: Validation error for a long page slug",
+      }),
+    ),
+    slugUnavailable: i18n._(
+      msg({
+        message: "That address is already in use. Choose another one.",
+        comment: "@context: Validation error for an unavailable page slug",
+      }),
+    ),
+    checkingAddress: i18n._(
+      msg({
+        message: "Checking address…",
+        comment: "@context: Loading text while checking page slug availability",
+      }),
+    ),
+    creatingPage: i18n._(
+      msg({
+        message: "Creating page…",
+        comment: "@context: Loading label while creating a page",
+      }),
+    ),
+    createPageFailed: i18n._(
+      msg({
+        message: "Couldn't create the page. Check the details and try again.",
+        comment: "@context: Error when quick page creation fails",
+      }),
+    ),
+    pageCreated: i18n._(
+      msg({
+        message: "Page created.",
+        comment: "@context: Heading after quick page creation",
+      }),
+    ),
+    pageCreatedDescription: i18n._(
+      msg({
+        message: "Add it to navigation now or open the editor to add content.",
+        comment: "@context: Description after quick page creation",
+      }),
+    ),
+    addToNavigation: i18n._(
+      msg({
+        message: "Add to Navigation",
+        comment: "@context: Button that adds a created page to navigation",
+      }),
+    ),
+    editPage: i18n._(
+      msg({
+        message: "Edit Page",
+        comment: "@context: Button that opens a page for editing",
+      }),
+    ),
+    pageAdded: i18n._(
+      msg({
+        message: "Page added to navigation.",
+        comment: "@context: Confirmation after adding a page to navigation",
+      }),
+    ),
+    back: i18n._(
+      msg({
+        message: "Back",
+        comment: "@context: Button returning from page creation to page search",
+      }),
+    ),
     collection: i18n._(
       msg({
         message: "collection",
@@ -387,12 +665,56 @@ export function NavigationContent({
     ),
     noCollections: i18n._(
       msg({
-        message:
-          "No collections yet. Create one first, then add it to your navigation.",
+        message: "No collections yet. Create one here to add it to navigation.",
         comment:
           "@context: Empty state when no collections exist for nav picker",
       }),
     ),
+    createNewCollection: i18n._(
+      msg({
+        message: "Create new collection",
+        comment:
+          "@context: Action at the bottom of the Navigation collection picker",
+      }),
+    ),
+    createCollection: createCollectionLabel,
+    creatingCollection: i18n._(
+      msg({
+        message: "Creating collection…",
+        comment:
+          "@context: Loading label while creating a collection in Navigation settings",
+      }),
+    ),
+    createCollectionFailed: i18n._(
+      msg({
+        message:
+          "Couldn't create the collection. Check the details and try again.",
+        comment:
+          "@context: Error when quick collection creation fails in Navigation settings",
+      }),
+    ),
+    collectionCreatedDescription: i18n._(
+      msg({
+        message: "Add it to navigation now or open the editor to add details.",
+        comment:
+          "@context: Description after quick collection creation in Navigation settings",
+      }),
+    ),
+    editCollection: i18n._(
+      msg({
+        message: "Edit Collection",
+        comment:
+          "@context: Button that opens a newly created collection for editing",
+      }),
+    ),
+    collectionAdded: i18n._(
+      msg({
+        message: "Collection added to navigation.",
+        comment:
+          "@context: Confirmation after adding a collection to navigation",
+      }),
+    ),
+    collectionFormLabels,
     confirmDeleteCollection: i18n._(
       msg({
         message:
@@ -414,13 +736,19 @@ export function NavigationContent({
         collections={escapeJson(collectionsData)}
         suggested-links={escapeJson(suggestedLinksData)}
         site-name={siteName}
+        rss-feeds-enabled={rssFeedsEnabled || undefined}
       >
         {/* SSR fallback: static preview until JS hydrates */}
         {(() => {
-          const headerNavItems = navItems.filter(
+          const previewItems = rssFeedsEnabled
+            ? navItems
+            : navItems.filter(
+                (item) => item.type !== "system" || item.systemKey !== "rss",
+              );
+          const headerNavItems = previewItems.filter(
             (item) => item.placement !== "more",
           );
-          const moreNavItems = navItems.filter(
+          const moreNavItems = previewItems.filter(
             (item) => item.placement === "more",
           );
           return (

@@ -1,8 +1,17 @@
 # Lessons
 
+- Treat an adapted content language as the authoritative font profile. Manual
+  CJK selection is only a fallback for unadapted content languages, while the
+  active font theme remains responsible for serif/sans choices.
 - When a user is still evaluating product/design options, keep the turn in
   discussion mode and do not start implementation until they explicitly confirm
   the chosen direction.
+- For public-surface switches, define anonymous, session, token, and public HTML
+  behavior separately. Dedicated public endpoints can disappear while shared
+  dashboard endpoints fall back to authentication and HTML pages stay public.
+- When a legacy or generic URL remains only for compatibility, keep it working
+  without advertising it beside the canonical URL unless users need it for a
+  migration step. Product docs should present one clear preferred path.
 - When migrating Claude slash commands to Codex skills, include explicit
   default-invocation behavior in `SKILL.md`. A bare `$skill` mention attaches
   the skill context, but the skill still needs to say what to do when no other
@@ -24,9 +33,18 @@
 - When a control is only a contextual next action for a nearby field, render it
   as inline helper text plus a link/button. Avoid promoting it into a separate
   settings block unless it has independent configuration.
+- Use a directional arrow and normal same-tab navigation for links to another
+  settings page. Reserve external-link icons and forced new tabs for genuinely
+  external destinations.
+- When a secondary action is revealed on hover, keep it visible on touch
+  devices and reveal it with `:focus-within` for keyboard users; do not remove
+  it from the tab order.
 - Glossary notes are translator guidance only. Never copy glossary `note` text
   into PO `msgstr` values; compact UI labels such as compose format tabs must
   stay as short labels in every catalog.
+- Treat repeated localized settings actions as shared product terminology.
+  Compare nearby headings and CTAs, and keep the verb and word order consistent
+  when they describe the same action.
 - When a thread is collapsed into one Atom/RSS entry, inline replies must render
   their own title/link metadata inside `<content>`; they cannot rely on
   entry-level `<title>`, `<link>`, or enclosure metadata that belongs to the
@@ -46,9 +64,8 @@
   generation scripts should skip writes when output is unchanged. Otherwise a
   no-op generated-file mtime update can create an infinite reload loop.
 - Collection timelines and collection feeds must sort "newest" by thread-level
-  activity (`lastActivityAt` on the root), not only by the published timestamp
-  of collection-member posts. Otherwise replies to a collected root that are not
-  themselves collection members will not bump the thread; quiet replies should
+  activity (`lastActivityAt` on the root), not only by the root's published
+  timestamp. Non-quiet replies bump the shared Thread; quiet replies should
   remain non-bumping by leaving root activity unchanged.
 - In happy-dom tests for Lit custom elements, instantiate registered elements with `document.createElement("tag-name")` and use `globalThis.Element` / `globalThis.localStorage` in type or lint-visible positions.
 - In happy-dom component tests, avoid reading repo files with `import.meta.url`; Vitest may transform the module URL away from `file:`. Use a stable project-root or package-root path with `resolve()` instead.
@@ -140,3 +157,71 @@
   “Clear formatting” should remove clearable marks generically; lists, quotes,
   headings, and other nodes should use explicit structural controls instead of
   a growing node-type allowlist.
+- When nested content is described as “too far,” distinguish horizontal
+  indentation from vertical block spacing and inspect the rendered DOM margins
+  before changing list padding.
+- When adding a requested keyboard shortcut to an intentionally minimal surface,
+  do not add a visible action unless the user explicitly asks for one.
+- A schema migration that copies and drops a live table must run with writers
+  drained. Preflight and postflight counts detect bad state but cannot prevent
+  concurrent-write loss; zero-downtime changes require an expand/backfill/
+  cutover sequence.
+- Domain scope such as Root-versus-Child must not depend on presentation mode.
+  Derive it from stable IDs and centralize shared interactive data attributes
+  across feed, detail, search, and partial-render components.
+- When recovering deleted prose and Git history contains multiple plausible
+  versions, show the candidate commit and exact passage before editing. Keep
+  restoration separate from copy rewrites, terminology cleanup, or behavior
+  corrections unless the user approves that broader scope.
+- For multi-tenant data migrations, measure the full tenant population before
+  estimating scope or risk. A single production site is a compatibility sample,
+  not evidence for the size or shape of the global migration.
+- For DPUB-ARIA footnotes, reserve `doc-footnote` for notes embedded in the body.
+  A collection after the document body should use `doc-endnotes` with native
+  ordered-list items, and should not add the deprecated `doc-endnote` role.
+- When a prose component must hide native list markers in one presentation,
+  set `list-style-type: none` on the affected `li`, not only its parent list.
+  Higher cascade layers can restore the parent's marker style, but cannot
+  override a value specified directly on the list item through inheritance.
+- When a component link lives inside `.prose`, customize the existing
+  `--site-prose-link-*` variables at the component boundary. A declaration in a
+  component cascade layer cannot override Jant's unlayered prose-link rules.
+- Reserve persistent fragment-target highlighting for jumps where the reader
+  needs help relocating. Suppress it when the target is already spatially
+  aligned with its trigger, such as a wide-screen sidenote rail.
+- Keep stored and public content HTML free of layout protocols. When an
+  optional presentation needs wrappers, row metadata, or measured positions,
+  derive that state as a progressive client enhancement over natural semantic
+  source order.
+- Normalize clipboard artifacts only behind a stable source marker and an
+  exact observed shape. Do not apply broad "visually empty" cleanup to generic
+  rich HTML or nested authored content.
+- A projection-version backfill proves only that derived bytes were rebuilt.
+  Before claiming a semantic content migration is complete, test real
+  historical canonical shapes and report canonical upgrades separately from
+  projection rewrites.
+- Before running a remote migration or backfill, verify the configured host,
+  database, and deployment target as one identity. Environment labels such as
+  `preview` may refer to different Worker and hosted stacks; a matching label
+  is not proof that the command reaches the intended data.
+- On dense settings surfaces, represent each persistent state once. Keep reset
+  and save feedback contextual, and avoid stacking row cards inside a larger
+  bordered container when a divided list already provides enough structure.
+- Keep API editability separate from Config Editor presentation. A runtime-safe
+  multi-line value can remain API-editable while the UI links to its dedicated
+  textarea instead of forcing it into a generic single-line control.
+- When a new system route enters the shared root namespace, reserve its whole
+  top-level prefix and resolve explicit/reserved routes before stored aliases
+  or redirects. Decide legacy collisions explicitly; do not invent a backfill
+  or replacement slug when invalidating the old path is the intended policy.
+- Before adding cross-surface settings links, verify the canonical path from
+  the registered route instead of inferring it from the UI section hierarchy.
+- On content-first public pages, render optional post-action guidance as part
+  of the page rhythm rather than as a bordered success card. Do not repeat
+  content already visible in an adjacent list, and compress non-blocking
+  dismissal into an accessible icon control.
+- When an inline prompt owns a short multi-step action, update that surface in
+  place for completion instead of moving the success feedback to a toast.
+- When a restrained inline notice is too easy to miss, add salience through a
+  subtle token-based surface and a reduced-motion-safe entrance—not more copy
+  or decorative status icons.

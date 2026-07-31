@@ -7,6 +7,8 @@ import type { Editor } from "@tiptap/core";
 import { MAX_THREAD_POSTS } from "../../../types.js";
 
 import type {
+  ComposeFullscreenCloseDetail,
+  ComposeFullscreenOpenDetail,
   ComposeLabels,
   ComposeCollection,
   ComposeSubmitDetail,
@@ -181,6 +183,8 @@ const labels: ComposeLabels = {
   discardChangesConfirm: "Discard changes?",
   drafts: "Drafts",
   draftsEmpty: "No drafts yet. Save a draft to find it here.",
+  previewDraft: "Preview",
+  draftActions: "Draft actions",
   deleteDraft: "Delete Draft",
   draftDeleted: "Draft deleted.",
   publishFailedDraft: "Couldn't publish. Saved as draft.",
@@ -294,6 +298,7 @@ describe("JantComposeDialog", () => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
     globalThis.localStorage.clear();
+    delete document.documentElement.dataset.sitePathPrefix;
     Object.defineProperty(globalThis, "matchMedia", {
       configurable: true,
       writable: true,
@@ -661,6 +666,11 @@ describe("JantComposeDialog", () => {
     expect(
       el.querySelector(".compose-thread-layout.compose-reply-compose-layout"),
     ).not.toBeNull();
+    expect(el.querySelector(".compose-collection-trigger")).toBeNull();
+    expect(
+      el.querySelector(".compose-action-row-without-collection"),
+    ).not.toBeNull();
+    expect(el.querySelector(".compose-publish-main")).not.toBeNull();
   });
 
   it("shows an Edit title with the format selector above the post when editing a reply", async () => {
@@ -682,6 +692,7 @@ describe("JantComposeDialog", () => {
             title: "Hello",
             body: null,
             replyToId: parentId,
+            collectionIds: ["col-thread"],
           };
       return Promise.resolve(
         new Response(JSON.stringify(json), {
@@ -701,6 +712,8 @@ describe("JantComposeDialog", () => {
       el.querySelector(".compose-dialog-header-center .compose-segmented"),
     ).toBeNull();
     expect(el.querySelector(".compose-thread-post-header")).not.toBeNull();
+    expect(el._collectionIds).toEqual([]);
+    expect(el.querySelector(".compose-collection-trigger")).toBeNull();
   });
 
   it("switches format from the inline selector when replying", async () => {
@@ -2295,7 +2308,7 @@ describe("JantComposeDialog", () => {
         rating: 0,
         showTitle: false,
         showRating: false,
-        collectionIds: [],
+        collectionIds: ["col-stale"],
         replyToId,
         attachedTexts: [],
         attachmentOrder: [],
@@ -2314,6 +2327,8 @@ describe("JantComposeDialog", () => {
       "expected compose editor",
     );
     expect(el._replyToId).toBe(replyToId);
+    expect(el._collectionIds).toEqual([]);
+    expect(el.querySelector(".compose-collection-trigger")).toBeNull();
     expect(editor.getData().body).toContain("Recovered reply draft");
   });
 
@@ -2360,6 +2375,56 @@ describe("JantComposeDialog", () => {
     expect(savedDraft.bodyJson.content[0]?.content[0]?.text).toBe(
       "Persist me before submit",
     );
+  });
+
+  it("includes quiet reply intent when submitting multiple reply posts", async () => {
+    const el = await createElement();
+    await el.openReply("019ce8ce-d6d8-7fda-a5df-c2da2bef5ade", {
+      contentHtml: "<p>Parent</p>",
+      dateText: "Mar 14",
+    });
+
+    (
+      el as unknown as {
+        _addThreadItem: () => void;
+      }
+    )._addThreadItem();
+    await flushUpdates(el);
+
+    el._quietReply = true;
+    const editors = Array.from(
+      el.querySelectorAll<JantComposeEditor>("jant-compose-editor"),
+    );
+    expect(editors).toHaveLength(2);
+
+    editors.forEach((editor, index) => {
+      editor._bodyJson = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: `Quiet reply ${index + 1}` }],
+          },
+        ],
+      };
+    });
+    await Promise.all(editors.map((editor) => editor.updateComplete));
+    await el.updateComplete;
+
+    let receivedDetail: ComposeSubmitDetail | null = null;
+    el.addEventListener("jant:compose-submit-deferred", (event) => {
+      receivedDetail = (event as CustomEvent<ComposeSubmitDetail>).detail;
+    });
+
+    requireElement(
+      el.querySelector<HTMLButtonElement>(".compose-publish-main"),
+      "expected reply button",
+    ).click();
+
+    expect(receivedDetail).not.toBeNull();
+    const detail = receivedDetail as unknown as ComposeSubmitDetail;
+    expect(detail.quietReply).toBe(true);
+    expect(detail.threadPosts?.[0]?.quietReply).toBe(true);
   });
 
   it("does not add more thread items than the shared limit", async () => {
@@ -3020,6 +3085,67 @@ describe("JantComposeDialog", () => {
     fetchSpy.mockRestore();
   });
 
+  it("opens a prefixed draft preview from the overflow menu without loading the editor", async () => {
+    document.documentElement.dataset.sitePathPrefix = "/blog";
+    const el = await createElement();
+    el._draftsPanelOpen = true;
+    el._draftsLoading = false;
+    el._drafts = [
+      {
+        id: "pst_draft",
+        slug: "draft-slug",
+        format: "note",
+        title: "Preview me",
+        bodyText: "Draft body",
+        bodyHtml: "<p>Draft body</p>",
+        url: null,
+        quoteText: null,
+        replyToId: null,
+        updatedAt: 0,
+        mediaAttachments: [],
+      },
+    ];
+    await el.updateComplete;
+
+    const trigger = requireElement(
+      el.querySelector<HTMLButtonElement>(".compose-draft-more"),
+      "expected draft actions trigger",
+    );
+    expect(trigger.getAttribute("aria-label")).toBe("Draft actions");
+    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    trigger.click();
+    await el.updateComplete;
+
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    const menu = requireElement(
+      el.querySelector<HTMLElement>('[role="menu"]'),
+      "expected draft actions menu",
+    );
+    const items = menu.querySelectorAll<HTMLElement>('[role="menuitem"]');
+    expect(items).toHaveLength(2);
+    expect(items[0]?.textContent?.trim()).toBe("Preview");
+    expect(items[1]?.textContent?.trim()).toBe("Delete Draft");
+
+    const previewLink = requireElement(
+      menu.querySelector<HTMLAnchorElement>('a[role="menuitem"]'),
+      "expected preview link",
+    );
+    expect(previewLink.getAttribute("href")).toBe("/blog/preview/draft-slug");
+    expect(previewLink.target).toBe("_blank");
+    expect(previewLink.rel).toBe("noopener noreferrer");
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    previewLink.addEventListener("click", (event) => event.preventDefault());
+    previewLink.click();
+    await el.updateComplete;
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(el._draftsPanelOpen).toBe(true);
+    expect(el._draftMenuOpenId).toBeNull();
+  });
+
   it("does not dispatch submit when loading", async () => {
     const el = await createElement();
     el._loading = true;
@@ -3142,6 +3268,17 @@ describe("JantComposeDialog", () => {
     );
     expect(css).toMatch(
       /\.compose-reply-compose-layout\s+\.compose-tiptap-body\s+\.tiptap\s*\{[\s\S]*font-size:\s*var\(--type-content-body\);/,
+    );
+  });
+
+  it("keeps passive footnote references quiet until the editor selects them", () => {
+    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+
+    expect(css).toMatch(
+      /\.compose-tiptap-body \.tiptap \.tiptap-footnote-reference\s*\{[^}]*color:\s*var\(--site-footnote-marker\);/,
+    );
+    expect(css).toMatch(
+      /\.tiptap-footnote-reference\.ProseMirror-selectednode\s*\{[^}]*color:\s*var\(--site-accent\);[^}]*outline:\s*1px solid var\(--site-accent\);/,
     );
   });
 
@@ -4194,10 +4331,12 @@ describe("JantComposeDialog", () => {
     };
     await editor.updateComplete;
 
-    const submitSpy = vi.spyOn(
-      el as unknown as { _submit: (status: "published" | "draft") => void },
-      "_submit",
-    );
+    const submitSpy = vi
+      .spyOn(
+        el as unknown as { _submit: (status: "published" | "draft") => void },
+        "_submit",
+      )
+      .mockImplementation(() => {});
 
     el.dispatchEvent(
       new globalThis.KeyboardEvent("keydown", {
@@ -4208,6 +4347,139 @@ describe("JantComposeDialog", () => {
     );
 
     expect(submitSpy).toHaveBeenCalledWith("published");
+  });
+
+  it("publishes the latest fullscreen content after handing it back", async () => {
+    const el = await createElement();
+    const editor = requireElement(
+      el.querySelector<JantComposeEditor>("jant-compose-editor"),
+      "expected compose editor",
+    );
+    const submitSpy = vi
+      .spyOn(
+        el as unknown as { _submit: (status: "published" | "draft") => void },
+        "_submit",
+      )
+      .mockImplementation(() => {});
+    const setEditorStateSpy = vi.spyOn(editor, "setEditorState");
+
+    (
+      el as unknown as {
+        _handleFullscreenClose: (
+          event: CustomEvent<ComposeFullscreenCloseDetail>,
+        ) => void;
+      }
+    )._handleFullscreenClose(
+      new CustomEvent<ComposeFullscreenCloseDetail>("jant:fullscreen-close", {
+        detail: {
+          json: {
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: "Written while fullscreen" }],
+              },
+            ],
+          },
+          title: "Fullscreen title",
+          showTitle: true,
+          replyExpanded: false,
+          intent: "publish",
+          editorIndex: 0,
+        },
+      }),
+    );
+
+    expect(setEditorStateSpy).toHaveBeenCalled();
+    expect(editor.getData()).toMatchObject({
+      title: "Fullscreen title",
+      body: expect.stringContaining("Written while fullscreen"),
+    });
+    expect(submitSpy).toHaveBeenCalledWith("published");
+  });
+
+  it("does not submit an empty fullscreen post", async () => {
+    const el = await createElement();
+    const submitSpy = vi.spyOn(
+      el as unknown as { _submit: (status: "published" | "draft") => void },
+      "_submit",
+    );
+
+    (
+      el as unknown as {
+        _handleFullscreenClose: (
+          event: CustomEvent<ComposeFullscreenCloseDetail>,
+        ) => void;
+      }
+    )._handleFullscreenClose(
+      new CustomEvent<ComposeFullscreenCloseDetail>("jant:fullscreen-close", {
+        detail: {
+          json: { type: "doc", content: [{ type: "paragraph" }] },
+          title: "",
+          showTitle: false,
+          replyExpanded: false,
+          intent: "publish",
+          editorIndex: 0,
+        },
+      }),
+    );
+
+    expect(submitSpy).not.toHaveBeenCalled();
+  });
+
+  it("tracks the source editor for fullscreen thread editing", async () => {
+    const el = await createElement();
+    el._threadItems = [
+      { id: "thread-1", format: "note" },
+      { id: "thread-2", format: "note" },
+    ];
+    await el.updateComplete;
+
+    const editors = Array.from(
+      el.querySelectorAll<JantComposeEditor>("jant-compose-editor"),
+    );
+    const openDetail: ComposeFullscreenOpenDetail = {
+      json: null,
+      title: "",
+      showTitle: false,
+    };
+    editors[1]?.dispatchEvent(
+      new CustomEvent<ComposeFullscreenOpenDetail>("jant:fullscreen-open", {
+        bubbles: true,
+        detail: openDetail,
+      }),
+    );
+
+    expect(openDetail).toMatchObject({ editorIndex: 1 });
+
+    (
+      el as unknown as {
+        _handleFullscreenClose: (
+          event: CustomEvent<ComposeFullscreenCloseDetail>,
+        ) => void;
+      }
+    )._handleFullscreenClose(
+      new CustomEvent<ComposeFullscreenCloseDetail>("jant:fullscreen-close", {
+        detail: {
+          json: {
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: "Second thread post" }],
+              },
+            ],
+          },
+          title: "",
+          showTitle: false,
+          replyExpanded: false,
+          editorIndex: 1,
+        },
+      }),
+    );
+
+    expect(editors[0]?.getData().body).toBe("");
+    expect(editors[1]?.getData().body).toContain("Second thread post");
   });
 
   it("Cmd/Ctrl+Enter focuses the link URL when the URL is invalid", async () => {
@@ -4823,9 +5095,92 @@ describe("JantComposeDialog", () => {
     expect((receivedDetail as unknown as ComposeSubmitDetail).editPostId).toBe(
       "draft789",
     );
+    expect(
+      (receivedDetail as unknown as ComposeSubmitDetail).draftSourceId,
+    ).toBe("draft789");
     expect((receivedDetail as unknown as ComposeSubmitDetail).status).toBe(
       "published",
     );
+  });
+
+  it("opens a thread draft without deleting it and preserves its draft identity", async () => {
+    const rootId = "pst_draft_root";
+    const replyId = "pst_draft_reply";
+    const requests: Array<{ url: string; method: string }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method ?? "GET" });
+
+      if (url === `/api/posts/${rootId}`) {
+        return new Response(
+          JSON.stringify({
+            id: rootId,
+            threadId: rootId,
+            format: "note",
+            status: "draft",
+            slug: "draft-thread",
+            title: "Draft thread",
+            body: null,
+            attachments: [],
+            collectionIds: [],
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      if (url === "/api/posts?status=draft&limit=50") {
+        return new Response(
+          JSON.stringify({
+            posts: [
+              {
+                id: replyId,
+                threadId: rootId,
+                replyToId: rootId,
+                format: "quote",
+                status: "draft",
+                quoteText: "Draft reply",
+                attachments: [],
+              },
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const el = await createElement();
+    await el.openDraft(rootId);
+    await flushUpdates(el);
+
+    expect(el._draftSourceId).toBe(rootId);
+    expect(el.querySelectorAll("jant-compose-editor")).toHaveLength(2);
+    expect(requests).toEqual([
+      { url: `/api/posts/${rootId}`, method: "GET" },
+      { url: "/api/posts?status=draft&limit=50", method: "GET" },
+    ]);
+
+    let receivedDetail: ComposeSubmitDetail | null = null;
+    el.addEventListener("jant:compose-submit-deferred", (event) => {
+      receivedDetail = (event as CustomEvent<ComposeSubmitDetail>).detail;
+    });
+    requireElement(
+      el.querySelector<HTMLButtonElement>(".compose-publish-main"),
+      "expected publish button",
+    ).click();
+
+    expect(receivedDetail).not.toBeNull();
+    expect(
+      (receivedDetail as unknown as ComposeSubmitDetail).draftSourceId,
+    ).toBe(rootId);
+    expect((receivedDetail as unknown as ComposeSubmitDetail).editPostId).toBe(
+      rootId,
+    );
+    expect(
+      (receivedDetail as unknown as ComposeSubmitDetail).threadPosts,
+    ).toHaveLength(2);
+    expect(requests.every((request) => request.method === "GET")).toBe(true);
   });
 
   it("draft button confirm save dispatches draft then opens drafts panel", async () => {

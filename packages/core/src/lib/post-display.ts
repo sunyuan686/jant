@@ -82,6 +82,8 @@ function resolvePostSocialImage(
 interface PostDisplayOptions {
   isAuthenticated?: boolean;
   allowDraft?: boolean;
+  /** Include draft members when assembling a thread for an authenticated preview. */
+  includeDraftThread?: boolean;
 }
 
 function canViewPost(post: Post, options: PostDisplayOptions = {}): boolean {
@@ -170,7 +172,11 @@ export async function assemblePostPageDisplay(
   const mediaCtx = createMediaContext(c.var.appConfig);
   const threadPosts = (
     await c.var.services.posts.getThread(post.threadId)
-  ).filter((threadPost) => threadPost.status === "published");
+  ).filter(
+    (threadPost) =>
+      threadPost.status === "published" ||
+      (options?.includeDraftThread && threadPost.status === "draft"),
+  );
 
   const allPostIds =
     threadPosts.length > 1 ? threadPosts.map((p) => p.id) : [post.id];

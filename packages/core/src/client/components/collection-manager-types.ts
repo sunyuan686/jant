@@ -17,6 +17,12 @@ export interface CollectionManagerLabels {
   dividerLabelPlaceholder: string;
   newCollection: string;
   edit: string;
+  addToNavigation: string;
+  addingToNavigation: string;
+  addedToNavigation: string;
+  editNavigation: string;
+  addToNavigationFailed: string;
+  notNow: string;
   label: string;
   url: string;
   linkLabelPlaceholder: string;
@@ -31,8 +37,8 @@ export interface CollectionManagerLabels {
   deleteLink: string;
   confirmDeleteLink: string;
   cancel: string;
-  entrySingular: string;
-  entryPlural: string;
+  threadSingular: string;
+  threadPlural: string;
   emptyState: string;
   orderSaved: string;
   saved: string;
@@ -50,7 +56,7 @@ export interface ManagedCollection {
   title: string;
   description: string | null;
   sortOrder: string;
-  postCount: number;
+  threadCount: number;
   recentActivityAt: number;
 }
 

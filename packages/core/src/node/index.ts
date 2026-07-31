@@ -14,6 +14,7 @@ export { buildThemeStyle } from "../lib/theme.js";
 export { BUILTIN_COLOR_THEMES } from "../ui/color-themes.js";
 export {
   BUILTIN_FONT_THEMES,
-  getCjkSerifCssVariables,
+  getCjkFontCssVariables,
   getFontThemeCssVariables,
+  resolveCjkFontProfile,
 } from "../ui/font-themes.js";

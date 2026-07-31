@@ -22,7 +22,7 @@ So an agent working inside the generated project gets more than an API token —
 
 - Scripts, scheduled jobs, external integrations: use the **HTTP API**.
 - The caller is itself an MCP client: use **MCP**.
-- A one-time content import from another blog or CMS: hand [`jant.me/skill.md`](https://jant.me/skill.md) to an AI assistant — an import guide built on the same HTTP API. See [Export and import](export-and-import.md#coming-from-another-blog-or-cms).
+- An AI assistant working with one site: hand it that site's `/skill.md` URL (for example, `https://example.com/skill.md`) — a site-bound guide to reading, publishing, organizing, and migrating content through HTTP or MCP. For migrations, follow its dedicated import workflow and see [Export and import](export-and-import.md#coming-from-another-blog-or-cms).
 
 Default to HTTP. MCP only beats it when the caller already speaks the tool-calling protocol.
 
@@ -52,7 +52,7 @@ Send the header:
 Authorization: Bearer jnt_...
 ```
 
-A few public read endpoints don't need a token: `GET /api/collections`, `GET /api/collections/:id`, `GET /api/search`, `GET /api/public/posts`, `GET /api/public/posts/:slug`, `GET /api/public/archive`.
+A few public read endpoints don't need a token by default: `GET /api/collections`, `GET /api/collections/:id`, `GET /api/nav-items`, `GET /api/search`, `GET /api/public/posts`, `GET /api/public/posts/:slug`, `GET /api/public/archive`. When `PUBLIC_API_ENABLED=false`, `/api/public/*` returns `404` to every caller; Collection, navigation, and search JSON reads require a browser session or Bearer token. Public HTML pages, including `/search`, remain available.
 
 ### Common endpoints
 

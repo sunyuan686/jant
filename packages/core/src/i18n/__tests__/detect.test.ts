@@ -18,8 +18,14 @@ describe("detectLocaleFromHeader", () => {
     expect(detectLocaleFromHeader("fr")).toBe("en");
   });
 
-  it("falls back to en for Chinese (not a supported UI locale)", () => {
-    expect(detectLocaleFromHeader("zh-CN")).toBe("en");
+  it("maps Simplified Chinese browser locales to zh-Hans", () => {
+    expect(detectLocaleFromHeader("zh-CN")).toBe("zh-Hans");
+    expect(detectLocaleFromHeader("zh-SG")).toBe("zh-Hans");
+  });
+
+  it("maps Traditional Chinese browser locales to zh-Hant", () => {
+    expect(detectLocaleFromHeader("zh-TW")).toBe("zh-Hant");
+    expect(detectLocaleFromHeader("zh-HK")).toBe("zh-Hant");
   });
 
   it("returns en for undefined", () => {

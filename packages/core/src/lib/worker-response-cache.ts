@@ -1,5 +1,7 @@
 import type { Bindings } from "../types.js";
 import { getConfiguredSingleSitePathPrefix } from "./env.js";
+import { POST_BODY_HTML_VERSION } from "./post-body-html.js";
+import { isRssFeedPath } from "./feed-path.js";
 import { stripSitePathPrefix } from "./url.js";
 
 const TRACKING_QUERY_PARAMS = [
@@ -21,6 +23,7 @@ const TRACKING_QUERY_PARAMS = [
 
 const AUTH_COOKIE_PATTERN =
   /(?:^|;\s*)(?:__Host-)?(?:__Secure-)?better-auth[.-][^=]+=/;
+const BODY_HTML_CACHE_VERSION_PARAM = "__jant_body_html";
 
 type ExecutionContextLike = {
   waitUntil(promise: Promise<unknown>): void;
@@ -50,29 +53,13 @@ export interface WorkerResponseCacheOptions {
  * @returns `true` when the request should be eligible for Worker response caching
  */
 export function isWorkerResponseCachePath(path: string): boolean {
-  if (path === "/feed" || path.startsWith("/feed/")) {
-    return true;
-  }
-
-  if (path === "/archive/feed" || path.startsWith("/archive/feed/")) {
-    return true;
-  }
+  if (isRssFeedPath(path)) return true;
 
   if (path === "/sitemap.xml" || path === "/robots.txt") {
     return true;
   }
 
   if (path === "/favicon.ico" || path === "/apple-touch-icon.png") {
-    return true;
-  }
-
-  if (
-    path.endsWith("/feed") &&
-    !path.startsWith("/api/") &&
-    !path.startsWith("/settings") &&
-    !path.startsWith("/compose") &&
-    !path.startsWith("/_")
-  ) {
     return true;
   }
 
@@ -83,7 +70,9 @@ export function isWorkerResponseCachePath(path: string): boolean {
  * Normalize a public request URL for Worker cache lookup.
  *
  * Tracking parameters are removed so equivalent feed requests converge on one
- * cache entry while functional filters like `format` remain intact.
+ * cache entry while functional filters like `format` remain intact. A private
+ * body-HTML contract version invalidates cached feed markup across renderer
+ * deployments; it is only used for Cache API lookup and never forwarded.
  *
  * @param requestUrl - Full public request URL
  * @returns Normalized cache key URL
@@ -95,6 +84,10 @@ export function normalizeWorkerCacheKeyUrl(requestUrl: string): string {
     url.searchParams.delete(param);
   }
 
+  url.searchParams.set(
+    BODY_HTML_CACHE_VERSION_PARAM,
+    String(POST_BODY_HTML_VERSION),
+  );
   url.searchParams.sort();
   return url.toString();
 }

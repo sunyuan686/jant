@@ -29,7 +29,7 @@ export const COLLECTION_SORT_ORDERS = [
 ] as const;
 export type CollectionSortOrder = (typeof COLLECTION_SORT_ORDERS)[number];
 
-export const NAV_ITEM_TYPES = ["link", "system", "collection"] as const;
+export const NAV_ITEM_TYPES = ["link", "system", "collection", "page"] as const;
 export type NavItemType = (typeof NAV_ITEM_TYPES)[number];
 
 export const NAV_ITEM_PLACEMENTS = ["header", "more"] as const;
@@ -80,6 +80,27 @@ export const SYSTEM_NAV_KEYS = {
     defaultPlacement: NavItemPlacement;
   }
 >;
+
+export interface DefaultNavigationProfile {
+  version: number;
+  systemKeys: readonly SystemNavKey[];
+}
+
+/**
+ * Append-only default navigation profiles. A profile is materialized during
+ * initial setup/provisioning and incomplete-setup recovery. Existing rows are
+ * never removed, updated, or reordered to match a profile.
+ */
+export const DEFAULT_NAVIGATION_PROFILES = {
+  1: {
+    version: 1,
+    systemKeys: ["featured", "collections", "archive", "rss", "settings"],
+  },
+} as const satisfies Record<number, DefaultNavigationProfile>;
+
+export const DEFAULT_NAVIGATION_PROFILE_VERSION = 1 as const;
+export const DEFAULT_NAVIGATION_PROFILE =
+  DEFAULT_NAVIGATION_PROFILES[DEFAULT_NAVIGATION_PROFILE_VERSION];
 
 export const MAX_MEDIA_ATTACHMENTS = 20;
 export const MAX_THREAD_POSTS = 20;

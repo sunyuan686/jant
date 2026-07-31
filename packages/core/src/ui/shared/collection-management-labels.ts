@@ -53,7 +53,7 @@ const collectionFormMessages = {
   }),
   createdLabel: msg({
     message: "Collection created.",
-    comment: "@context: Toast shown after creating a collection",
+    comment: "@context: Confirmation shown after creating a collection",
   }),
   descriptionLabel: msg({
     message: "Description (optional)",
@@ -94,6 +94,30 @@ const collectionMutationMessages = {
     message: "Edit",
     comment: "@context: Per-collection edit action",
   }),
+  addToNavigation: msg({
+    message: "Add to Navigation",
+    comment: "@context: Action that adds a Collection to site navigation",
+  }),
+  addingToNavigation: msg({
+    message: "Adding…",
+    comment:
+      "@context: Loading label while adding a Collection to site navigation",
+  }),
+  addedToNavigation: msg({
+    message: "Collection added to navigation.",
+    comment:
+      "@context: Confirmation after adding a Collection to site navigation",
+  }),
+  editNavigation: msg({
+    message: "Edit Navigation",
+    comment:
+      "@context: Action that opens Navigation settings for a Collection already in navigation",
+  }),
+  addToNavigationFailed: msg({
+    message: "Couldn't add this collection to navigation. Try again.",
+    comment:
+      "@context: Error after a Collection could not be added to site navigation",
+  }),
   moreActions: msg({
     message: "More actions",
     comment: "@context: Aria-label for collections page more button",
@@ -112,7 +136,7 @@ const collectionMutationMessages = {
   }),
   confirmDelete: msg({
     message:
-      "Delete this collection permanently? Posts inside won't be removed.",
+      "Delete this collection permanently? Threads inside won't be removed.",
     comment: "@context: Confirm dialog for deleting a collection",
   }),
   cancel: msg({
@@ -210,6 +234,13 @@ export const getCollectionFormLabels = (i18n: Translator) => ({
 
 export const getCollectionMutationLabels = (i18n: Translator) => ({
   edit: i18n._(collectionMutationMessages.edit),
+  addToNavigation: i18n._(collectionMutationMessages.addToNavigation),
+  addingToNavigation: i18n._(collectionMutationMessages.addingToNavigation),
+  addedToNavigation: i18n._(collectionMutationMessages.addedToNavigation),
+  editNavigation: i18n._(collectionMutationMessages.editNavigation),
+  addToNavigationFailed: i18n._(
+    collectionMutationMessages.addToNavigationFailed,
+  ),
   moreActions: i18n._(collectionMutationMessages.moreActions),
   label: i18n._(collectionMutationMessages.label),
   url: i18n._(collectionMutationMessages.url),

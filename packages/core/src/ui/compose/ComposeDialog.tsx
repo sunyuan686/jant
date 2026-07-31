@@ -477,6 +477,19 @@ export const ComposeForm: FC<ComposeFormProps> = ({
         comment: "@context: Drafts panel empty state",
       }),
     ),
+    previewDraft: i18n._(
+      msg({
+        message: "Preview",
+        comment: "@context: Draft item action that opens its rendered preview",
+      }),
+    ),
+    draftActions: i18n._(
+      msg({
+        message: "Draft actions",
+        comment:
+          "@context: Accessible label for a draft item's more-actions button",
+      }),
+    ),
     deleteDraft: i18n._(
       msg({
         message: "Delete Draft",

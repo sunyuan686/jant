@@ -1,4 +1,10 @@
-import { MEDIA_LIGHTBOX_TOGGLE_EVENT } from "./media-lightbox-events.js";
+import {
+  isMediaVideoPlaybackPaused,
+  MEDIA_LIGHTBOX_TOGGLE_EVENT,
+  MEDIA_VIDEO_PLAYBACK_INTENT_EVENT,
+  setMediaVideoPlaybackPaused,
+  type MediaVideoPlaybackIntentDetail,
+} from "./media-lightbox-events.js";
 
 const FEED_VIDEO_PRELOAD_ROOT_MARGIN = "75% 0px";
 const FEED_VIDEO_PLAY_THRESHOLD = 0.6;
@@ -72,6 +78,28 @@ function readMetrics(video: HTMLVideoElement): FeedVideoMetrics | undefined {
   return videoMetrics.get(video);
 }
 
+/**
+ * Decide whether a feed video is excluded from autoplay by explicit user
+ * intent.
+ *
+ * @param mediaId - Stable media ID from the rendered video
+ * @returns `true` when autoplay should leave this media paused
+ *
+ * @example
+ * ```ts
+ * shouldSuppressFeedVideoAutoplay("med_123");
+ * ```
+ */
+export function shouldSuppressFeedVideoAutoplay(
+  mediaId: string | undefined,
+): boolean {
+  return isMediaVideoPlaybackPaused(mediaId);
+}
+
+function isAutoplaySuppressed(video: HTMLVideoElement): boolean {
+  return shouldSuppressFeedVideoAutoplay(video.dataset.feedVideoId);
+}
+
 function getMuteButton(video: HTMLVideoElement): HTMLButtonElement | null {
   return (
     video
@@ -120,6 +148,11 @@ function pauseVideo(video: HTMLVideoElement | null): void {
 }
 
 function playVideo(video: HTMLVideoElement): void {
+  if (isAutoplaySuppressed(video)) {
+    pauseVideo(video);
+    return;
+  }
+
   ensureVideoLoaded(video);
   video.muted = soundEnabledVideo !== video;
   video.playsInline = true;
@@ -159,12 +192,13 @@ function reevaluateAutoplay(): void {
   for (const video of registeredVideos) {
     const metrics = readMetrics(video);
     if (!metrics) continue;
+    if (isAutoplaySuppressed(video)) continue;
     if (metrics.intersectionRatio < FEED_VIDEO_PLAY_THRESHOLD) continue;
     candidates.push({ video, ...metrics });
   }
 
   let winner: HTMLVideoElement | null = null;
-  if (preferredVideo?.isConnected) {
+  if (preferredVideo?.isConnected && !isAutoplaySuppressed(preferredVideo)) {
     const preferredMetrics = readMetrics(preferredVideo);
     if (
       preferredMetrics &&
@@ -177,6 +211,8 @@ function reevaluateAutoplay(): void {
     ) {
       preferredVideo = null;
     }
+  } else if (preferredVideo && isAutoplaySuppressed(preferredVideo)) {
+    preferredVideo = null;
   }
 
   if (!winner) {
@@ -187,6 +223,7 @@ function reevaluateAutoplay(): void {
     const currentMetrics = activeVideo ? readMetrics(activeVideo) : undefined;
     if (
       activeVideo &&
+      !isAutoplaySuppressed(activeVideo) &&
       currentMetrics &&
       currentMetrics.intersectionRatio > FEED_VIDEO_PAUSE_THRESHOLD
     ) {
@@ -313,6 +350,10 @@ function handleMuteToggle(event: Event): void {
     return;
   }
 
+  const mediaId = video.dataset.feedVideoId?.trim();
+  if (mediaId) {
+    setMediaVideoPlaybackPaused(mediaId, false);
+  }
   preferredVideo = video;
 
   const willEnableSound = soundEnabledVideo !== video || video.muted;
@@ -355,6 +396,25 @@ document.addEventListener(MEDIA_LIGHTBOX_TOGGLE_EVENT, (event: Event) => {
   if (lightboxOpen) {
     pauseVideo(activeVideo);
   }
+  scheduleReevaluate();
+});
+
+document.addEventListener(MEDIA_VIDEO_PLAYBACK_INTENT_EVENT, (event: Event) => {
+  const detail = (event as CustomEvent<MediaVideoPlaybackIntentDetail>).detail;
+  const mediaId = detail?.mediaId?.trim();
+  if (!mediaId || typeof detail.paused !== "boolean") {
+    return;
+  }
+
+  for (const video of registeredVideos) {
+    if (video.dataset.feedVideoId?.trim() !== mediaId) continue;
+    if (detail.paused) {
+      pauseVideo(video);
+      if (activeVideo === video) activeVideo = null;
+      if (preferredVideo === video) preferredVideo = null;
+    }
+  }
+
   scheduleReevaluate();
 });
 

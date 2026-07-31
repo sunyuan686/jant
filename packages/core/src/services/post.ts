@@ -20,6 +20,7 @@ import {
   asc,
   lte,
   gt,
+  getTableColumns,
 } from "drizzle-orm";
 import {
   type Database,
@@ -33,12 +34,19 @@ import {
 } from "../db/schema-bundle.js";
 import { createEntityId } from "../lib/ids.js";
 import { now } from "../lib/time.js";
-import { renderTiptapJson, trimTiptapBody } from "../lib/tiptap-render.js";
+import { trimTiptapBody } from "../lib/tiptap-render.js";
+import {
+  POST_BODY_HTML_VERSION,
+  renderPostBodyHtml,
+  resolvePostBodyHtml,
+  tryPreparePostBodyHtml,
+} from "../lib/post-body-html.js";
 import { extractSummary, extractBodyText } from "../lib/summary.js";
 import { markdownToTiptapJson } from "../lib/markdown-to-tiptap.js";
 import { tiptapJsonToMarkdown } from "../lib/tiptap-to-markdown.js";
 import { generatePostSlug } from "../lib/slug.js";
 import { getSlugValidationIssue } from "../lib/slug-format.js";
+import { isReservedPath } from "../lib/constants.js";
 import { normalizePath, slugify } from "../lib/url.js";
 import type { StorageDriver } from "../lib/storage.js";
 import type { MediaService } from "./media.js";
@@ -73,11 +81,40 @@ import {
 } from "../lib/youtube.js";
 import { getPreviewStorageKey } from "../lib/upload.js";
 import { generateRandomId } from "../lib/nanoid.js";
+import { resolveSummaryConfig } from "../lib/resolve-config.js";
+import type { Bindings } from "../types/bindings.js";
+import type { SettingsService } from "./settings.js";
 
 /** Dependencies for operations that coordinate with other services */
 export interface PostDeleteDeps {
   media: MediaService;
   storage?: StorageDriver | null;
+}
+
+export interface RebuildBodyHtmlOptions {
+  /** Batch size (1..100, default 50). */
+  limit?: number;
+  /** Exclusive post ID cursor. */
+  cursor?: string;
+  /** Compute and report changes without writing them. */
+  dryRun?: boolean;
+  /** Summary settings used only when a canonical legacy body is upgraded. */
+  summaryConfig?: SummaryConfig;
+}
+
+export interface RebuildBodyHtmlResult {
+  processed: number;
+  wouldRebuild: number;
+  rebuilt: number;
+  wouldUpgradeFootnotes: number;
+  upgradedFootnotes: number;
+  skipped: number;
+  conflicted: number;
+  failed: number;
+  failures: Array<{ postId: string; error: string }>;
+  nextCursor: string | null;
+  done: boolean;
+  targetVersion: number;
 }
 
 export interface PostAttachmentDeps extends PostDeleteDeps {
@@ -119,7 +156,9 @@ export interface PostFilters {
   hasReplies?: boolean;
   /** Explicit result sort order */
   sortOrder?: SortOrder;
-  /** Ignore global pinned ordering when sorting subscription/feed results. */
+  /** Timestamp used for chronological sorting (defaults to thread activity). */
+  sortBy?: "activity" | "published";
+  /** Ignore global pinned ordering when results must remain chronological. */
   ignorePinnedSort?: boolean;
   limit?: number;
   cursor?: string;
@@ -135,6 +174,13 @@ export interface SummaryConfig {
 interface ThreadRootPageOptions {
   status?: Status;
   excludePrivate?: boolean;
+  excludeLatestHidden?: boolean;
+  /** Exclude Posts published at or after this Unix timestamp. */
+  publishedBefore?: number;
+  /** Restrict by the Thread root's format without excluding Child Posts. */
+  rootFormat?: Format;
+  /** Restrict to Threads with at least one rated published post. */
+  hasRating?: true;
   limit?: number;
   offset?: number;
 }
@@ -146,6 +192,8 @@ interface CollectionFeedEntryOptions extends ThreadRootPageOptions {
 
 interface CollectionThreadRootPageOptions extends ThreadRootPageOptions {
   sortOrder?: CollectionSortOrder;
+  /** Root Post ID returned by the previous page. */
+  cursor?: string;
 }
 
 interface CursorSortKey {
@@ -157,6 +205,24 @@ interface CursorSortKey {
 export interface CollectionFeedEntry {
   post: Post;
   collectedAt: number;
+}
+
+export interface FeaturedThreadTimelinePost {
+  post: Post;
+  /** Zero-based position among the Thread's published Posts. */
+  position: number;
+}
+
+/**
+ * Bounded projection for one curated Featured Thread.
+ *
+ * `posts` contains only the Root, every Featured Post, and the final published
+ * Post, in Thread order. Positions preserve the hidden-gap counts without
+ * loading the omitted Posts or their related metadata.
+ */
+export interface FeaturedThreadTimelineData {
+  posts: FeaturedThreadTimelinePost[];
+  featuredPostIds: string[];
 }
 
 export interface PostBodyContent {
@@ -237,6 +303,8 @@ export interface PostService {
   /**
    * Atomically create a thread of posts. The first item is the root; each
    * subsequent item is automatically chained as a reply to the previous one.
+   * When the first item quietly extends an existing thread, the quiet behavior
+   * applies to every new reply in the batch.
    * On failure, all already-created posts are rolled back.
    *
    * @param items - Ordered list of (data, attachments) pairs; at least 2 required
@@ -296,8 +364,12 @@ export interface PostService {
   ): Promise<Map<string, ThreadTimelineContext>>;
   /** Count distinct thread roots that contain featured published posts */
   countFeaturedThreadRoots(options?: ThreadRootPageOptions): Promise<number>;
-  /** List featured thread root IDs ordered by the latest featured post in each thread */
+  /** List Featured Thread roots by the latest selected Post publication time. */
   listFeaturedThreadRootIds(options?: ThreadRootPageOptions): Promise<string[]>;
+  /** Load only the Posts rendered by the curated Featured Thread timeline. */
+  getFeaturedThreadTimelineData(
+    rootIds: string[],
+  ): Promise<Map<string, FeaturedThreadTimelineData>>;
   /** Count distinct thread roots that contain published posts in the given collection */
   countCollectionThreadRoots(
     collectionId: string,
@@ -307,6 +379,12 @@ export interface PostService {
   countCollectionThreadRootsForCollections(
     collectionIds: string[],
     options?: ThreadRootPageOptions,
+  ): Promise<number>;
+  /** Count distinct matching collection Threads up to a fixed limit. */
+  countCollectionThreadRootsUpToForCollections(
+    collectionIds: string[],
+    options: ThreadRootPageOptions | undefined,
+    limit: number,
   ): Promise<number>;
   /** List collection thread root IDs ordered by collected-at or rating semantics */
   listCollectionThreadRootIds(
@@ -318,6 +396,11 @@ export interface PostService {
     collectionIds: string[],
     options?: CollectionThreadRootPageOptions,
   ): Promise<string[]>;
+  /** List and hydrate collection Thread roots using Thread-level ordering. */
+  listCollectionThreadRootsForCollections(
+    collectionIds: string[],
+    options?: CollectionThreadRootPageOptions,
+  ): Promise<Post[]>;
   /** List collection feed entries ordered by latest added-at timestamp */
   listCollectionFeedEntries(
     collectionId: string,
@@ -328,18 +411,11 @@ export interface PostService {
     collectionIds: string[],
     options?: CollectionFeedEntryOptions,
   ): Promise<CollectionFeedEntry[]>;
-  /** Fetch all published, non-deleted posts for each requested thread root */
-  getPublishedThreads(rootIds: string[]): Promise<Map<string, Post[]>>;
-  /** For each thread, return post IDs that belong to the given collection */
-  getCollectionPostIdsByThread(
-    collectionId: string,
-    threadIds: string[],
-  ): Promise<Map<string, string[]>>;
-  /** For each thread, return post IDs that belong to any of the given collections */
-  getCollectionPostIdsByThreadForCollections(
-    collectionIds: string[],
-    threadIds: string[],
-  ): Promise<Map<string, string[]>>;
+  /** Fetch published Posts for each requested Thread root. */
+  getPublishedThreads(
+    rootIds: string[],
+    options?: Pick<PostFilters, "publishedBefore">,
+  ): Promise<Map<string, Post[]>>;
   /** Get distinct years that have published posts */
   getDistinctYears(filters?: PostFilters): Promise<number[]>;
   /** For each thread ID, return the ID of the last published, non-deleted post */
@@ -366,6 +442,44 @@ export interface PostService {
     nextCursor: string | null;
     done: boolean;
   }>;
+  /**
+   * Upgrade recognized legacy footnotes and rebuild stored post body HTML for
+   * this site.
+   *
+   * Updates use compare-and-swap guards so concurrent edits win. Editorial
+   * timestamps are never touched. The operation is cursor-paginated,
+   * idempotent, and supports a read-only dry run.
+   */
+  rebuildBodyHtml(
+    options?: RebuildBodyHtmlOptions,
+  ): Promise<RebuildBodyHtmlResult>;
+}
+
+/**
+ * Rebuild body HTML using the site's current runtime summary settings.
+ *
+ * Internal maintenance routes do not run behind the normal app-config
+ * middleware, so this service-level orchestration preserves the same
+ * DB → environment → built-in resolution used by regular requests.
+ *
+ * @param services - Site-scoped post and settings services.
+ * @param env - Runtime environment bindings.
+ * @param options - Rebuild options supplied by the maintenance caller.
+ * @returns Rebuild progress and outcome counts.
+ */
+export async function rebuildPostBodyHtmlWithRuntimeSettings(
+  services: Pick<
+    { posts: PostService; settings: SettingsService },
+    "posts" | "settings"
+  >,
+  env: Bindings,
+  options: Omit<RebuildBodyHtmlOptions, "summaryConfig"> = {},
+): Promise<RebuildBodyHtmlResult> {
+  const allSettings = await services.settings.getAll();
+  return services.posts.rebuildBodyHtml({
+    ...options,
+    summaryConfig: resolveSummaryConfig(env, allSettings),
+  });
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
@@ -521,7 +635,8 @@ export function createPostService(
   databaseSchema: DatabaseSchema = sqliteSchemaBundle,
 ): PostService {
   const resolvedPaths = paths ?? createPathService(db, siteId, databaseSchema);
-  const { pathRegistry, posts, postCollections } = databaseSchema;
+  const { navItems, pathRegistry, posts, sites, threadCollections } =
+    databaseSchema;
   const databaseDialect = config.databaseDialect ?? "sqlite";
   const usesBatchWrites = !supportsDrizzleTransaction(db, databaseDialect);
 
@@ -695,11 +810,11 @@ export function createPostService(
     }
 
     return uniqueCollectionIds.length === 1
-      ? eq(postCollections.collectionId, firstCollectionId)
-      : inArray(postCollections.collectionId, uniqueCollectionIds);
+      ? eq(threadCollections.collectionId, firstCollectionId)
+      : inArray(threadCollections.collectionId, uniqueCollectionIds);
   }
 
-  function buildPostCollectionSubqueryCondition(
+  function buildThreadCollectionSubqueryCondition(
     collectionIds: readonly string[],
   ): SQL<unknown> {
     const uniqueCollectionIds = normalizeCollectionIds(collectionIds);
@@ -710,9 +825,9 @@ export function createPostService(
     const placeholders = uniqueCollectionIds.map(
       (collectionId) => sql`${collectionId}`,
     );
-    return sql`${posts.id} IN (
-      SELECT post_id
-      FROM post_collection
+    return sql`${posts.threadId} IN (
+      SELECT thread_id
+      FROM thread_collection
       WHERE site_id = ${siteId}
         AND collection_id IN (${sql.join(placeholders, sql`, `)})
     )`;
@@ -753,11 +868,11 @@ export function createPostService(
     }
     if (filters.collectionIds !== undefined) {
       conditions.push(
-        buildPostCollectionSubqueryCondition(filters.collectionIds),
+        buildThreadCollectionSubqueryCondition(filters.collectionIds),
       );
     } else if (filters.collectionId !== undefined) {
       conditions.push(
-        buildPostCollectionSubqueryCondition([filters.collectionId]),
+        buildThreadCollectionSubqueryCondition([filters.collectionId]),
       );
     }
     if (filters.threadId) {
@@ -784,19 +899,13 @@ export function createPostService(
       );
     }
     if (filters.hasMedia !== undefined) {
-      if (filters.hasMedia) {
-        conditions.push(
-          sql`${posts.id} IN (
-            SELECT post_id FROM media WHERE site_id = ${siteId}
-          )`,
-        );
-      } else {
-        conditions.push(
-          sql`${posts.id} NOT IN (
-            SELECT post_id FROM media WHERE site_id = ${siteId}
-          )`,
-        );
-      }
+      const mediaExists = sql`EXISTS (
+        SELECT 1
+        FROM media
+        WHERE site_id = ${siteId}
+          AND post_id = ${posts.id}
+      )`;
+      conditions.push(filters.hasMedia ? mediaExists : sql`NOT ${mediaExists}`);
     }
     if (filters.hasTitle !== undefined) {
       if (filters.hasTitle) {
@@ -844,7 +953,13 @@ export function createPostService(
     return rows[0]?.id ?? null;
   }
 
-  function getCursorSortTimestamp(row: typeof posts.$inferSelect): number {
+  function getCursorSortTimestamp(
+    row: typeof posts.$inferSelect,
+    filters: PostFilters,
+  ): number {
+    if (filters.sortBy === "published") {
+      return row.publishedAt ?? row.createdAt;
+    }
     return row.status === "draft" ? row.updatedAt : (row.lastActivityAt ?? -1);
   }
 
@@ -888,16 +1003,20 @@ export function createPostService(
     }
 
     const sortTimestampExpr =
-      filters.status === "draft"
-        ? posts.updatedAt
-        : filters.status === "published"
-          ? posts.lastActivityAt
-          : sql<number>`CASE
-              WHEN ${posts.status} = 'draft' THEN ${posts.updatedAt}
-              ELSE ${posts.lastActivityAt}
-            END`;
+      filters.sortBy === "published"
+        ? sql<number>`coalesce(${posts.publishedAt}, ${posts.createdAt})`
+        : filters.status === "draft"
+          ? posts.updatedAt
+          : filters.status === "published"
+            ? posts.lastActivityAt
+            : sql<number>`CASE
+                WHEN ${posts.status} = 'draft' THEN ${posts.updatedAt}
+                ELSE ${posts.lastActivityAt}
+              END`;
     const pinnedSortExpr = sql<number>`coalesce(${posts.pinnedAt}, -1)`;
-    const featuredSortExpr = sql<number>`coalesce(${posts.featuredAt}, -1)`;
+    const featuredPublishedSortExpr = sql<number>`coalesce(
+      ${posts.publishedAt}, ${posts.createdAt}, -1
+    )`;
     const sortTimestampSortExpr = sql<number>`coalesce(${sortTimestampExpr}, -1)`;
     const ratingPresenceExpr = sql<number>`CASE
       WHEN ${posts.rating} IS NULL THEN 0
@@ -905,8 +1024,9 @@ export function createPostService(
     END`;
     const ratingSortExpr = sql<number>`coalesce(${posts.rating}, -1)`;
     const cursorPinnedAt = cursorPost.pinnedAt ?? -1;
-    const cursorFeaturedAt = cursorPost.featuredAt ?? -1;
-    const cursorSortTimestamp = getCursorSortTimestamp(cursorPost);
+    const cursorFeaturedPublishedAt =
+      cursorPost.publishedAt ?? cursorPost.createdAt;
+    const cursorSortTimestamp = getCursorSortTimestamp(cursorPost, filters);
     const cursorRatingPresence = cursorPost.rating === null ? 0 : 1;
     const cursorRating = cursorPost.rating ?? -1;
     const withPinnedSortKey = (
@@ -925,8 +1045,8 @@ export function createPostService(
           withPinnedSortKey([
             {
               direction: "desc",
-              expr: featuredSortExpr,
-              value: cursorFeaturedAt,
+              expr: featuredPublishedSortExpr,
+              value: cursorFeaturedPublishedAt,
             },
             { direction: "desc", expr: posts.id, value: cursorPost.id },
           ]),
@@ -1012,7 +1132,12 @@ export function createPostService(
       title: row.title,
       url: row.url,
       body: row.body,
-      bodyHtml: row.bodyHtml,
+      bodyHtml: resolvePostBodyHtml({
+        id: row.id,
+        body: row.body,
+        bodyHtml: row.bodyHtml,
+        bodyHtmlVersion: row.bodyHtmlVersion,
+      }),
       bodyText: row.bodyText,
       quoteText: row.quoteText,
       summary: row.summary,
@@ -1122,6 +1247,33 @@ export function createPostService(
     if (options?.excludePrivate) {
       conditions.push(sql`${effectiveVisibilityExpr} != 'private'`);
     }
+    if (options?.excludeLatestHidden) {
+      conditions.push(sql`${effectiveVisibilityExpr} != 'latest_hidden'`);
+    }
+    if (options?.publishedBefore !== undefined) {
+      conditions.push(
+        sql`${posts.publishedAt} < ${options.publishedBefore}`,
+        sql`EXISTS (
+          SELECT 1
+          FROM post AS publication_root
+          WHERE publication_root.site_id = ${siteId}
+            AND publication_root.id = ${posts.threadId}
+            AND publication_root.published_at < ${options.publishedBefore}
+        )`,
+      );
+    }
+    if (options?.rootFormat) {
+      conditions.push(sql`EXISTS (
+        SELECT 1
+        FROM post AS collection_root
+        WHERE collection_root.site_id = ${siteId}
+          AND collection_root.id = ${posts.threadId}
+          AND collection_root.format = ${options.rootFormat}
+      )`);
+    }
+    if (options?.hasRating) {
+      conditions.push(isNotNull(posts.rating));
+    }
 
     return conditions;
   }
@@ -1130,7 +1282,12 @@ export function createPostService(
     return sql<number>`MAX(
       COALESCE(
         (
-          SELECT root.last_activity_at
+          SELECT CASE
+            WHEN root.updated_at > root.created_at
+              AND root.updated_at > COALESCE(root.last_activity_at, -1)
+            THEN root.updated_at
+            ELSE COALESCE(root.last_activity_at, root.updated_at)
+          END
           FROM post AS root
           WHERE root.site_id = ${siteId}
             AND root.id = ${posts.threadId}
@@ -1139,6 +1296,59 @@ export function createPostService(
         ${posts.updatedAt}
       )
     )`.as(alias);
+  }
+
+  function buildCollectionThreadSortQuery(
+    collectionIds: string[],
+    options: CollectionThreadRootPageOptions,
+  ) {
+    const conditions = [
+      ...buildThreadRootPageConditions(options),
+      buildCollectionMembershipCondition(collectionIds),
+    ];
+    const sortOrder = options.sortOrder ?? "newest";
+    const publishedAt =
+      sortOrder === "oldest"
+        ? sql<number>`MIN(${posts.publishedAt})`.as("published_at")
+        : sql<number>`MAX(${posts.publishedAt})`.as("published_at");
+    const threadActivityAt =
+      buildCollectionThreadActivityExpr("thread_activity_at");
+    const ratingPresence = sql<number>`MAX(
+      CASE
+        WHEN ${posts.rating} IS NULL THEN 0
+        ELSE 1
+      END
+    )`.as("rating_presence");
+    const ratingValue = sql<number>`MAX(coalesce(${posts.rating}, -1))`.as(
+      "rating_value",
+    );
+    const collectionPinnedAt =
+      sql<number>`MAX(coalesce(${threadCollections.pinnedAt}, -1))`.as(
+        "collection_pinned_at",
+      );
+
+    const sortedThreads = db
+      .select({
+        threadId: posts.threadId,
+        publishedAt,
+        threadActivityAt,
+        collectionPinnedAt,
+        ratingPresence,
+        ratingValue,
+      })
+      .from(posts)
+      .innerJoin(
+        threadCollections,
+        and(
+          eq(threadCollections.siteId, posts.siteId),
+          eq(threadCollections.threadId, posts.threadId),
+        ),
+      )
+      .where(and(...conditions))
+      .groupBy(posts.threadId)
+      .as("collection_thread_sort");
+
+    return { sortOrder, sortedThreads };
   }
 
   function isMediaAttachmentInput(
@@ -1210,36 +1420,50 @@ export function createPostService(
     await deps.media.deleteByIds(mediaIds, deps.storage).catch(() => undefined);
   }
 
-  async function getCollectionIdsForPost(postId: string): Promise<string[]> {
+  async function getCollectionIdsForThread(
+    threadId: string,
+  ): Promise<string[]> {
     const rows = await db
-      .select({ collectionId: postCollections.collectionId })
-      .from(postCollections)
+      .select({ collectionId: threadCollections.collectionId })
+      .from(threadCollections)
       .where(
         and(
-          eq(postCollections.siteId, siteId),
-          eq(postCollections.postId, postId),
+          eq(threadCollections.siteId, siteId),
+          eq(threadCollections.threadId, threadId),
         ),
       );
 
     return rows.map((row) => row.collectionId);
   }
 
-  async function getPostCollectionTimestamps(
-    postId: string,
-  ): Promise<Map<string, number>> {
+  async function getThreadCollectionEntries(threadId: string): Promise<
+    Map<
+      string,
+      {
+        createdAt: number;
+        pinnedAt: number | null;
+      }
+    >
+  > {
     const rows = await db
       .select({
-        collectionId: postCollections.collectionId,
-        createdAt: postCollections.createdAt,
+        collectionId: threadCollections.collectionId,
+        createdAt: threadCollections.createdAt,
+        pinnedAt: threadCollections.pinnedAt,
       })
-      .from(postCollections)
+      .from(threadCollections)
       .where(
         and(
-          eq(postCollections.siteId, siteId),
-          eq(postCollections.postId, postId),
+          eq(threadCollections.siteId, siteId),
+          eq(threadCollections.threadId, threadId),
         ),
       );
-    return new Map(rows.map((r) => [r.collectionId, r.createdAt]));
+    return new Map(
+      rows.map((row) => [
+        row.collectionId,
+        { createdAt: row.createdAt, pinnedAt: row.pinnedAt },
+      ]),
+    );
   }
 
   function buildRollbackUpdate(
@@ -1324,14 +1548,16 @@ export function createPostService(
         return [];
       }
       const sortTimestamp =
-        filters.status === "draft"
-          ? posts.updatedAt
-          : filters.status === "published"
-            ? posts.lastActivityAt
-            : sql<number>`CASE
-                WHEN ${posts.status} = 'draft' THEN ${posts.updatedAt}
-                ELSE ${posts.lastActivityAt}
-              END`;
+        filters.sortBy === "published"
+          ? sql<number>`coalesce(${posts.publishedAt}, ${posts.createdAt})`
+          : filters.status === "draft"
+            ? posts.updatedAt
+            : filters.status === "published"
+              ? posts.lastActivityAt
+              : sql<number>`CASE
+                  WHEN ${posts.status} = 'draft' THEN ${posts.updatedAt}
+                  ELSE ${posts.lastActivityAt}
+                END`;
 
       if (cursorCondition) {
         conditions.push(cursorCondition);
@@ -1344,10 +1570,13 @@ export function createPostService(
 
       // NULL-sort order differs between dialects: SQLite puts NULLs last for
       // DESC, Postgres puts them first. Wrap nullable sort keys in COALESCE
-      // so pinned/featured posts land on top under both engines. Mirrors the
+      // so pinned and nullable timeline values sort identically under both
+      // engines. Mirrors the
       // expressions used by `buildListCursorCondition` above.
       const pinnedSortExpr = sql<number>`coalesce(${posts.pinnedAt}, -1)`;
-      const featuredSortExpr = sql<number>`coalesce(${posts.featuredAt}, -1)`;
+      const featuredPublishedSortExpr = sql<number>`coalesce(
+        ${posts.publishedAt}, ${posts.createdAt}, -1
+      )`;
       const sortTimestampSortExpr = sql<number>`coalesce(${sortTimestamp}, -1)`;
       const pinnedOrder = filters.ignorePinnedSort
         ? []
@@ -1364,7 +1593,7 @@ export function createPostService(
           ? baseQuery.orderBy(
               ...pinnedOrder,
               filters.featured
-                ? desc(featuredSortExpr)
+                ? desc(featuredPublishedSortExpr)
                 : desc(sortTimestampSortExpr),
               desc(posts.id),
             )
@@ -1535,7 +1764,11 @@ export function createPostService(
       const rawBody = data.bodyMarkdown
         ? markdownToTiptapJson(data.bodyMarkdown)
         : (data.body ?? null);
-      const body = rawBody ? trimTiptapBody(rawBody) : null;
+      const trimmedBody = rawBody ? trimTiptapBody(rawBody) : null;
+      const preparedBody = trimmedBody
+        ? tryPreparePostBodyHtml(id, trimmedBody)
+        : null;
+      const body = preparedBody?.ok ? preparedBody.body : trimmedBody;
       const title = data.title?.trim() || null;
       const quoteText = data.quoteText?.trim() || null;
       const url = data.url?.trim() || null;
@@ -1551,7 +1784,11 @@ export function createPostService(
           : undefined,
       });
 
-      const bodyHtml = body ? renderTiptapJson(body) : null;
+      const bodyHtml = preparedBody?.ok
+        ? preparedBody.html
+        : body
+          ? renderPostBodyHtml(id, body)
+          : null;
       const bodyText = body
         ? extractBodyText(body, { includeLinkHrefs: true })
         : null;
@@ -1623,6 +1860,15 @@ export function createPostService(
           }
         }
         visibility = null;
+
+        if (
+          (data.collectionIds?.length ?? 0) > 0 ||
+          (data.collectionEntries?.length ?? 0) > 0
+        ) {
+          throw new ConflictError(
+            "Cannot set Collections while creating a Thread reply. Set them on the Thread root instead.",
+          );
+        }
       }
 
       assertDraftPublishedAt(status, data.publishedAt);
@@ -1643,6 +1889,11 @@ export function createPostService(
 
       if (data.path) {
         const normalized = normalizePath(data.path);
+        if (isReservedPath(normalized)) {
+          throw new ValidationError(
+            `Path "${normalized}" is reserved and cannot be used`,
+          );
+        }
         if (isValidSlug(normalized)) {
           // Path is a valid slug — use it directly
           slug = await generatePostSlug({
@@ -1674,7 +1925,8 @@ export function createPostService(
         });
       }
 
-      // When structured `collectionEntries` are provided (Hugo import path),
+      // Thread collection membership is stored against the root ID. When
+      // structured `collectionEntries` are provided (Hugo import path),
       // they win over the bare `collectionIds` slug list and carry
       // `createdAt` / `position` / `pinnedAt` per row. Otherwise fall back to
       // the simple list and derive those fields from sensible defaults.
@@ -1683,7 +1935,7 @@ export function createPostService(
         data.collectionEntries.length > 0;
       const collectionInsertRows: {
         siteId: string;
-        postId: string;
+        threadId: string;
         collectionId: string;
         createdAt: number;
         position: number;
@@ -1693,7 +1945,7 @@ export function createPostService(
             const seen = new Set<string>();
             const rows: {
               siteId: string;
-              postId: string;
+              threadId: string;
               collectionId: string;
               createdAt: number;
               position: number;
@@ -1705,7 +1957,7 @@ export function createPostService(
               seen.add(entry.collectionId);
               rows.push({
                 siteId,
-                postId: id,
+                threadId,
                 collectionId: entry.collectionId,
                 createdAt: entry.createdAt ?? timestamp,
                 position: entry.position ?? fallbackPosition,
@@ -1717,7 +1969,7 @@ export function createPostService(
           })()
         : [...new Set(data.collectionIds ?? [])].map((collectionId, index) => ({
             siteId,
-            postId: id,
+            threadId,
             collectionId,
             createdAt: timestamp,
             position: index,
@@ -1741,6 +1993,7 @@ export function createPostService(
               url,
               body,
               bodyHtml,
+              bodyHtmlVersion: POST_BODY_HTML_VERSION,
               bodyText,
               quoteText,
               summary,
@@ -1788,7 +2041,12 @@ export function createPostService(
 
           if (collectionInsertRows.length > 0) {
             writeQueries.push(
-              db.insert(postCollections).values(collectionInsertRows),
+              data.replyToId
+                ? db
+                    .insert(threadCollections)
+                    .values(collectionInsertRows)
+                    .onConflictDoNothing()
+                : db.insert(threadCollections).values(collectionInsertRows),
             );
           }
 
@@ -1812,6 +2070,7 @@ export function createPostService(
               url,
               body,
               bodyHtml,
+              bodyHtmlVersion: POST_BODY_HTML_VERSION,
               bodyText,
               quoteText,
               summary,
@@ -1853,7 +2112,14 @@ export function createPostService(
             }
 
             if (collectionInsertRows.length > 0) {
-              await tx.insert(postCollections).values(collectionInsertRows);
+              const insertQuery = tx
+                .insert(threadCollections)
+                .values(collectionInsertRows);
+              if (data.replyToId) {
+                await insertQuery.onConflictDoNothing();
+              } else {
+                await insertQuery;
+              }
             }
           });
         }
@@ -1926,6 +2192,9 @@ export function createPostService(
         throw new ValidationError("A thread requires at least 2 posts.");
       }
 
+      const extendsExistingThreadQuietly =
+        items[0]?.data.replyToId !== undefined &&
+        items[0].data.quietReply === true;
       const created: Post[] = [];
 
       for (let i = 0; i < items.length; i++) {
@@ -1937,6 +2206,7 @@ export function createPostService(
           ...data,
           // Chain each post as a reply to the previous one (server-side chaining)
           replyToId: i === 0 ? data.replyToId : prevPost?.id,
+          quietReply: extendsExistingThreadQuietly ? true : data.quietReply,
         };
 
         try {
@@ -1990,6 +2260,19 @@ export function createPostService(
 
       const nextTitle =
         data.title !== undefined ? data.title?.trim() || null : existing.title;
+      const effectiveNextVisibility = nextVisibility ?? existing.visibility;
+      const wasNavigationPageEligible =
+        existing.format === "note" &&
+        existing.status === "published" &&
+        existing.visibility !== "private" &&
+        !isThreadReply(existing) &&
+        hasNonEmptyText(existing.title);
+      const remainsNavigationPageEligible =
+        nextFormat === "note" &&
+        nextStatus === "published" &&
+        effectiveNextVisibility !== "private" &&
+        !isThreadReply(existing) &&
+        hasNonEmptyText(nextTitle);
 
       assertPostFormatShape({
         format: nextFormat,
@@ -2046,17 +2329,25 @@ export function createPostService(
         updates.featuredAt = data.featured ? timestamp : null;
       }
 
+      let updatedBody: string | null | undefined;
       if (data.body !== undefined || data.bodyMarkdown !== undefined) {
         const rawBody = data.bodyMarkdown
           ? markdownToTiptapJson(data.bodyMarkdown)
           : (data.body ?? null);
         const normalizedBody = rawBody ? trimTiptapBody(rawBody) : null;
-        updates.body = normalizedBody;
-        updates.bodyHtml = normalizedBody
-          ? renderTiptapJson(normalizedBody)
+        const preparedBody = normalizedBody
+          ? tryPreparePostBodyHtml(existing.id, normalizedBody)
           : null;
-        updates.bodyText = normalizedBody
-          ? extractBodyText(normalizedBody, { includeLinkHrefs: true })
+        updatedBody = preparedBody?.ok ? preparedBody.body : normalizedBody;
+        updates.body = updatedBody;
+        updates.bodyHtml = preparedBody?.ok
+          ? preparedBody.html
+          : updatedBody
+            ? renderPostBodyHtml(existing.id, updatedBody)
+            : null;
+        updates.bodyHtmlVersion = POST_BODY_HTML_VERSION;
+        updates.bodyText = updatedBody
+          ? extractBodyText(updatedBody, { includeLinkHrefs: true })
           : null;
       }
 
@@ -2064,14 +2355,7 @@ export function createPostService(
       if (summaryConfig) {
         const format = nextFormat;
         const title = nextTitle;
-        const body =
-          data.bodyMarkdown !== undefined
-            ? data.bodyMarkdown
-              ? markdownToTiptapJson(data.bodyMarkdown)
-              : null
-            : data.body !== undefined
-              ? data.body
-              : existing.body;
+        const body = updatedBody !== undefined ? updatedBody : existing.body;
         if (format === "note" && title && body) {
           updates.summary = extractSummary(
             body,
@@ -2128,14 +2412,24 @@ export function createPostService(
       const needsCascade = statusChanged && !isThreadReply(existing);
       const needsReplyVisibilityCleanup =
         !isThreadReply(existing) && (statusChanged || visibilityChanged);
-      const needsCollectionSync = data.collectionIds !== undefined;
-      const nextCollectionIds = needsCollectionSync
-        ? [...new Set(data.collectionIds ?? [])]
-        : [];
+      const needsCollectionSync =
+        data.collectionIds !== undefined ||
+        data.collectionEntries !== undefined;
       const needsThreadActivityRecalc =
         statusChanged || publishedAtChanged || existing.status === "draft";
+      const needsPageNavDelete =
+        wasNavigationPageEligible && !remainsNavigationPageEligible;
+      const needsPageNavUrlUpdate =
+        wasNavigationPageEligible &&
+        remainsNavigationPageEligible &&
+        slugChanged &&
+        Boolean(data.slug);
       const hasExtraWrites =
-        needsCascade || needsReplyVisibilityCleanup || needsCollectionSync;
+        needsCascade ||
+        needsReplyVisibilityCleanup ||
+        needsCollectionSync ||
+        needsPageNavDelete ||
+        needsPageNavUrlUpdate;
 
       if (!hasExtraWrites) {
         // Simple case: only the post update
@@ -2151,10 +2445,57 @@ export function createPostService(
         return hydratePost(result[0]);
       }
 
-      // Complex case: cascade + update + collection sync atomically
-      const existingCollectionTimestamps = needsCollectionSync
-        ? await getPostCollectionTimestamps(id)
-        : new Map<string, number>();
+      // Complex case: cascade + update + Thread collection sync atomically.
+      // Retained entries keep their collected/pinned timestamps when a normal
+      // collectionIds update only changes selection or ordering.
+      const existingThreadCollections = needsCollectionSync
+        ? await getThreadCollectionEntries(existing.threadId)
+        : new Map<string, { createdAt: number; pinnedAt: number | null }>();
+      const collectionTimestamp = now();
+      const nextThreadCollectionRows = (() => {
+        if (!needsCollectionSync) return [];
+
+        if (data.collectionEntries !== undefined) {
+          const seen = new Set<string>();
+          return data.collectionEntries.flatMap((entry, index) => {
+            if (seen.has(entry.collectionId)) return [];
+            seen.add(entry.collectionId);
+            const existingEntry = existingThreadCollections.get(
+              entry.collectionId,
+            );
+            return [
+              {
+                siteId,
+                threadId: existing.threadId,
+                collectionId: entry.collectionId,
+                createdAt:
+                  entry.createdAt ??
+                  existingEntry?.createdAt ??
+                  collectionTimestamp,
+                position: entry.position ?? index,
+                pinnedAt:
+                  entry.pinnedAt !== undefined
+                    ? entry.pinnedAt
+                    : (existingEntry?.pinnedAt ?? null),
+              },
+            ];
+          });
+        }
+
+        return [...new Set(data.collectionIds ?? [])].map(
+          (collectionId, index) => {
+            const existingEntry = existingThreadCollections.get(collectionId);
+            return {
+              siteId,
+              threadId: existing.threadId,
+              collectionId,
+              createdAt: existingEntry?.createdAt ?? collectionTimestamp,
+              position: index,
+              pinnedAt: existingEntry?.pinnedAt ?? null,
+            };
+          },
+        );
+      })();
       let updateResult: (typeof posts.$inferSelect)[] | undefined;
 
       if (usesBatchWrites) {
@@ -2208,33 +2549,40 @@ export function createPostService(
             .returning(),
         );
 
-        if (needsCollectionSync) {
-          // Delete all and re-insert to preserve user-specified ordering
+        if (needsPageNavDelete) {
           writeQueries.push(
             db
-              .delete(postCollections)
+              .delete(navItems)
+              .where(and(eq(navItems.siteId, siteId), eq(navItems.postId, id))),
+          );
+        } else if (needsPageNavUrlUpdate && data.slug) {
+          writeQueries.push(
+            db
+              .update(navItems)
+              .set({
+                url: `/${normalizePath(data.slug)}`,
+                updatedAt: timestamp,
+              })
+              .where(and(eq(navItems.siteId, siteId), eq(navItems.postId, id))),
+          );
+        }
+
+        if (needsCollectionSync) {
+          // Delete all and re-insert the one shared Thread membership set.
+          writeQueries.push(
+            db
+              .delete(threadCollections)
               .where(
                 and(
-                  eq(postCollections.siteId, siteId),
-                  eq(postCollections.postId, id),
+                  eq(threadCollections.siteId, siteId),
+                  eq(threadCollections.threadId, existing.threadId),
                 ),
               ),
           );
 
-          if (nextCollectionIds.length > 0) {
-            const collectionTimestamp = now();
+          if (nextThreadCollectionRows.length > 0) {
             writeQueries.push(
-              db.insert(postCollections).values(
-                nextCollectionIds.map((collectionId, index) => ({
-                  siteId,
-                  postId: id,
-                  collectionId,
-                  createdAt:
-                    existingCollectionTimestamps.get(collectionId) ??
-                    collectionTimestamp,
-                  position: index,
-                })),
-              ),
+              db.insert(threadCollections).values(nextThreadCollectionRows),
             );
           }
         }
@@ -2291,30 +2639,35 @@ export function createPostService(
             .where(and(eq(posts.siteId, siteId), eq(posts.id, id)))
             .returning();
 
-          if (needsCollectionSync) {
-            // Delete all and re-insert to preserve user-specified ordering
+          if (needsPageNavDelete) {
             await tx
-              .delete(postCollections)
+              .delete(navItems)
+              .where(and(eq(navItems.siteId, siteId), eq(navItems.postId, id)));
+          } else if (needsPageNavUrlUpdate && data.slug) {
+            await tx
+              .update(navItems)
+              .set({
+                url: `/${normalizePath(data.slug)}`,
+                updatedAt: timestamp,
+              })
+              .where(and(eq(navItems.siteId, siteId), eq(navItems.postId, id)));
+          }
+
+          if (needsCollectionSync) {
+            // Delete all and re-insert the one shared Thread membership set.
+            await tx
+              .delete(threadCollections)
               .where(
                 and(
-                  eq(postCollections.siteId, siteId),
-                  eq(postCollections.postId, id),
+                  eq(threadCollections.siteId, siteId),
+                  eq(threadCollections.threadId, existing.threadId),
                 ),
               );
 
-            if (nextCollectionIds.length > 0) {
-              const collectionTimestamp = now();
-              await tx.insert(postCollections).values(
-                nextCollectionIds.map((collectionId, index) => ({
-                  siteId,
-                  postId: id,
-                  collectionId,
-                  createdAt:
-                    existingCollectionTimestamps.get(collectionId) ??
-                    collectionTimestamp,
-                  position: index,
-                })),
-              );
+            if (nextThreadCollectionRows.length > 0) {
+              await tx
+                .insert(threadCollections)
+                .values(nextThreadCollectionRows);
             }
           }
         });
@@ -2360,7 +2713,9 @@ export function createPostService(
       const existingPost = await this.getById(id);
       if (!existingPost) return null;
 
-      const existingCollectionIds = await getCollectionIdsForPost(id);
+      const existingCollectionIds = await getCollectionIdsForThread(
+        existingPost.threadId,
+      );
       const rollbackData = buildRollbackUpdate(
         existingPost,
         existingCollectionIds,
@@ -2810,19 +3165,20 @@ export function createPostService(
         ...buildThreadRootPageConditions(options),
         isNotNull(posts.featuredAt),
       ];
-      const latestFeaturedAt = sql<number>`MAX(${posts.featuredAt})`.as(
-        "latest_featured_at",
-      );
+      const latestFeaturedPublishedAt =
+        sql<number>`MAX(${posts.publishedAt})`.as(
+          "latest_featured_published_at",
+        );
 
       let query = db
         .select({
           threadId: posts.threadId,
-          latestFeaturedAt,
+          latestFeaturedPublishedAt,
         })
         .from(posts)
         .where(and(...conditions))
         .groupBy(posts.threadId)
-        .orderBy(desc(latestFeaturedAt), desc(posts.threadId));
+        .orderBy(desc(latestFeaturedPublishedAt), desc(posts.threadId));
 
       if (options.limit !== undefined) {
         query = query.limit(options.limit) as typeof query;
@@ -2833,6 +3189,77 @@ export function createPostService(
 
       const rows = await query;
       return rows.map((row) => row.threadId);
+    },
+
+    async getFeaturedThreadTimelineData(rootIds) {
+      const result = new Map<string, FeaturedThreadTimelineData>();
+      if (rootIds.length === 0) return result;
+
+      const uniqueRootIds = [...new Set(rootIds)];
+      const threadPosition = sql<number>`CAST(
+        row_number() OVER (
+          PARTITION BY ${posts.threadId}
+          ORDER BY ${posts.createdAt}, ${posts.id}
+        ) - 1 AS INTEGER
+      )`.as("thread_position");
+      const threadPostCount = sql<number>`CAST(
+        count(*) OVER (PARTITION BY ${posts.threadId}) AS INTEGER
+      )`.as("thread_post_count");
+
+      const rankedPosts = db
+        .select({
+          ...getTableColumns(posts),
+          threadPosition,
+          threadPostCount,
+        })
+        .from(posts)
+        .where(
+          and(
+            eq(posts.siteId, siteId),
+            inArray(posts.threadId, uniqueRootIds),
+            eq(posts.status, "published"),
+          ),
+        )
+        .as("ranked_featured_thread_post");
+
+      const rows = await db
+        .select()
+        .from(rankedPosts)
+        .where(
+          or(
+            eq(rankedPosts.id, rankedPosts.threadId),
+            isNotNull(rankedPosts.featuredAt),
+            sql`${rankedPosts.threadPosition} = ${rankedPosts.threadPostCount} - 1`,
+          ),
+        )
+        .orderBy(rankedPosts.threadId, sql`${rankedPosts.threadPosition}`);
+
+      const hydratedPosts = await hydratePosts(
+        rows.map(
+          ({ threadPosition: _position, threadPostCount: _count, ...row }) =>
+            row,
+        ),
+      );
+      const hydratedById = new Map(
+        hydratedPosts.map((post) => [post.id, post]),
+      );
+
+      for (const row of rows) {
+        const post = hydratedById.get(row.id);
+        if (!post) continue;
+
+        const thread = result.get(row.threadId) ?? {
+          posts: [],
+          featuredPostIds: [],
+        };
+        thread.posts.push({ post, position: row.threadPosition });
+        if (row.featuredAt !== null) {
+          thread.featuredPostIds.push(row.id);
+        }
+        result.set(row.threadId, thread);
+      }
+
+      return result;
     },
 
     async countCollectionThreadRoots(collectionId, options = {}) {
@@ -2860,15 +3287,44 @@ export function createPostService(
         })
         .from(posts)
         .innerJoin(
-          postCollections,
+          threadCollections,
           and(
-            eq(postCollections.siteId, siteId),
-            eq(postCollections.postId, posts.id),
+            eq(threadCollections.siteId, posts.siteId),
+            eq(threadCollections.threadId, posts.threadId),
           ),
         )
         .where(and(...conditions));
 
       return rows[0]?.count ?? 0;
+    },
+
+    async countCollectionThreadRootsUpToForCollections(
+      collectionIds,
+      options = {},
+      limit,
+    ) {
+      const normalizedLimit = Math.max(0, Math.trunc(limit));
+      if (normalizedLimit === 0) return 0;
+
+      const conditions = [
+        ...buildThreadRootPageConditions(options),
+        buildCollectionMembershipCondition(collectionIds),
+      ];
+      const rows = await db
+        .select({ threadId: posts.threadId })
+        .from(posts)
+        .innerJoin(
+          threadCollections,
+          and(
+            eq(threadCollections.siteId, posts.siteId),
+            eq(threadCollections.threadId, posts.threadId),
+          ),
+        )
+        .where(and(...conditions))
+        .groupBy(posts.threadId)
+        .limit(normalizedLimit);
+
+      return rows.length;
     },
 
     async listCollectionThreadRootIds(collectionId, options = {}) {
@@ -2882,71 +3338,102 @@ export function createPostService(
       collectionIds,
       options = {},
     ) {
-      const conditions = [
-        ...buildThreadRootPageConditions(options),
-        buildCollectionMembershipCondition(collectionIds),
-      ];
-      const sortOrder = options.sortOrder ?? "newest";
-      const publishedAt =
-        sortOrder === "oldest"
-          ? sql<number>`MIN(${posts.publishedAt})`.as("published_at")
-          : sql<number>`MAX(${posts.publishedAt})`.as("published_at");
-      const threadActivityAt =
-        buildCollectionThreadActivityExpr("thread_activity_at");
-      const ratingPresence = sql<number>`MAX(
-        CASE
-          WHEN ${posts.rating} IS NULL THEN 0
-          ELSE 1
-        END
-      )`.as("rating_presence");
-      const ratingValue = sql<number | null>`MAX(${posts.rating})`.as(
-        "rating_value",
+      const { sortOrder, sortedThreads } = buildCollectionThreadSortQuery(
+        collectionIds,
+        options,
       );
+      let cursorCondition: SQL<unknown> | undefined;
 
-      const collectionPinnedAt =
-        sql<number>`MAX(coalesce(${postCollections.pinnedAt}, -1))`.as(
-          "collection_pinned_at",
-        );
+      if (options.cursor) {
+        const cursorRows = await db
+          .select()
+          .from(sortedThreads)
+          .where(eq(sortedThreads.threadId, options.cursor))
+          .limit(1);
+        const cursorRow = cursorRows[0];
+        if (!cursorRow) return [];
 
-      const baseQuery = db
-        .select({
-          threadId: posts.threadId,
-          publishedAt,
-          threadActivityAt,
-          collectionPinnedAt,
-          ratingPresence,
-          ratingValue,
-        })
-        .from(posts)
-        .innerJoin(
-          postCollections,
-          and(
-            eq(postCollections.siteId, siteId),
-            eq(postCollections.postId, posts.id),
-          ),
-        )
-        .where(and(...conditions))
-        .groupBy(posts.threadId);
+        const pinnedKey: CursorSortKey = {
+          direction: "desc",
+          expr: sortedThreads.collectionPinnedAt,
+          value: cursorRow.collectionPinnedAt,
+        };
+
+        cursorCondition =
+          sortOrder === "oldest"
+            ? buildLexicographicCursorCondition([
+                pinnedKey,
+                {
+                  direction: "asc",
+                  expr: sortedThreads.publishedAt,
+                  value: cursorRow.publishedAt,
+                },
+                {
+                  direction: "asc",
+                  expr: sortedThreads.threadId,
+                  value: cursorRow.threadId,
+                },
+              ])
+            : sortOrder === "rating_desc"
+              ? buildLexicographicCursorCondition([
+                  pinnedKey,
+                  {
+                    direction: "desc",
+                    expr: sortedThreads.ratingPresence,
+                    value: cursorRow.ratingPresence,
+                  },
+                  {
+                    direction: "desc",
+                    expr: sortedThreads.ratingValue,
+                    value: cursorRow.ratingValue,
+                  },
+                  {
+                    direction: "desc",
+                    expr: sortedThreads.threadActivityAt,
+                    value: cursorRow.threadActivityAt,
+                  },
+                  {
+                    direction: "desc",
+                    expr: sortedThreads.threadId,
+                    value: cursorRow.threadId,
+                  },
+                ])
+              : buildLexicographicCursorCondition([
+                  pinnedKey,
+                  {
+                    direction: "desc",
+                    expr: sortedThreads.threadActivityAt,
+                    value: cursorRow.threadActivityAt,
+                  },
+                  {
+                    direction: "desc",
+                    expr: sortedThreads.threadId,
+                    value: cursorRow.threadId,
+                  },
+                ]);
+      }
+
+      const baseQuery = db.select().from(sortedThreads).where(cursorCondition);
 
       let query =
         sortOrder === "oldest"
           ? baseQuery.orderBy(
-              desc(collectionPinnedAt),
-              asc(publishedAt),
-              asc(posts.threadId),
+              desc(sortedThreads.collectionPinnedAt),
+              asc(sortedThreads.publishedAt),
+              asc(sortedThreads.threadId),
             )
           : sortOrder === "rating_desc"
             ? baseQuery.orderBy(
-                desc(collectionPinnedAt),
-                desc(ratingPresence),
-                desc(ratingValue),
-                desc(threadActivityAt),
-                desc(posts.threadId),
+                desc(sortedThreads.collectionPinnedAt),
+                desc(sortedThreads.ratingPresence),
+                desc(sortedThreads.ratingValue),
+                desc(sortedThreads.threadActivityAt),
+                desc(sortedThreads.threadId),
               )
             : baseQuery.orderBy(
-                desc(collectionPinnedAt),
-                desc(threadActivityAt),
-                desc(posts.threadId),
+                desc(sortedThreads.collectionPinnedAt),
+                desc(sortedThreads.threadActivityAt),
+                desc(sortedThreads.threadId),
               );
 
       if (options.limit !== undefined) {
@@ -2958,6 +3445,18 @@ export function createPostService(
 
       const rows = await query;
       return rows.map((row) => row.threadId);
+    },
+
+    async listCollectionThreadRootsForCollections(collectionIds, options = {}) {
+      const rootIds = await this.listCollectionThreadRootIdsForCollections(
+        collectionIds,
+        options,
+      );
+      const rootsById = await hydratePostsById(rootIds);
+      return rootIds.flatMap((rootId) => {
+        const root = rootsById.get(rootId);
+        return root ? [root] : [];
+      });
     },
 
     async listCollectionFeedEntries(collectionId, options = {}) {
@@ -2974,11 +3473,11 @@ export function createPostService(
       ];
       const threadActivityAt =
         buildCollectionThreadActivityExpr("thread_activity_at");
-      const collectedAt = sql<number>`MAX(${postCollections.createdAt})`.as(
+      const collectedAt = sql<number>`MAX(${threadCollections.createdAt})`.as(
         "collected_at",
       );
       const collectionPinnedAt =
-        sql<number>`MAX(coalesce(${postCollections.pinnedAt}, -1))`.as(
+        sql<number>`MAX(coalesce(${threadCollections.pinnedAt}, -1))`.as(
           "collection_pinned_at",
         );
       const pinnedOrder = options.ignoreCollectionPinnedSort
@@ -2994,10 +3493,10 @@ export function createPostService(
         })
         .from(posts)
         .innerJoin(
-          postCollections,
+          threadCollections,
           and(
-            eq(postCollections.siteId, siteId),
-            eq(postCollections.postId, posts.id),
+            eq(threadCollections.siteId, posts.siteId),
+            eq(threadCollections.threadId, posts.threadId),
           ),
         )
         .where(and(...conditions))
@@ -3020,21 +3519,23 @@ export function createPostService(
       });
     },
 
-    async getPublishedThreads(rootIds) {
+    async getPublishedThreads(rootIds, options = {}) {
       const result = new Map<string, Post[]>();
       if (rootIds.length === 0) return result;
 
       const unique = [...new Set(rootIds)];
+      const conditions = [
+        eq(posts.siteId, siteId),
+        inArray(posts.threadId, unique),
+        eq(posts.status, "published"),
+      ];
+      if (options.publishedBefore !== undefined) {
+        conditions.push(sql`${posts.publishedAt} < ${options.publishedBefore}`);
+      }
       const rows = await db
         .select()
         .from(posts)
-        .where(
-          and(
-            eq(posts.siteId, siteId),
-            inArray(posts.threadId, unique),
-            eq(posts.status, "published"),
-          ),
-        )
+        .where(and(...conditions))
         .orderBy(posts.threadId, posts.createdAt, posts.id);
 
       for (const post of await hydratePosts(rows)) {
@@ -3043,56 +3544,6 @@ export function createPostService(
           thread.push(post);
         } else {
           result.set(post.threadId, [post]);
-        }
-      }
-
-      return result;
-    },
-
-    async getCollectionPostIdsByThread(collectionId, threadIds) {
-      return this.getCollectionPostIdsByThreadForCollections(
-        [collectionId],
-        threadIds,
-      );
-    },
-
-    async getCollectionPostIdsByThreadForCollections(collectionIds, threadIds) {
-      const result = new Map<string, string[]>();
-      if (threadIds.length === 0) return result;
-
-      const unique = [...new Set(threadIds)];
-      const rows = await batchQueryRows(unique, (chunk) =>
-        db
-          .select({
-            threadId: posts.threadId,
-            postId: posts.id,
-          })
-          .from(posts)
-          .innerJoin(
-            postCollections,
-            and(
-              eq(postCollections.siteId, siteId),
-              eq(postCollections.postId, posts.id),
-            ),
-          )
-          .where(
-            and(
-              eq(posts.siteId, siteId),
-              buildCollectionMembershipCondition(collectionIds),
-              inArray(posts.threadId, chunk),
-              eq(posts.status, "published"),
-            ),
-          )
-          .groupBy(posts.threadId, posts.id)
-          .orderBy(posts.threadId, posts.createdAt, posts.id),
-      );
-
-      for (const row of rows) {
-        const list = result.get(row.threadId);
-        if (list) {
-          list.push(row.postId);
-        } else {
-          result.set(row.threadId, [row.postId]);
         }
       }
 
@@ -3196,6 +3647,145 @@ export function createPostService(
         skipped,
         nextCursor: hasMore ? lastId : null,
         done: !hasMore,
+      };
+    },
+
+    async rebuildBodyHtml(options = {}) {
+      const requested = options.limit ?? 50;
+      const limit = Math.min(Math.max(Math.trunc(requested), 1), 100);
+      const cursor = options.cursor;
+      const dryRun = options.dryRun ?? false;
+
+      const siteRows = await db
+        .select({ id: sites.id })
+        .from(sites)
+        .where(eq(sites.id, siteId))
+        .limit(1);
+      if (!siteRows[0]) {
+        throw new NotFoundError("Site");
+      }
+
+      const whereConditions = [eq(posts.siteId, siteId)];
+      if (cursor) whereConditions.push(gt(posts.id, cursor));
+
+      const rows = await db
+        .select({
+          id: posts.id,
+          format: posts.format,
+          title: posts.title,
+          body: posts.body,
+          bodyHtml: posts.bodyHtml,
+          bodyHtmlVersion: posts.bodyHtmlVersion,
+        })
+        .from(posts)
+        .where(and(...whereConditions))
+        .orderBy(asc(posts.id))
+        .limit(limit + 1);
+
+      const hasMore = rows.length > limit;
+      const batch = hasMore ? rows.slice(0, limit) : rows;
+      const failures: Array<{ postId: string; error: string }> = [];
+      let wouldRebuild = 0;
+      let rebuilt = 0;
+      let wouldUpgradeFootnotes = 0;
+      let upgradedFootnotes = 0;
+      let skipped = 0;
+      let conflicted = 0;
+
+      for (const row of batch) {
+        if (row.bodyHtmlVersion > POST_BODY_HTML_VERSION) {
+          skipped++;
+          continue;
+        }
+
+        let nextBody = row.body;
+        let nextBodyHtml: string | null = null;
+        let upgradesLegacyFootnotes = false;
+        if (row.body !== null) {
+          const prepared = tryPreparePostBodyHtml(row.id, row.body);
+          if (!prepared.ok) {
+            failures.push({ postId: row.id, error: prepared.error });
+            continue;
+          }
+          nextBody = prepared.body;
+          nextBodyHtml = prepared.html;
+          upgradesLegacyFootnotes = prepared.upgradedLegacyFootnotes;
+        }
+
+        if (
+          row.bodyHtmlVersion === POST_BODY_HTML_VERSION &&
+          row.body === nextBody &&
+          row.bodyHtml === nextBodyHtml
+        ) {
+          skipped++;
+          continue;
+        }
+
+        wouldRebuild++;
+        if (upgradesLegacyFootnotes) wouldUpgradeFootnotes++;
+        if (dryRun) continue;
+
+        const bodyCondition =
+          row.body === null ? isNull(posts.body) : eq(posts.body, row.body);
+        const canonicalBodyChanged = row.body !== nextBody;
+        const updates: Partial<typeof posts.$inferInsert> = {
+          bodyHtml: nextBodyHtml,
+          bodyHtmlVersion: POST_BODY_HTML_VERSION,
+        };
+        if (canonicalBodyChanged) {
+          updates.body = nextBody;
+          updates.bodyText = nextBody
+            ? extractBodyText(nextBody, { includeLinkHrefs: true })
+            : null;
+
+          if (options.summaryConfig) {
+            updates.summary =
+              row.format === "note" && row.title && nextBody
+                ? extractSummary(
+                    nextBody,
+                    options.summaryConfig.maxParagraphs,
+                    options.summaryConfig.maxChars,
+                  )
+                : null;
+          }
+        }
+        const updatedRows = await db
+          .update(posts)
+          .set(updates)
+          .where(
+            and(
+              eq(posts.siteId, siteId),
+              eq(posts.id, row.id),
+              bodyCondition,
+              eq(posts.bodyHtmlVersion, row.bodyHtmlVersion),
+            ),
+          )
+          .returning({ id: posts.id });
+
+        if (updatedRows.length === 0) {
+          conflicted++;
+        } else {
+          rebuilt++;
+          if (upgradesLegacyFootnotes) upgradedFootnotes++;
+        }
+      }
+
+      const lastRow = batch.at(-1);
+      const lastId = lastRow ? lastRow.id : null;
+
+      return {
+        processed: batch.length,
+        wouldRebuild,
+        rebuilt,
+        wouldUpgradeFootnotes,
+        upgradedFootnotes,
+        skipped,
+        conflicted,
+        failed: failures.length,
+        failures,
+        nextCursor: hasMore ? lastId : null,
+        done: !hasMore,
+        targetVersion: POST_BODY_HTML_VERSION,
       };
     },
   };

@@ -13,6 +13,11 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
+#. @context: Config Editor live search result count
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "{count} settings shown"
+msgstr "{count} settings shown"
+
 #. @context: Custom CSS textarea placeholder
 #: src/ui/dash/appearance/AdvancedContent.tsx
 msgid "/* Your custom CSS here */"
@@ -134,10 +139,50 @@ msgstr "Add custom CSS to override any styles. Use data attributes like [data-pa
 msgid "Add custom link to navigation"
 msgstr "Add custom link to navigation"
 
+#. @context: Description after quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add it to navigation now or open the editor to add content."
+msgstr "Add it to navigation now or open the editor to add content."
+
+#. @context: Description after quick collection creation in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add it to navigation now or open the editor to add details."
+msgstr "Add it to navigation now or open the editor to add details."
+
 #. @context: Button and heading for adding custom link
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Add Link"
 msgstr "Add Link"
+
+#. @context: Button that opens the navigation page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add Page"
+msgstr "Add Page"
+
+#. @context: Section heading for adding a page to navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add page to navigation"
+msgstr "Add page to navigation"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Add site-wide CSS in the dedicated code editor."
+msgstr "Add site-wide CSS in the dedicated code editor."
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Add site-wide HTML before the closing body tag."
+msgstr "Add site-wide HTML before the closing body tag."
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Add site-wide HTML before the closing head tag."
+msgstr "Add site-wide HTML before the closing head tag."
+
+#. @context: Button that adds a created page to navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add to Navigation"
+msgstr "Add to Navigation"
 
 #. @context: Settings group label for advanced settings
 #: src/ui/dash/settings/SettingsRootContent.tsx
@@ -153,6 +198,11 @@ msgstr "all available endpoints and request formats."
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "All collections are already in your navigation."
 msgstr "All collections are already in your navigation."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Allow published content to be read without an API token."
+msgstr "Allow published content to be read without an API token."
 
 #. @context: Checkbox for allowing search engine indexing
 #: src/ui/dash/settings/GeneralContent.tsx
@@ -222,6 +272,11 @@ msgstr "Archive feed"
 msgid "Archive filter parameters (e.g. format=note&view=list)"
 msgstr "Archive filter parameters (e.g. format=note&view=list)"
 
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Ask search engines not to index public pages or include them in results."
+msgstr "Ask search engines not to index public pages or include them in results."
+
 #. @context: Theme mode option label
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Auto"
@@ -245,6 +300,11 @@ msgstr "Avatar"
 #: src/routes/dash/settings.tsx
 msgid "Avatar display updated."
 msgstr "Avatar display updated."
+
+#. @context: Button returning from page creation to page search
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Back"
+msgstr "Back"
 
 #. @context: Settings item description for GitHub sync
 #: src/ui/dash/settings/SettingsRootContent.tsx
@@ -339,25 +399,60 @@ msgstr "Change Password"
 msgid "Changing this updates what subscribers get from /feed."
 msgstr "Changing this updates what subscribers get from /feed."
 
+#. @context: Loading text while checking page slug availability
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Checking address…"
+msgstr "Checking address…"
+
 #. @context: GitHub sync picker — status text while classifying the picked repo
 #: src/routes/dash/settings.tsx
 msgid "Checking repository…"
 msgstr "Checking repository…"
+
+#. @context: Description for adding a page to navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Choose a titled note that isn't already in navigation, or create a new page."
+msgstr "Choose a titled note that isn't already in navigation, or create a new page."
 
 #. @context: Font theme settings description
 #: src/ui/dash/appearance/FontThemeContent.tsx
 msgid "Choose a typographic direction for your site. Each theme changes both the font pairing and the reading rhythm."
 msgstr "Choose a typographic direction for your site. Each theme changes both the font pairing and the reading rhythm."
 
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Choose the color palette used across Jant."
+msgstr "Choose the color palette used across Jant."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Choose the content language announced to readers and search engines."
+msgstr "Choose the content language announced to readers and search engines."
+
 #. @context: GitHub sync picker — page subtitle
 #: src/routes/dash/settings.tsx
 msgid "Choose the GitHub account and repository to sync with this site."
 msgstr "Choose the GitHub account and repository to sync with this site."
 
-#. @context: Settings form field for CJK serif font selection
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Choose the repository used for content backups."
+msgstr "Choose the repository used for content backups."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Choose the time zone used to display dates and times."
+msgstr "Choose the time zone used to display dates and times."
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Choose the typography used across Jant."
+msgstr "Choose the typography used across Jant."
+
+#. @context: Settings field for a manual Chinese, Japanese, or Korean font fallback
 #: src/ui/dash/settings/GeneralContent.tsx
-msgid "CJK Font"
-msgstr "CJK Font"
+msgid "CJK fallback"
+msgstr "CJK fallback"
 
 #. @context: Paper color theme preview help line
 #: src/ui/dash/appearance/ColorThemeContent.tsx
@@ -390,6 +485,21 @@ msgstr "collection"
 msgid "Collection"
 msgstr "Collection"
 
+#. @context: Confirmation after adding a collection to navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Collection added to navigation."
+msgstr "Collection added to navigation."
+
+#. @context: Heading after quick collection creation in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Collection created."
+msgstr "Collection created."
+
+#. @context: Collection slug field in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Collection link"
+msgstr "Collection link"
+
 #. @context: Appearance settings heading
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Color theme"
@@ -401,6 +511,22 @@ msgstr "Color theme"
 #: src/ui/dash/settings/SettingsRootContent.tsx
 msgid "Color Theme"
 msgstr "Color Theme"
+
+#. @context: Breadcrumb label
+#. @context: Config Editor page title
+#. @context: Settings item — Config Editor
+#: src/routes/dash/settings.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/SettingsRootContent.tsx
+msgid "Config Editor"
+msgstr "Config Editor"
+
+#. @context: Config Editor linked setting status
+#. @context: Config Editor linked setting status
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Configured"
+msgstr "Configured"
 
 #. @context: Step 2 heading — user must type confirmation phrase
 #: src/ui/dash/settings/DeleteAccountContent.tsx
@@ -433,6 +559,16 @@ msgstr "Connect a Telegram bot, then anything you message it gets published as a
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Connect manually"
 msgstr "Connect manually"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Connect or manage automatic content backups to GitHub."
+msgstr "Connect or manage automatic content backups to GitHub."
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Connect or manage the bot used to post from Telegram."
+msgstr "Connect or manage the bot used to post from Telegram."
 
 #. @context: Heading on the Telegram settings page when ready to connect
 #: src/ui/dash/settings/TelegramContent.tsx
@@ -524,10 +660,25 @@ msgstr "Could not copy. Try again."
 msgid "Couldn't connect. Check the error and try again."
 msgstr "Couldn't connect. Check the error and try again."
 
+#. @context: Error when quick collection creation fails in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Couldn't create the collection. Check the details and try again."
+msgstr "Couldn't create the collection. Check the details and try again."
+
+#. @context: Error when quick page creation fails
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Couldn't create the page. Check the details and try again."
+msgstr "Couldn't create the page. Check the details and try again."
+
 #. @context: Error toast when nav delete fails
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Couldn't delete. Try again in a moment."
 msgstr "Couldn't delete. Try again in a moment."
+
+#. @context: Error shown when navigation page search fails
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Couldn't load pages. Try again in a moment."
+msgstr "Couldn't load pages. Try again in a moment."
 
 #. @context: Error toast when nav save fails
 #: src/ui/dash/appearance/NavigationContent.tsx
@@ -564,20 +715,45 @@ msgstr "Create a new repository on GitHub"
 msgid "Create a post with curl:"
 msgstr "Create a post with curl:"
 
+#. @context: Description in the quick-create page dialog
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Create a public page that won't appear in Latest."
+msgstr "Create a public page that won't appear in Latest."
+
 #. @context: Button to create the standard About page
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Create About page"
 msgstr "Create About page"
+
+#. @context: Button and dialog title for quick collection creation in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Create Collection"
+msgstr "Create Collection"
 
 #. @context: Button to save new custom URL
 #: src/routes/dash/custom-urls.tsx
 msgid "Create Custom URL"
 msgstr "Create Custom URL"
 
+#. @context: Action at the bottom of the Navigation collection picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Create new collection"
+msgstr "Create new collection"
+
+#. @context: Action at the bottom of the navigation page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Create new page"
+msgstr "Create new page"
+
 #. @context: Link text pointing to GitHub's fine-grained PAT creation page
 #: src/ui/dash/settings/GitHubSyncContent.tsx
 msgid "Create one on GitHub"
 msgstr "Create one on GitHub"
+
+#. @context: Button and dialog title for quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Create Page"
+msgstr "Create Page"
 
 #. @context: Help text for GitHub repository input on GitHub Sync settings, telling users they must create the repo themselves
 #: src/ui/dash/settings/GitHubSyncContent.tsx
@@ -588,6 +764,16 @@ msgstr "Create the repository on GitHub first — it can be empty."
 #: src/ui/dash/settings/ApiTokensContent.tsx
 msgid "Created {date}"
 msgstr "Created {date}"
+
+#. @context: Loading label while creating a collection in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Creating collection…"
+msgstr "Creating collection…"
+
+#. @context: Loading label while creating a page
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Creating page…"
+msgstr "Creating page…"
 
 #. @context: Badge indicating the current active session
 #: src/ui/dash/settings/SessionsContent.tsx
@@ -648,6 +834,11 @@ msgstr "Dashboard language"
 #: src/ui/dash/settings/AccountMenuContent.tsx
 msgid "Data"
 msgstr "Data"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Delay new posts and replies before they appear in feeds. Use 0 to turn this off."
+msgstr "Delay new posts and replies before they appear in feeds. Use 0 to turn this off."
 
 #. @context: Button to delete custom URL
 #. @context: Button to delete item
@@ -791,10 +982,40 @@ msgstr "Edit"
 msgid "Edit About page"
 msgstr "Edit About page"
 
+#. @context: Button that opens a newly created collection for editing
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Edit Collection"
+msgstr "Edit Collection"
+
+#. @context: Button to edit the generated collection slug in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Edit link"
+msgstr "Edit link"
+
+#. @context: Button that opens a page for editing
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Edit Page"
+msgstr "Edit Page"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Edit the multi-line footer rendered at the bottom of public pages."
+msgstr "Edit the multi-line footer rendered at the bottom of public pages."
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Edit the multi-line introduction used on your home page and in metadata."
+msgstr "Edit the multi-line introduction used on your home page and in metadata."
+
 #. @context: GitHub sync picker — shown when the selected repo has no commits
 #: src/routes/dash/settings.tsx
 msgid "Empty repository. Ready to connect."
 msgstr "Empty repository. Ready to connect."
+
+#. @context: Validation error for an empty quick page title
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Enter a page title."
+msgstr "Enter a page title."
 
 #. @context: Help text under the archive feed URL, explaining it is the complete feed
 #: src/ui/dash/settings/GeneralContent.tsx
@@ -835,6 +1056,11 @@ msgstr "Featured"
 msgid "Featured feed"
 msgstr "Featured feed"
 
+#. @context: Config Editor RSS feed enum option
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Featured posts"
+msgstr "Featured posts"
+
 #. @context: Toast after saving feed settings
 #: src/routes/dash/settings.tsx
 msgid "Feed settings updated."
@@ -865,10 +1091,24 @@ msgstr "Fine-grained styling overrides"
 msgid "Fixed feed URLs"
 msgstr "Fixed feed URLs"
 
+#. @context: CJK font fallback option that uses the configured content language
+#. @context: Config Editor enum option for automatic CJK font fallback
+#. @context: Config Editor enum option for no explicit dashboard language
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Follow content language"
+msgstr "Follow content language"
+
 #. @context: Theme mode option description
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Follow each visitor's system preference."
 msgstr "Follow each visitor's system preference."
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Follow the device appearance or force a light or dark theme."
+msgstr "Follow the device appearance or force a light or dark theme."
 
 #. @context: Appearance settings heading for font theme
 #: src/ui/dash/appearance/FontThemeContent.tsx
@@ -982,6 +1222,16 @@ msgstr "Install the GitHub App to grant access without managing personal tokens.
 msgid "Integrations"
 msgstr "Integrations"
 
+#. @context: Validation error for a long page slug
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Keep the page address under 200 characters."
+msgstr "Keep the page address under 200 characters."
+
+#. @context: Long collection slug error in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Keep this link under 200 characters."
+msgstr "Keep this link under 200 characters."
+
 #. @context: Nav item label field
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Label"
@@ -1039,6 +1289,11 @@ msgstr "Latest"
 msgid "Latest feed"
 msgstr "Latest feed"
 
+#. @context: Config Editor RSS feed enum option
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Latest posts"
+msgstr "Latest posts"
+
 #. @context: Suffix after Custom CSS link on color theme page
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "lets you override any theme variable."
@@ -1058,6 +1313,21 @@ msgstr "Light blue-gray background, cool and even."
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Light sage-green with a matching green accent."
 msgstr "Light sage-green with a matching green accent."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Limit characters used in automatically generated summaries."
+msgstr "Limit characters used in automatically generated summaries."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Limit paragraphs used in automatically generated summaries."
+msgstr "Limit paragraphs used in automatically generated summaries."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Limit posts included in each RSS feed."
+msgstr "Limit posts included in each RSS feed."
 
 #. @context: Nav item type badge
 #: src/ui/dash/appearance/NavigationContent.tsx
@@ -1079,15 +1349,15 @@ msgstr "Link added to navigation."
 msgid "List posts:"
 msgstr "List posts:"
 
-#. @context: Help text for CJK serif font selection
-#: src/ui/dash/settings/GeneralContent.tsx
-msgid "Load a serif font optimized for Chinese, Japanese, or Korean content."
-msgstr "Load a serif font optimized for Chinese, Japanese, or Korean content."
-
 #. @context: GitHub sync picker — loading state
 #: src/routes/dash/settings.tsx
 msgid "Loading…"
 msgstr "Loading…"
+
+#. @context: Config Editor badge for a setting locked by the runtime
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Locked"
+msgstr "Locked"
 
 #. @context: Label for the canonical /feed URL
 #: src/ui/dash/settings/GeneralContent.tsx
@@ -1149,6 +1419,11 @@ msgstr "Message the bot any text and it's published as a note."
 msgid "Minimal color, low distraction."
 msgstr "Minimal color, low distraction."
 
+#. @context: Config Editor badge for a database override
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Modified"
+msgstr "Modified"
+
 #. @context: Section label for nav items hidden under More dropdown
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "More"
@@ -1159,10 +1434,20 @@ msgstr "More"
 msgid "More actions"
 msgstr "More actions"
 
+#. @context: Helper text in quick collection creation in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "More options are available after you create it."
+msgstr "More options are available after you create it."
+
 #. @context: Clay color theme preview body
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Muted red-brown background, earthy and warm."
 msgstr "Muted red-brown background, earthy and warm."
+
+#. @context: Collection title placeholder in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "My Collection"
+msgstr "My Collection"
 
 #. @context: Settings item description for general
 #: src/ui/dash/settings/SettingsRootContent.tsx
@@ -1242,8 +1527,8 @@ msgstr "No active sessions right now. Signed-in devices show up here."
 
 #. @context: Empty state when no collections exist for nav picker
 #: src/ui/dash/appearance/NavigationContent.tsx
-msgid "No collections yet. Create one first, then add it to your navigation."
-msgstr "No collections yet. Create one first, then add it to your navigation."
+msgid "No collections yet. Create one here to add it to navigation."
+msgstr "No collections yet. Create one here to add it to navigation."
 
 #. @context: Empty state message
 #: src/routes/dash/custom-urls.tsx
@@ -1260,15 +1545,32 @@ msgstr "No file selected. Choose a file to upload."
 msgid "No matches."
 msgstr "No matches."
 
+#. @context: Empty search results in the page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "No matching pages available to add. Try another title or create a new page."
+msgstr "No matching pages available to add. Try another title or create a new page."
+
 #. @context: Empty state for navigation items
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "No navigation items yet. Add links or enable system items below."
 msgstr "No navigation items yet. Add links or enable system items below."
 
+#. @context: Empty state in the navigation page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "No pages available. Create one to add it to navigation."
+msgstr "No pages available. Create one to add it to navigation."
+
 #. @context: GitHub sync picker — empty state when search returns nothing
 #: src/routes/dash/settings.tsx
 msgid "No repositories match."
 msgstr "No repositories match."
+
+#. @context: Config Editor linked setting status
+#. @context: Config Editor linked setting status
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Not configured"
+msgstr "Not configured"
 
 #. @context: Shown when no sync has happened yet on GitHub Sync status
 #: src/ui/dash/settings/GitHubSyncContent.tsx
@@ -1282,6 +1584,11 @@ msgstr "Not synced yet"
 msgid "Note"
 msgstr "Note"
 
+#. @context: Config Editor empty search state
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Nothing matches this search. Try a different name or description."
+msgstr "Nothing matches this search. Try a different name or description."
+
 #. @context: Tufte color theme preview body
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Off-white paper with a deep forest-green accent."
@@ -1291,6 +1598,13 @@ msgstr "Off-white paper with a deep forest-green accent."
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Open {linkOpen}@{botUsername}{linkClose} and send:"
 msgstr "Open {linkOpen}@{botUsername}{linkClose} and send:"
+
+#. @context: Config Editor link to a dedicated settings page
+#. @context: Config Editor link to a dedicated settings page
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Open setting"
+msgstr "Open setting"
 
 #. @context: Button that opens the Telegram bot via a deep link
 #: src/ui/dash/settings/TelegramContent.tsx
@@ -1317,10 +1631,30 @@ msgstr "Orange-tinted background. The warmest palette."
 msgid "owner/repo"
 msgstr "owner/repo"
 
+#. @context: Nav item type badge for page items
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "page"
+msgstr "page"
+
 #. @context: Suggested navigation link target type
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Page"
 msgstr "Page"
+
+#. @context: Confirmation after adding a page to navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Page added to navigation."
+msgstr "Page added to navigation."
+
+#. @context: Slug field label in quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Page address"
+msgstr "Page address"
+
+#. @context: Heading after quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Page created."
+msgstr "Page created."
 
 #. @context: Bone color theme preview body
 #: src/ui/dash/appearance/ColorThemeContent.tsx
@@ -1421,6 +1755,11 @@ msgstr "Private"
 msgid "Processing..."
 msgstr "Processing..."
 
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Publish Atom feeds for the site, archive, and collections."
+msgstr "Publish Atom feeds for the site, archive, and collections."
+
 #. @context: Post status badge - published
 #: src/ui/dash/StatusBadge.tsx
 msgid "Published"
@@ -1460,6 +1799,11 @@ msgstr "Quote"
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Readers and search engines see"
 msgstr "Readers and search engines see"
+
+#. @context: Heading above recent pages in the page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Recently updated"
+msgstr "Recently updated"
 
 #. @context: Custom URL target type badge for a redirect
 #. @context: Custom URL type option
@@ -1515,6 +1859,11 @@ msgstr "Remove this avatar? Your favicon and header icon will go back to the def
 msgid "Remove this collection from navigation? The collection itself won't be deleted."
 msgstr "Remove this collection from navigation? The collection itself won't be deleted."
 
+#. @context: Confirm dialog for removing a page from navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Remove this page from navigation? The page itself won't be deleted."
+msgstr "Remove this page from navigation? The page itself won't be deleted."
+
 #. @context: GitHub sync picker — repo dropdown label
 #. @context: Label for GitHub repository input on GitHub Sync settings
 #. @context: Label for connected repository on GitHub Sync status
@@ -1523,6 +1872,16 @@ msgstr "Remove this collection from navigation? The collection itself won't be d
 #: src/ui/dash/settings/GitHubSyncContent.tsx
 msgid "Repository"
 msgstr "Repository"
+
+#. @context: Button to reset the collection slug in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Reset link"
+msgstr "Reset link"
+
+#. @context: Config Editor row action
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Reset to default"
+msgstr "Reset to default"
 
 #. @context: Button to revoke API token
 #. @context: Button to revoke a session
@@ -1572,15 +1931,47 @@ msgstr "Save bot token"
 msgid "Save CSS"
 msgstr "Save CSS"
 
+#. @context: Config Editor row save status
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Saved"
+msgstr "Saved"
+
+#. @context: Config Editor row save status
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Saving…"
+msgstr "Saving…"
+
 #. @context: Settings section heading for search engine indexing settings
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Search"
 msgstr "Search"
 
+#. @context: Config Editor page description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Search and edit runtime settings. Changes apply immediately; reset restores the environment or built-in default."
+msgstr "Search and edit runtime settings. Changes apply immediately; reset restores the environment or built-in default."
+
+#. @context: Placeholder for the navigation page search
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Search pages"
+msgstr "Search pages"
+
 #. @context: GitHub sync picker — search input placeholder
 #: src/routes/dash/settings.tsx
 msgid "Search repositories"
 msgstr "Search repositories"
+
+#. @context: Settings item description for Config Editor
+#: src/ui/dash/settings/SettingsRootContent.tsx
+msgid "Search runtime settings and open advanced configuration"
+msgstr "Search runtime settings and open advanced configuration"
+
+#. @context: Config Editor search input placeholder
+#. @context: Config Editor search input placeholder
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Search settings"
+msgstr "Search settings"
 
 #. @context: Toast after saving search settings
 #. @context: Toast after saving search settings
@@ -1593,6 +1984,11 @@ msgstr "Search settings updated."
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Search…"
 msgstr "Search…"
+
+#. @context: Loading state in the navigation page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Searching pages…"
+msgstr "Searching pages…"
 
 #. @context: Settings group label for account security settings
 #: src/ui/dash/settings/AccountMenuContent.tsx
@@ -1636,6 +2032,21 @@ msgstr "Session management is off in demo mode. Use the shared demo session inst
 msgid "Sessions"
 msgstr "Sessions"
 
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Set posts per archive page; reset to inherit the main page size."
+msgstr "Set posts per archive page; reset to inherit the main page size."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Set results per search page; reset to inherit the main page size."
+msgstr "Set results per search page; reset to inherit the main page size."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Set the default number of items shown per page."
+msgstr "Set the default number of items shown per page."
+
 #. @context: Breadcrumb label
 #. @context: Page title for the settings home page
 #: src/routes/dash/settings.tsx
@@ -1648,10 +2059,25 @@ msgstr "Settings"
 msgid "Show \"Build with Jant\" at the bottom of the home page"
 msgstr "Show \"Build with Jant\" at the bottom of the home page"
 
+#. @context: Config Editor filter checkbox
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Show only modified"
+msgstr "Show only modified"
+
 #. @context: Description for built-in nav toggles
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Show or hide built-in destinations in the header and More menu."
 msgstr "Show or hide built-in destinations in the header and More menu."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Show the Jant credit on the home page."
+msgstr "Show the Jant credit on the home page."
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Show the site avatar in the public header."
+msgstr "Show the site avatar in the public header."
 
 #. @context: GitHub sync picker — paginated repo count hint. Placeholders {shown} and {total} are integers.
 #: src/routes/dash/settings.tsx
@@ -1768,6 +2194,16 @@ msgstr "Telegram"
 msgid "Telegram is set up, but the bot couldn't be reached. Check the bot token and try again."
 msgstr "Telegram is set up, but the bot couldn't be reached. Check the bot token and try again."
 
+#. @context: Validation error for an unavailable page slug
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "That address is already in use. Choose another one."
+msgstr "That address is already in use. Choose another one."
+
+#. @context: Validation error for a reserved page slug
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "That address is reserved. Choose another one."
+msgstr "That address is reserved. Choose another one."
+
 #. @context: Error toast when selected font theme is not valid
 #: src/routes/dash/settings.tsx
 msgid "That font theme isn't available. Pick another one."
@@ -1793,6 +2229,11 @@ msgstr "The default. Calm and easy for long reading."
 msgid "The language this admin dashboard shows in. Available in English, 简体中文, and 繁體中文."
 msgstr "The language this admin dashboard shows in. Available in English, 简体中文, and 繁體中文."
 
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "The language used by the private Jant dashboard."
+msgstr "The language used by the private Jant dashboard."
+
 #. @context: Help text under the content language picker
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "The language your posts are written in. Announced to readers and search engines through HTML lang and your RSS feed. Any BCP 47 tag works."
@@ -1803,10 +2244,25 @@ msgstr "The language your posts are written in. Announced to readers and search 
 msgid "The original Jant palette, and a solid everyday pick."
 msgstr "The original Jant palette, and a solid everyday pick."
 
+#. @context: Visibility note in quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "The page is public but stays out of Latest."
+msgstr "The page is public but stays out of Latest."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "The serif fallback used when the content language has no built-in profile."
+msgstr "The serif fallback used when the content language has no built-in profile."
+
 #. @context: Custom URL target slug help text
 #: src/routes/dash/custom-urls.tsx
 msgid "The slug of the target post or collection"
 msgstr "The slug of the target post or collection"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "The title used across your site, browser tabs, and feeds."
+msgstr "The title used across your site, browser tabs, and feeds."
 
 #. @context: Link to theming documentation on Custom CSS page
 #: src/ui/dash/appearance/AdvancedContent.tsx
@@ -1838,10 +2294,20 @@ msgstr "This controls what /feed returns."
 msgid "This hosted site signs in through {providerLabel}. Manage password and hosted access there."
 msgstr "This hosted site signs in through {providerLabel}. Manage password and hosted access there."
 
+#. @context: Collection slug help text in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "This is the last part of the collection link."
+msgstr "This is the last part of the collection link."
+
 #. @context: Help text for avatar upload
 #: src/ui/dash/settings/AvatarContent.tsx
 msgid "This is used for your favicon and apple-touch-icon. For best results, upload a square PNG with a solid background at least 512x512 pixels."
 msgstr "This is used for your favicon and apple-touch-icon. For best results, upload a square PNG with a solid background at least 512x512 pixels."
+
+#. @context: Reserved collection slug error in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "This link is reserved. Choose something else."
+msgstr "This link is reserved. Choose something else."
 
 #. @context: Fallback color theme preview title
 #: src/ui/dash/appearance/ColorThemeContent.tsx
@@ -1868,6 +2334,11 @@ msgstr "This repository is already backing up another Jant site ({host}). Pick a
 msgid "This repository is already backing up this site."
 msgstr "This repository is already backing up this site."
 
+#. @context: Config Editor fallback error message
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "This setting wasn't saved. Check the value and try again."
+msgstr "This setting wasn't saved. Check the value and try again."
+
 #. @context: Warning text on account deletion page
 #: src/ui/dash/settings/DeleteAccountContent.tsx
 msgid "This will permanently delete all your data — posts, media, collections, settings, and your account. Your blog will be reset to its initial setup state. This cannot be undone."
@@ -1877,6 +2348,13 @@ msgstr "This will permanently delete all your data — posts, media, collections
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Time Zone"
 msgstr "Time Zone"
+
+#. @context: Collection title field in Navigation settings
+#. @context: Title field label in quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Title"
+msgstr "Title"
 
 #. @context: Button to expand/collapse nav item edit
 #: src/ui/dash/appearance/NavigationContent.tsx
@@ -1953,6 +2431,11 @@ msgstr "Upload didn't go through. Try again in a moment."
 msgid "Upload failed. Please try again."
 msgstr "Upload failed. Please try again."
 
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Upload the profile image and generated site icons."
+msgstr "Upload the profile image and generated site icons."
+
 #. @context: Avatar upload button text while uploading
 #: src/ui/dash/settings/AvatarContent.tsx
 msgid "Uploading..."
@@ -1968,10 +2451,25 @@ msgstr "URL"
 msgid "Usage"
 msgstr "Usage"
 
+#. @context: Collection slug validation error in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Use lowercase letters, numbers, and hyphens only."
+msgstr "Use lowercase letters, numbers, and hyphens only."
+
+#. @context: Validation error for an invalid page slug
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Use lowercase letters, numbers, and hyphens."
+msgstr "Use lowercase letters, numbers, and hyphens."
+
 #. @context: Help text for the explicit latest and featured feed URLs
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Use these when you want a feed URL that never changes."
 msgstr "Use these when you want a feed URL that never changes."
+
+#. @context: Help text for the manual CJK font fallback setting
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Used when the content language has no built-in font profile. Your font theme still controls serif and sans styling."
+msgstr "Used when the content language has no built-in font profile. Your font theme still controls serif and sans styling."
 
 #. @context: Description for choosing featured posts as the main RSS feed
 #: src/ui/dash/settings/GeneralContent.tsx
@@ -2072,6 +2570,11 @@ msgstr "When to use site export, database backups, and recovery drills."
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "When you want a cooler, sharper look."
 msgstr "When you want a cooler, sharper look."
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Which post stream the canonical /feed URL returns."
+msgstr "Which post stream the canonical /feed URL returns."
 
 #. @context: Parchment color theme preview body
 #: src/ui/dash/appearance/ColorThemeContent.tsx

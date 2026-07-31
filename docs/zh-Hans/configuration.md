@@ -82,11 +82,33 @@ Node 和 Docker 的常用变量：
 
 ### Feed 默认值（可选）
 
-| 变量            | 默认值     | 说明                                       |
-| --------------- | ---------- | ------------------------------------------ |
-| `MAIN_RSS_FEED` | `featured` | 控制 `/feed` 返回 `featured` 还是 `latest` |
+| 变量                        | 默认值     | 说明                                                |
+| --------------------------- | ---------- | --------------------------------------------------- |
+| `MAIN_RSS_FEED`             | `featured` | 控制 `/feed` 返回 `featured` 还是 `latest`          |
+| `RSS_FEEDS_ENABLED`         | `true`     | 是否发布站点、归档和 Collection 的 Atom feeds       |
+| `RSS_PUBLISH_DELAY_SECONDS` | `300`      | 帖子及回复发布后，等待多久才进入 Jant 的 Atom feeds |
 
 `featured` 默认开启是有意为之。Jant 假设很多帖子应该留在站点上，但不一定要自动成为默认订阅 feed 的内容。
+
+帖子仍会立即显示在网页上。延迟只影响 Jant 动态生成的 Atom feeds，让作者能在
+feed 阅读器抓取前修改或撤回刚发布的内容。它接受 `0–7200` 的整数，也可以在
+Config Editor 中实时修改；设为 `0` 可关闭延迟。重置运行时覆盖值后，会重新
+使用环境变量。由于 feed 响应还会被缓存，实际延迟可能比配置的最短时间略长。
+
+设置 `RSS_FEEDS_ENABLED=false` 后，所有正式和旧版 feed 地址都会返回 `404`，
+页面中的 feed 自动发现、按钮和系统 RSS 导航也会隐藏。Worker 中已经缓存的成功
+响应最多还可能保留 60 秒。
+
+### 公开 API 访问（可选）
+
+| 变量                 | 默认值 | 说明                                      |
+| -------------------- | ------ | ----------------------------------------- |
+| `PUBLIC_API_ENABLED` | `true` | 是否允许无 session 或 token 读取公开 JSON |
+
+关闭后，`/api/public/*` 会对所有调用方返回 `404`；已认证客户端可以改用
+`/api/posts`。匿名请求 Collection、导航和搜索 JSON 接口会收到 `401`，浏览器
+session 和 Bearer API token 仍可使用这些接口。包括 `/search` 在内的公开 HTML
+页面不受影响。
 
 ### 分页（可选）
 
@@ -97,6 +119,8 @@ Node 和 Docker 的常用变量：
 | `ARCHIVE_PAGE_SIZE` | 继承 `PAGE_SIZE` | 只覆盖归档页分页                 |
 
 只有在搜索页或归档页真的需要和全站不同的分页大小时，才去设置 `SEARCH_PAGE_SIZE` 和 `ARCHIVE_PAGE_SIZE`。
+三个值都接受 `1–100` 的整数，也可以在 Config Editor 中实时修改；环境变量仍
+作为部署时的回退值。
 
 ### 存储
 
@@ -338,22 +362,63 @@ location /_assets/ {
 | `SUMMARY_MAX_CHARS`      | `500`  | 自动生成摘要时的最大字符数   |
 | `RSS_FEED_LIMIT`         | `50`   | RSS feeds 中包含的最大帖子数 |
 
+这些值也可以在 Config Editor 中实时修改。段落数范围为 `1–50`，摘要字符数范围
+为 `1–1500`，RSS 条目数范围为 `1–200`。重置运行时覆盖值后，会重新使用环境
+变量。
+
 ## Settings 页面设置
 
 这些设置可以在初始化完成后，通过 Jant 的 Settings 页面修改。所有设置都可以通过同名环境变量预置初始值——Settings 里改过的值优先级高于环境变量。
 
-| 设置                         | 用途                                    |
-| ---------------------------- | --------------------------------------- |
-| `SITE_NAME`                  | 站点显示名称                            |
-| `SITE_DESCRIPTION`           | Meta description 和 feed description    |
-| `SITE_LANGUAGE`              | 主要语言代码                            |
-| `TIME_ZONE`                  | 显示时区，例如 `UTC` 或 `Asia/Shanghai` |
-| `MAIN_RSS_FEED`              | 决定 `/feed` 返回什么                   |
-| `SITE_FOOTER`                | 自定义页脚文本                          |
-| `SHOW_JANT_BRANDING_ON_HOME` | 是否在首页显示 Jant 品牌标识            |
-| `NOINDEX`                    | 请求搜索引擎不要收录这个站点            |
+| 设置                         | 用途                                      |
+| ---------------------------- | ----------------------------------------- |
+| `SITE_NAME`                  | 站点显示名称                              |
+| `SITE_DESCRIPTION`           | Meta description 和 feed description      |
+| `SITE_LANGUAGE`              | 主要语言代码                              |
+| `DASHBOARD_LANGUAGE`         | 私有管理界面语言                          |
+| `CJK_SERIF_FONT`             | CJK 衬线字体回退                          |
+| `TIME_ZONE`                  | 显示时区，例如 `UTC` 或 `Asia/Shanghai`   |
+| `MAIN_RSS_FEED`              | 决定 `/feed` 返回什么                     |
+| `PAGE_SIZE`                  | 默认每页条目数（`1–100`）                 |
+| `SEARCH_PAGE_SIZE`           | 每页搜索结果数（`1–100`）                 |
+| `ARCHIVE_PAGE_SIZE`          | 每页归档帖子数（`1–100`）                 |
+| `SUMMARY_MAX_PARAGRAPHS`     | 摘要段落数上限（`1–50`）                  |
+| `SUMMARY_MAX_CHARS`          | 摘要字符数上限（`1–1500`）                |
+| `RSS_FEED_LIMIT`             | 每个 RSS feed 的帖子数（`1–200`）         |
+| `RSS_PUBLISH_DELAY_SECONDS`  | Feed 发布延迟秒数（`0–7200`）             |
+| `SITE_FOOTER`                | 自定义页脚文本                            |
+| `SHOW_JANT_BRANDING_ON_HOME` | 是否在首页显示 Jant 品牌标识              |
+| `NOINDEX`                    | 请求搜索引擎不要收录这个站点              |
+| `PUBLIC_API_ENABLED`         | 是否允许无 session 或 API token 读取 JSON |
+| `RSS_FEEDS_ENABLED`          | 是否发布 Atom feeds 和内置 feed 入口      |
 
 颜色主题、字型主题、自定义 CSS、头像以及其他外观细节，也都在 Settings 里管理。
+
+### Config Editor
+
+打开 **Settings → Advanced → Config Editor**，或访问 `/settings/config`，
+即可在一个页面中搜索可安全地在运行时使用的设置。简单的 boolean、text、
+number 和 enum 值可以直接编辑。内容语言和时区会复用 General 设置中的受限
+选项来源，因此不会保存无效的自由输入。Boolean 和 enum 更改会立即保存；
+text 和 number 更改会在按 Enter 或离开字段时保存，按 Escape 则恢复最近一次
+保存的值。使用 **Reset to default** 会删除数据库覆盖值，恢复环境变量或内置
+默认值。在桌面设备上，重置操作会在悬停或聚焦该行时出现；在触屏设备上则
+始终可见。
+
+`SITE_NAME`、`SITE_DESCRIPTION` 和 `SITE_FOOTER` 这类站点标识或多行内容会
+链接到 General 设置中的权威控件。Config Editor 只显示安全的当前值或配置
+状态，避免重复主要表单，也不会把长文本或 Markdown 挤进单行输入框。
+
+需要预览、上传、代码编辑器或多字段流程的安全设置也可以被搜索到，并以带有
+当前值的入口打开对应的专用 Settings 页面，而不是在 Config Editor 中复制一套
+简化界面。Theme、Font Theme、Theme Mode 和页眉头像显示这类安全标量也可以在
+Config Editor 中重置；文件和自定义代码仍由原设置页的专门清理流程管理。
+GitHub Sync 和 Telegram 只显示安全的连接状态并跳转到对应集成页面；仓库
+令牌、Bot 令牌、Webhook secret 和临时同步状态仍保持隐藏。
+
+Config Editor 使用显式允许清单。部署基础设施、凭据、集成令牌、生成的资源
+元数据和临时内部状态不会出现在这里。跳转行只会暴露安全状态或显示值，不会
+显示自定义代码或存储键。
 
 ## 保留路径
 
@@ -361,7 +426,7 @@ location /_assets/ {
 
 ```text
 featured, latest, collections, signin, signout, setup, settings, dash,
-api, feed, search, archive, media, pages, reset, compose, new, static, assets,
+api, feed, search, archive, media, pages, reset, compose, preview, new, static, assets,
 _assets, healthz, readyz
 ```
 

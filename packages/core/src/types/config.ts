@@ -4,7 +4,48 @@
  * Single Source of Truth for all configuration fields.
  */
 
-import type { FeedKind } from "./constants.js";
+import {
+  MAX_SITE_DESCRIPTION_LENGTH,
+  MAX_SITE_FOOTER_LENGTH,
+  MAX_SITE_NAME_LENGTH,
+  type FeedKind,
+} from "./constants.js";
+
+export type ConfigEditorOptionsSource = "contentLanguage" | "timeZone";
+
+export type ConfigEditorDefinition =
+  | {
+      type: "boolean";
+    }
+  | {
+      type: "string";
+      maxLength?: number;
+    }
+  | {
+      type: "number";
+      min?: number;
+      max?: number;
+      step?: number;
+    }
+  | {
+      type: "enum";
+      options: readonly string[];
+      optionsSource?: never;
+    }
+  | {
+      type: "enum";
+      options?: never;
+      optionsSource: ConfigEditorOptionsSource;
+    };
+
+export interface ConfigEditorLinkDefinition {
+  type: "boolean" | "string";
+  settingsPath: string;
+  display: "value" | "configured";
+  fallbackKey?: "DEFAULT_THEME" | "DEFAULT_FONT_THEME";
+  fallbackValue?: string;
+  resettable?: boolean;
+}
 
 /**
  * Configuration Registry - Single Source of Truth
@@ -20,6 +61,21 @@ interface ConfigField {
   defaultValue: string;
   envOnly: boolean;
   internal?: boolean;
+  /** Another runtime field to inherit when this field has no own value. */
+  fallbackKey?: "PAGE_SIZE";
+  /**
+   * Explicitly opts a safe runtime setting into Config Editor.
+   *
+   * Omission is intentional: environment infrastructure, secrets, and
+   * internal state must never become editable merely because they are added
+   * to the broader config registry.
+   */
+  editor?: ConfigEditorDefinition;
+  /**
+   * Adds a safe dedicated-page setting to the searchable Config Editor index
+   * without duplicating its specialized editing workflow.
+   */
+  configEditorLink?: ConfigEditorLinkDefinition;
   /**
    * Environment variable names in resolution order.
    */
@@ -32,16 +88,31 @@ export const CONFIG_FIELDS = {
     defaultValue: "Jant",
     envOnly: false,
     envKeys: ["SITE_NAME"],
+    editor: { type: "string", maxLength: MAX_SITE_NAME_LENGTH },
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/general",
+      display: "value",
+      resettable: true,
+    },
   },
   SITE_DESCRIPTION: {
     defaultValue: "",
     envOnly: false,
     envKeys: ["SITE_DESCRIPTION"],
+    editor: { type: "string", maxLength: MAX_SITE_DESCRIPTION_LENGTH },
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/general",
+      display: "configured",
+      resettable: true,
+    },
   },
   SITE_LANGUAGE: {
     defaultValue: "en",
     envOnly: false,
     envKeys: ["SITE_LANGUAGE"],
+    editor: { type: "enum", optionsSource: "contentLanguage" },
   },
   // Admin dashboard UI locale. Empty means "follow the content language"
   // (resolved through the catalog fallback chain, i.e. today's behaviour).
@@ -49,16 +120,25 @@ export const CONFIG_FIELDS = {
     defaultValue: "",
     envOnly: false,
     envKeys: ["DASHBOARD_LANGUAGE"],
+    editor: {
+      type: "enum",
+      options: ["", "en", "zh-Hans", "zh-Hant"],
+    },
   },
   CJK_SERIF_FONT: {
     defaultValue: "off",
     envOnly: false,
     envKeys: ["CJK_SERIF_FONT"],
+    editor: {
+      type: "enum",
+      options: ["off", "zh-Hans", "zh-Hant", "ja", "ko"],
+    },
   },
   MAIN_RSS_FEED: {
     defaultValue: "featured",
     envOnly: false,
     envKeys: ["MAIN_RSS_FEED"],
+    editor: { type: "enum", options: ["featured", "latest"] },
   },
   // Environment-only (deployment/infrastructure config)
   DEFAULT_THEME: {
@@ -113,18 +193,23 @@ export const CONFIG_FIELDS = {
   },
   PAGE_SIZE: {
     defaultValue: "50",
-    envOnly: true,
+    envOnly: false,
     envKeys: ["PAGE_SIZE"],
+    editor: { type: "number", min: 1, max: 100, step: 1 },
   },
   SEARCH_PAGE_SIZE: {
     defaultValue: "",
-    envOnly: true,
+    envOnly: false,
+    fallbackKey: "PAGE_SIZE",
     envKeys: ["SEARCH_PAGE_SIZE"],
+    editor: { type: "number", min: 1, max: 100, step: 1 },
   },
   ARCHIVE_PAGE_SIZE: {
     defaultValue: "",
-    envOnly: true,
+    envOnly: false,
+    fallbackKey: "PAGE_SIZE",
     envKeys: ["ARCHIVE_PAGE_SIZE"],
+    editor: { type: "number", min: 1, max: 100, step: 1 },
   },
   STORAGE_DRIVER: {
     defaultValue: "r2",
@@ -173,13 +258,15 @@ export const CONFIG_FIELDS = {
   },
   SUMMARY_MAX_PARAGRAPHS: {
     defaultValue: "5",
-    envOnly: true,
+    envOnly: false,
     envKeys: ["SUMMARY_MAX_PARAGRAPHS"],
+    editor: { type: "number", min: 1, max: 50, step: 1 },
   },
   SUMMARY_MAX_CHARS: {
     defaultValue: "500",
-    envOnly: true,
+    envOnly: false,
     envKeys: ["SUMMARY_MAX_CHARS"],
+    editor: { type: "number", min: 1, max: 1500, step: 1 },
   },
   SLUG_ID_LENGTH: {
     defaultValue: "5",
@@ -188,8 +275,15 @@ export const CONFIG_FIELDS = {
   },
   RSS_FEED_LIMIT: {
     defaultValue: "50",
-    envOnly: true,
+    envOnly: false,
     envKeys: ["RSS_FEED_LIMIT"],
+    editor: { type: "number", min: 1, max: 200, step: 1 },
+  },
+  RSS_PUBLISH_DELAY_SECONDS: {
+    defaultValue: "300",
+    envOnly: false,
+    envKeys: ["RSS_PUBLISH_DELAY_SECONDS"],
+    editor: { type: "number", min: 0, max: 7200, step: 1 },
   },
 
   // Internal settings (DB-only, not configurable via env or settings UI)
@@ -197,31 +291,65 @@ export const CONFIG_FIELDS = {
     defaultValue: "",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/color-theme",
+      display: "value",
+      fallbackKey: "DEFAULT_THEME",
+      resettable: true,
+    },
   },
   CUSTOM_CSS: {
     defaultValue: "",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/custom-css",
+      display: "configured",
+    },
   },
   CUSTOM_HEAD_HTML: {
     defaultValue: "",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/code-injection",
+      display: "configured",
+    },
   },
   CUSTOM_BODY_END_HTML: {
     defaultValue: "",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/code-injection",
+      display: "configured",
+    },
   },
   SITE_AVATAR: {
     defaultValue: "",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/avatar",
+      display: "configured",
+    },
   },
   SHOW_HEADER_AVATAR: {
     defaultValue: "",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "boolean",
+      settingsPath: "/settings/avatar",
+      display: "value",
+      fallbackValue: "false",
+      resettable: true,
+    },
   },
   SITE_FAVICON_ICO: {
     defaultValue: "",
@@ -242,31 +370,67 @@ export const CONFIG_FIELDS = {
     defaultValue: "",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/font-theme",
+      display: "value",
+      fallbackKey: "DEFAULT_FONT_THEME",
+      resettable: true,
+    },
   },
   THEME_MODE: {
     defaultValue: "",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/color-theme",
+      display: "value",
+      fallbackValue: "auto",
+      resettable: true,
+    },
   },
   TIME_ZONE: {
     defaultValue: "UTC",
     envOnly: false,
     envKeys: ["TIME_ZONE"],
+    editor: { type: "enum", optionsSource: "timeZone" },
   },
   SITE_FOOTER: {
     defaultValue: "",
     envOnly: false,
     envKeys: ["SITE_FOOTER"],
+    editor: { type: "string", maxLength: MAX_SITE_FOOTER_LENGTH },
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/general",
+      display: "configured",
+      resettable: true,
+    },
   },
   SHOW_JANT_BRANDING_ON_HOME: {
-    defaultValue: "",
+    defaultValue: "false",
     envOnly: false,
     envKeys: ["SHOW_JANT_BRANDING_ON_HOME"],
+    editor: { type: "boolean" },
   },
   NOINDEX: {
-    defaultValue: "",
+    defaultValue: "false",
     envOnly: false,
     envKeys: ["NOINDEX"],
+    editor: { type: "boolean" },
+  },
+  PUBLIC_API_ENABLED: {
+    defaultValue: "true",
+    envOnly: false,
+    envKeys: ["PUBLIC_API_ENABLED"],
+    editor: { type: "boolean" },
+  },
+  RSS_FEEDS_ENABLED: {
+    defaultValue: "true",
+    envOnly: false,
+    envKeys: ["RSS_FEEDS_ENABLED"],
+    editor: { type: "boolean" },
   },
   DISCOVERY_COMPOSE_OPEN_SHORTCUT_AT: {
     defaultValue: "",
@@ -299,11 +463,21 @@ export const CONFIG_FIELDS = {
     defaultValue: "false",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "boolean",
+      settingsPath: "/settings/github-sync",
+      display: "value",
+    },
   },
   GITHUB_SYNC_REPO: {
     defaultValue: "",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/github-sync",
+      display: "configured",
+    },
   },
   GITHUB_SYNC_TOKEN: {
     defaultValue: "",
@@ -433,6 +607,11 @@ export const CONFIG_FIELDS = {
     defaultValue: "",
     envOnly: false,
     internal: true,
+    configEditorLink: {
+      type: "string",
+      settingsPath: "/settings/telegram",
+      display: "configured",
+    },
   },
   /** Per-site `secret_token` for a bring-your-own bot's webhook. */
   TELEGRAM_BOT_WEBHOOK_SECRET: {
@@ -443,6 +622,52 @@ export const CONFIG_FIELDS = {
 } as const satisfies Record<string, ConfigField>;
 
 export type ConfigKey = keyof typeof CONFIG_FIELDS;
+export type ConfigEditorKey = {
+  [K in ConfigKey]: (typeof CONFIG_FIELDS)[K] extends {
+    editor: ConfigEditorDefinition;
+  }
+    ? K
+    : never;
+}[ConfigKey];
+
+export type ConfigEditorVisibleKey = {
+  [K in ConfigKey]: (typeof CONFIG_FIELDS)[K] extends
+    | { editor: ConfigEditorDefinition }
+    | { configEditorLink: ConfigEditorLinkDefinition }
+    ? K
+    : never;
+}[ConfigKey];
+
+export type ConfigEditorResettableKey = {
+  [K in ConfigKey]: (typeof CONFIG_FIELDS)[K] extends {
+    editor: ConfigEditorDefinition;
+  }
+    ? K
+    : (typeof CONFIG_FIELDS)[K] extends {
+          configEditorLink: { resettable: true };
+        }
+      ? K
+      : never;
+}[ConfigKey];
+
+export interface ConfigEditorFieldState {
+  key: ConfigEditorVisibleKey;
+  mode: "edit" | "link";
+  type: ConfigEditorDefinition["type"];
+  value: string;
+  fallbackValue: string;
+  modified: boolean;
+  locked: boolean;
+  maxLength?: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: readonly string[];
+  settingsPath?: string;
+  display?: ConfigEditorLinkDefinition["display"];
+  resettable?: boolean;
+  fallbackKey?: "PAGE_SIZE";
+}
 export const THEME_MODES = ["auto", "light", "dark"] as const;
 export type ThemeMode = (typeof THEME_MODES)[number];
 
@@ -465,7 +690,7 @@ export interface AppConfig {
    * the translated catalog locales ("en", "zh-Hans", "zh-Hant").
    */
   dashboardLanguage: string;
-  /** CJK serif font locale: "off", "zh-Hans", "zh-Hant", "ja", or "ko" */
+  /** Optional CJK font fallback when the content language has no profile. */
   cjkSerifFont: string;
   mainRssFeed: FeedKind;
   /** Canonical IANA timezone identifier used for date/time display. */
@@ -473,6 +698,10 @@ export interface AppConfig {
   siteFooter: string;
   showJantBrandingOnHome: boolean;
   noindex: boolean;
+  /** Whether published content can be read from JSON APIs without authentication. */
+  publicApiEnabled: boolean;
+  /** Whether the site publishes its Atom feed endpoints. */
+  rssFeedsEnabled: boolean;
 
   // Infrastructure (ENV only)
   siteUrl: string;
@@ -492,17 +721,19 @@ export interface AppConfig {
   /** Max upload file size in MB. Defaults to 500. */
   uploadMaxFileSize: number;
 
-  // Summary extraction (ENV only)
+  // Summary extraction (DB > ENV > Default)
   /** Max paragraphs to include in auto-extracted summary. Defaults to 5. */
   summaryMaxParagraphs: number;
   /** Max characters to include in auto-extracted summary. Defaults to 500. */
   summaryMaxChars: number;
 
-  // Pagination/Feed (ENV only, parsed to number)
+  // Pagination/feed (DB > ENV > Default)
   pageSize: number;
   searchPageSize: number;
   archivePageSize: number;
   rssFeedLimit: number;
+  /** Seconds a published Post waits before it can appear in Atom feeds. */
+  rssPublishDelaySeconds: number;
 
   // Slug (ENV only)
   /** Length of random IDs used in auto-generated slugs. Defaults to 5. */

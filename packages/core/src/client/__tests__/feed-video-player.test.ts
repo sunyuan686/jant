@@ -1,7 +1,11 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it } from "vitest";
-import { chooseAutoplayVideo } from "../feed-video-player.js";
+import {
+  chooseAutoplayVideo,
+  shouldSuppressFeedVideoAutoplay,
+} from "../feed-video-player.js";
+import { setMediaVideoPlaybackPaused } from "../media-lightbox-events.js";
 
 describe("chooseAutoplayVideo", () => {
   it("prefers the candidate with the largest visible area", () => {
@@ -40,5 +44,16 @@ describe("chooseAutoplayVideo", () => {
     ]);
 
     expect(winner?.video).toBe("second");
+  });
+
+  it("suppresses only media the user explicitly paused", () => {
+    setMediaVideoPlaybackPaused("media-paused", true);
+
+    expect(shouldSuppressFeedVideoAutoplay("media-paused")).toBe(true);
+    expect(shouldSuppressFeedVideoAutoplay("media-playing")).toBe(false);
+    expect(shouldSuppressFeedVideoAutoplay(undefined)).toBe(false);
+
+    setMediaVideoPlaybackPaused("media-paused", false);
+    expect(shouldSuppressFeedVideoAutoplay("media-paused")).toBe(false);
   });
 });

@@ -1,16 +1,18 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   QUEUED_TOAST_STORAGE_KEY,
   consumeQueuedToast,
   queueToastForNextPage,
+  showToastWithAction,
 } from "../toast.js";
 
 describe("toast", () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="toast-container"></div>';
     globalThis.sessionStorage.clear();
+    vi.useRealTimers();
   });
 
   it("queues and consumes a toast on the next page load", () => {
@@ -42,5 +44,20 @@ describe("toast", () => {
     );
     expect(action?.textContent).toBe("View");
     expect(action?.getAttribute("href")).toBe("/published-post");
+  });
+
+  it("keeps action toasts available longer than passive notifications", () => {
+    vi.useFakeTimers();
+    showToastWithAction("Collection created.", {
+      label: "Edit Navigation",
+      href: "/settings/navigation",
+    });
+    const toast = document.querySelector<HTMLElement>(".toast");
+
+    vi.advanceTimersByTime(3000);
+    expect(toast?.classList.contains("toast-out")).toBe(false);
+
+    vi.advanceTimersByTime(5000);
+    expect(toast?.classList.contains("toast-out")).toBe(true);
   });
 });

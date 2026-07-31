@@ -15,12 +15,14 @@ const escapeJson = (data: unknown) =>
 
 export interface CollectionsManagerProps {
   items: CollectionDirectoryItem[];
+  navigationCollectionIds?: string[];
   sitePathPrefix?: string;
   siteOrigin?: string;
 }
 
 export const CollectionsManager: FC<CollectionsManagerProps> = ({
   items,
+  navigationCollectionIds = [],
   sitePathPrefix = "",
   siteOrigin = "",
 }) => {
@@ -102,21 +104,21 @@ export const CollectionsManager: FC<CollectionsManagerProps> = ({
         comment: "@context: Tooltip for divider delete button",
       }),
     ),
-    entrySingular: i18n._(
+    threadSingular: i18n._(
       msg({
-        message: "entry",
-        comment: "@context: Singular entry count label",
+        message: "thread",
+        comment: "@context: Singular thread count label",
       }),
     ),
-    entryPlural: i18n._(
+    threadPlural: i18n._(
       msg({
-        message: "entries",
-        comment: "@context: Plural entry count label",
+        message: "threads",
+        comment: "@context: Plural thread count label",
       }),
     ),
     emptyState: i18n._(
       msg({
-        message: "No collections yet. Start one to organize posts by topic.",
+        message: "No collections yet. Start one to organize threads by topic.",
         comment: "@context: Empty state message on collections page",
       }),
     ),
@@ -124,6 +126,13 @@ export const CollectionsManager: FC<CollectionsManagerProps> = ({
       msg({
         message: "Collection order updated.",
         comment: "@context: Toast after reordering collections",
+      }),
+    ),
+    notNow: i18n._(
+      msg({
+        message: "Not now",
+        comment:
+          "@context: Action to dismiss the post-create Collection navigation prompt",
       }),
     ),
     ...mutationLabels,
@@ -312,6 +321,7 @@ export const CollectionsManager: FC<CollectionsManagerProps> = ({
       <jant-collections-manager
         items={escapeJson(items)}
         labels={escapeJson(labels)}
+        navigation-collection-ids={escapeJson(navigationCollectionIds)}
       >
         <CollectionDirectory
           items={items}

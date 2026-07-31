@@ -891,7 +891,7 @@ export class JantComposeDialog extends LitElement {
         if (requestId !== this._openEditRequestId) return;
       }
 
-      if (post.collectionIds?.length) {
+      if (!post.replyToId && post.collectionIds?.length) {
         this._collectionIds = post.collectionIds;
       }
 
@@ -941,6 +941,16 @@ export class JantComposeDialog extends LitElement {
       this.reset();
       showToast(this.labels.loadPostFailed, "error");
     }
+  }
+
+  async openDraft(id: string) {
+    const dialog = this.closest("dialog");
+    if (dialog && !dialog.open) {
+      dialog.showModal();
+    }
+    await this.updateComplete;
+    this._focusDialogShell();
+    await this._loadDraft(id);
   }
 
   async openNew(options?: ComposeOpenOptions) {
@@ -1008,6 +1018,9 @@ export class JantComposeDialog extends LitElement {
     if (options?.restoreDraft !== false) {
       await this.restoreLocalDraft({ expectedReplyToId: id });
     }
+    // Collection membership belongs to the existing Thread. Reply compose
+    // must not restore or submit stale per-compose Collection state.
+    this._collectionIds = [];
 
     this.closest("dialog")?.showModal();
     await this.updateComplete;
@@ -1371,9 +1384,10 @@ export class JantComposeDialog extends LitElement {
           : this._visibility
         : undefined,
       rating: editorData.rating,
-      collectionIds: isRoot ? [...this._collectionIds] : [],
+      collectionIds: isRoot && !this._replyToId ? [...this._collectionIds] : [],
       attachments: orderedAttachments,
       replyToId: isRoot ? (this._replyToId ?? undefined) : undefined,
+      quietReply: isRoot ? this._quietReply || undefined : undefined,
       replyThreadRootId: isRoot
         ? (this._replyThreadRootId ?? undefined)
         : undefined,
@@ -1441,9 +1455,10 @@ export class JantComposeDialog extends LitElement {
       status,
       visibility: this._visibilityLocked ? undefined : this._visibility,
       rating: editorData.rating,
-      collectionIds: [...this._collectionIds],
+      collectionIds: this._replyToId ? [] : [...this._collectionIds],
       attachments: orderedAttachments,
       editPostId: this._editPostId ?? this._draftSourceId ?? undefined,
+      draftSourceId: this._draftSourceId ?? undefined,
       replyToId: this._replyToId ?? undefined,
       quietReply: this._quietReply || undefined,
       replyThreadRootId: this._replyThreadRootId ?? undefined,
@@ -1562,6 +1577,7 @@ export class JantComposeDialog extends LitElement {
           detail: {
             ...threadPosts[0],
             editPostId: this._editPostId ?? this._draftSourceId ?? undefined,
+            draftSourceId: this._draftSourceId ?? undefined,
             threadPosts,
             pendingAttachments: allPending,
           },
@@ -2437,15 +2453,7 @@ export class JantComposeDialog extends LitElement {
       this._handleConfirmSave();
     } else if ((ke.metaKey || ke.ctrlKey) && ke.key === "Enter") {
       e.preventDefault();
-      if (this._attachedPanelOpen) {
-        this._doneAttachedPanel();
-        return;
-      }
-      if (!this._canPublish()) {
-        this._focusBlockedSubmitField("published");
-        return;
-      }
-      void this._submit("published");
+      this._publishFromShortcut();
     } else if (
       (ke.metaKey || ke.ctrlKey) &&
       !ke.altKey &&
@@ -2470,6 +2478,18 @@ export class JantComposeDialog extends LitElement {
       }
     }
   };
+
+  private _publishFromShortcut() {
+    if (this._attachedPanelOpen) {
+      this._doneAttachedPanel();
+      return;
+    }
+    if (!this._canPublish()) {
+      this._focusBlockedSubmitField("published");
+      return;
+    }
+    void this._submit("published");
+  }
 
   private _handleAltPanelOpen = (e: Event) => {
     const detail = (e as CustomEvent<{ index: number }>).detail;
@@ -2500,7 +2520,10 @@ export class JantComposeDialog extends LitElement {
   private _handleFullscreenClose = (
     e: CustomEvent<ComposeFullscreenCloseDetail>,
   ) => {
-    const editor = this._editor;
+    const editors = Array.from(
+      this.querySelectorAll<JantComposeEditor>("jant-compose-editor"),
+    );
+    const editor = editors[e.detail.editorIndex ?? 0] ?? this._editor;
     if (editor) {
       editor.setEditorState(
         e.detail.json as import("@tiptap/core").JSONContent,
@@ -2511,9 +2534,16 @@ export class JantComposeDialog extends LitElement {
       // Adopt any in-flight inline image uploads from the fullscreen editor
       // so blob: placeholder URLs get replaced when uploads complete.
       editor.adoptPendingUploads();
-      this.updateComplete.then(() => editor.focusSelection(e.detail.selection));
+      if (e.detail.intent !== "publish") {
+        this.updateComplete.then(() =>
+          editor.focusSelection(e.detail.selection),
+        );
+      }
     }
     this._replyExpanded = e.detail.replyExpanded;
+    if (e.detail.intent === "publish") {
+      this._publishFromShortcut();
+    }
   };
 
   private _buildFullscreenReplyContext(): ComposeFullscreenReplyContext | null {
@@ -2530,6 +2560,11 @@ export class JantComposeDialog extends LitElement {
     e: CustomEvent<ComposeFullscreenOpenDetail>,
   ) => {
     e.detail.replyContext = this._buildFullscreenReplyContext();
+    const editors = Array.from(
+      this.querySelectorAll<JantComposeEditor>("jant-compose-editor"),
+    );
+    const editorIndex = editors.indexOf(e.target as JantComposeEditor);
+    e.detail.editorIndex = editorIndex >= 0 ? editorIndex : 0;
   };
 
   private _handleAttachedPanelOpen = (e: Event) => {
@@ -2639,6 +2674,7 @@ export class JantComposeDialog extends LitElement {
       const allDraftItems = (posts as Record<string, unknown>[]).map(
         (p): DraftItem => ({
           id: p.id as string,
+          slug: p.slug as string,
           format: p.format as ComposeFormat,
           title:
             ((p.format as ComposeFormat) === "quote"
@@ -2745,7 +2781,7 @@ export class JantComposeDialog extends LitElement {
     this._visibility = post.visibility ?? "public";
     this._visibilityLocked = Boolean(post.replyToId);
 
-    if (post.collectionIds?.length) {
+    if (!post.replyToId && post.collectionIds?.length) {
       this._collectionIds = post.collectionIds;
     }
 
@@ -3169,7 +3205,9 @@ export class JantComposeDialog extends LitElement {
       return;
     }
 
-    this._collectionIds = [...(draft.collectionIds ?? [])];
+    this._collectionIds = draft.replyToId
+      ? []
+      : [...(draft.collectionIds ?? [])];
     this._slug = draft.slug ?? "";
     this._slugTaken = false;
     this._slugCheckLoading = false;
@@ -3310,7 +3348,9 @@ export class JantComposeDialog extends LitElement {
 
     // Restore metadata
     this._format = draft.format;
-    this._collectionIds = [...(draft.collectionIds ?? [])];
+    this._collectionIds = this._replyToId
+      ? []
+      : [...(draft.collectionIds ?? [])];
     this._slug = draft.slug ?? "";
     this._publishedAtInput = draft.publishedAtInput ?? "";
     this._publishedAtTimeMinutes = draft.publishedAtTimeMinutes ?? null;
@@ -3427,9 +3467,11 @@ export class JantComposeDialog extends LitElement {
 
   private _renderDraftItem(draft: DraftItem) {
     const preview = this._getDraftPreview(draft);
+    const menuId = `draft-actions-${draft.id}`;
+    const menuOpen = this._draftMenuOpenId === draft.id;
 
     return html`
-      <div class="compose-draft-item" @click=${() => this._loadDraft(draft.id)}>
+      <div class="compose-draft-item" @click=${() => this.openDraft(draft.id)}>
         <div class="compose-draft-content">
           ${preview
             ? html`<div class="compose-draft-preview">${preview}</div>`
@@ -3443,7 +3485,7 @@ export class JantComposeDialog extends LitElement {
           </div>
         </div>
         <div class="relative">
-          ${this._draftMenuOpenId === draft.id
+          ${menuOpen
             ? html`<div
                 class="compose-dropdown-backdrop"
                 @click=${(e: Event) => {
@@ -3455,6 +3497,10 @@ export class JantComposeDialog extends LitElement {
           <button
             type="button"
             class="compose-draft-more"
+            aria-label=${this.labels.draftActions}
+            aria-haspopup="menu"
+            aria-expanded=${menuOpen ? "true" : "false"}
+            aria-controls=${menuId}
             @click=${(e: Event) => {
               e.stopPropagation();
               this._draftMenuOpenId =
@@ -3467,12 +3513,34 @@ export class JantComposeDialog extends LitElement {
               <circle cx="12" cy="8" r="1.2" />
             </svg>
           </button>
-          ${this._draftMenuOpenId === draft.id
+          ${menuOpen
             ? html`
-                <div class="compose-dropdown compose-dropdown-right">
+                <div
+                  id=${menuId}
+                  class="compose-dropdown compose-dropdown-right"
+                  role="menu"
+                >
+                  <a
+                    class="compose-dropdown-item"
+                    href=${publicPath(`/preview/${draft.slug}`)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    role="menuitem"
+                    @click=${(e: Event) => {
+                      e.stopPropagation();
+                      this._draftMenuOpenId = null;
+                    }}
+                  >
+                    ${this.labels.previewDraft}
+                  </a>
+                  <div
+                    class="compose-dropdown-separator"
+                    role="separator"
+                  ></div>
                   <button
                     type="button"
                     class="compose-dropdown-item compose-dropdown-item-danger"
+                    role="menuitem"
                     @click=${(e: Event) => {
                       e.stopPropagation();
                       this._deleteDraft(draft.id);
@@ -5542,11 +5610,12 @@ export class JantComposeDialog extends LitElement {
           : html`<div
                 class=${classMap({
                   "compose-action-row": true,
+                  "compose-action-row-without-collection": !!this._replyToId,
                   "compose-action-row-overlay-open":
                     this._showPublishPanel || this._showCollection,
                 })}
               >
-                ${this._renderCollectionSelector()}
+                ${this._replyToId ? nothing : this._renderCollectionSelector()}
                 ${this._renderPublishButton()}
               </div>
               ${this._renderQuickActionsRow()}`}

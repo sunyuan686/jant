@@ -88,6 +88,41 @@ describe("Public Archive API Routes", () => {
       expect(nextBody.posts[0].id).not.toBe(body.posts[0].id);
     });
 
+    it("paginates chronologically without promoting pinned posts", async () => {
+      const { app, services } = createTestApp({ authenticated: false });
+      app.route("/api/public/archive", publicArchiveApiRoutes);
+
+      const olderPinned = await services.posts.create({
+        format: "note",
+        title: "Older pinned post",
+        bodyMarkdown: "older",
+        pinned: true,
+        publishedAt: Date.UTC(2025, 0, 1) / 1000,
+      });
+      const newerUnpinned = await services.posts.create({
+        format: "note",
+        title: "Newer unpinned post",
+        bodyMarkdown: "newer",
+        publishedAt: Date.UTC(2026, 0, 1) / 1000,
+      });
+
+      const first = await app.request("/api/public/archive?limit=1");
+      expect(first.status).toBe(200);
+      const firstBody = await first.json();
+      expect(firstBody.posts.map((post: { id: string }) => post.id)).toEqual([
+        newerUnpinned.id,
+      ]);
+
+      const second = await app.request(
+        `/api/public/archive?limit=1&cursor=${firstBody.nextCursor}`,
+      );
+      expect(second.status).toBe(200);
+      const secondBody = await second.json();
+      expect(secondBody.posts.map((post: { id: string }) => post.id)).toEqual([
+        olderPinned.id,
+      ]);
+    });
+
     it("filters by year using publishedAt", async () => {
       const { app, services } = createTestApp({ authenticated: false });
       app.route("/api/public/archive", publicArchiveApiRoutes);

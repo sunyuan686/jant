@@ -193,15 +193,16 @@ export function GeneralContent({
     ),
     cjkFont: i18n._(
       msg({
-        message: "CJK Font",
-        comment: "@context: Settings form field for CJK serif font selection",
+        message: "CJK fallback",
+        comment:
+          "@context: Settings field for a manual Chinese, Japanese, or Korean font fallback",
       }),
     ),
     cjkFontHelp: i18n._(
       msg({
         message:
-          "Load a serif font optimized for Chinese, Japanese, or Korean content.",
-        comment: "@context: Help text for CJK serif font selection",
+          "Used when the content language has no built-in font profile. Your font theme still controls serif and sans styling.",
+        comment: "@context: Help text for the manual CJK font fallback setting",
       }),
     ),
     timeZone: i18n._(
@@ -395,7 +396,16 @@ export function GeneralContent({
   ]).replace(/</g, "\\u003c");
 
   const cjkFontsJson = JSON.stringify([
-    { value: "off", label: "None" },
+    {
+      value: "off",
+      label: i18n._(
+        msg({
+          message: "Follow content language",
+          comment:
+            "@context: CJK font fallback option that uses the configured content language",
+        }),
+      ),
+    },
     {
       value: "zh-Hans",
       label: "\u7B80\u4F53\u4E2D\u6587 (Simplified Chinese)",

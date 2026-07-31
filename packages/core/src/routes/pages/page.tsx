@@ -5,14 +5,19 @@
  * Must be registered last.
  */
 
+import { msg } from "@lingui/core/macro";
 import { Hono, type Context } from "hono";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
+import { getI18n } from "../../i18n/index.js";
+import { requireAuth } from "../../middleware/auth.js";
 import { PostPage } from "../../ui/pages/PostPage.js";
+import { DraftPreviewBar } from "../../ui/shared/DraftPreviewBar.js";
 import { getNavigationData } from "../../lib/navigation.js";
 import { renderPublicPage } from "../../lib/render.js";
 import { buildPageTitle } from "../../lib/page-title.js";
 import { buildPostMeta } from "../../lib/post-meta.js";
+import { isReservedPath } from "../../lib/constants.js";
 import {
   assemblePostPageDisplay,
   type PostPageDisplayData,
@@ -203,7 +208,7 @@ function canRenderDraftAboutEditor(
 async function renderPost(
   c: Context<Env>,
   post: Post,
-  options: { allowDraft?: boolean } = {},
+  options: { allowDraft?: boolean; isPreview?: boolean } = {},
 ) {
   // Start navData fetch immediately — it's independent of thread/media queries
   const navDataPromise = getNavigationData(c);
@@ -211,6 +216,7 @@ async function renderPost(
     // Private-post access is validated before renderPost() is called.
     isAuthenticated: true,
     allowDraft: options.allowDraft,
+    includeDraftThread: options.isPreview,
   });
   if (!display) {
     return c.notFound();
@@ -218,14 +224,51 @@ async function renderPost(
 
   const navData = await navDataPromise;
   const meta = buildPostMeta(post, navData.siteName);
+  const postView =
+    options.isPreview && display.postView.status === "draft"
+      ? {
+          ...display.postView,
+          permalink: toPublicPath(
+            `/preview/${display.postView.slug}`,
+            c.var.appConfig.sitePathPrefix,
+          ),
+        }
+      : display.postView;
+  const threadPostViews = options.isPreview
+    ? display.threadPostViews?.map((threadPost) =>
+        threadPost.status === "draft"
+          ? {
+              ...threadPost,
+              permalink: toPublicPath(
+                `/preview/${threadPost.slug}`,
+                c.var.appConfig.sitePathPrefix,
+              ),
+            }
+          : threadPost,
+      )
+    : display.threadPostViews;
+  const previewTitle = options.isPreview
+    ? getI18n(c)._(
+        msg({
+          message: "Draft preview",
+          comment: "@context: Browser title prefix for a draft preview page",
+        }),
+      )
+    : null;
   const canonicalHref = buildPostCanonicalHref(
     display.postView,
     display.threadPostViews,
     c.var.appConfig.siteUrl,
   );
+  const draftEditHref = `${toPublicPath(
+    `/preview/${post.slug}`,
+    c.var.appConfig.sitePathPrefix,
+  )}?edit=1`;
 
   return renderPublicPage(c, {
-    title: buildPageTitle(meta.title, navData.siteName),
+    title: previewTitle
+      ? buildPageTitle(previewTitle, meta.title, navData.siteName)
+      : buildPageTitle(meta.title, navData.siteName),
     description: meta.description,
     ...(post.status === "published"
       ? {
@@ -247,17 +290,57 @@ async function renderPost(
         }
       : {}),
     navData,
+    ...(options.isPreview
+      ? {
+          pageChrome: <DraftPreviewBar editHref={draftEditHref} />,
+          noindex: true,
+        }
+      : {}),
     content: (
-      <PostPage post={display.postView} threadPosts={display.threadPostViews} />
+      <PostPage
+        post={postView}
+        threadPosts={threadPostViews}
+        isPreview={options.isPreview}
+      />
     ),
   });
 }
+
+pageRoutes.get("/preview/:slug", requireAuth(), async (c) => {
+  const post = await c.var.services.posts.getBySlug(c.req.param("slug"));
+  if (!post) return c.notFound();
+
+  if (post.status === "published") {
+    return c.redirect(
+      toPublicPath(`/${post.slug}`, c.var.appConfig.sitePathPrefix),
+    );
+  }
+
+  c.header("Cache-Control", "private, no-store");
+  c.header("X-Robots-Tag", "noindex, nofollow");
+  return renderPost(c, post, { allowDraft: true, isPreview: true });
+});
 
 // Catch-all for path-registry backed post URLs, aliases, and redirects
 pageRoutes.get("/*", async (c) => {
   const fullPath = c.req.path.slice(1); // Remove leading /
   if (!fullPath) return c.notFound();
   const sitePathPrefix = c.var.appConfig.sitePathPrefix;
+
+  // Explicit application routes are registered before this catch-all. Any
+  // unmatched path under a reserved prefix is therefore an application 404,
+  // never a legacy alias or redirect from path_registry.
+  if (isReservedPath(fullPath)) return c.notFound();
+
+  // Stored redirects outrank the normal post/collection/deep-link resolvers,
+  // but can never shadow an explicit or reserved application route.
+  const resolved = await c.var.services.paths.resolve(fullPath);
+  if (resolved?.kind === "redirect" && resolved.redirectToPath) {
+    return c.redirect(
+      toPublicHref(`/${resolved.redirectToPath}`, sitePathPrefix),
+      resolved.redirectType ?? 301,
+    );
+  }
 
   if (fullPath.endsWith("/feed")) {
     const collectionPath = fullPath.slice(0, -"/feed".length);
@@ -360,15 +443,7 @@ pageRoutes.get("/*", async (c) => {
     }
   }
 
-  const resolved = await c.var.services.paths.resolve(fullPath);
   if (!resolved) return c.notFound();
-
-  if (resolved.kind === "redirect" && resolved.redirectToPath) {
-    return c.redirect(
-      toPublicHref(`/${resolved.redirectToPath}`, sitePathPrefix),
-      resolved.redirectType ?? 301,
-    );
-  }
 
   if (resolved.kind === "archive" && resolved.archiveQuery) {
     const overrides = Object.fromEntries(

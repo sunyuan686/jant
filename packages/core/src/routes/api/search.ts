@@ -8,10 +8,13 @@ import type { AppVariables } from "../../types/app-context.js";
 import { ValidationError, ExternalServiceError } from "../../lib/errors.js";
 import { toSearchApiResult } from "../../lib/api-search.js";
 import { rateLimit } from "../../middleware/rate-limit.js";
+import { requirePublicApiAccess } from "../../middleware/public-content-access.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
 export const searchApiRoutes = new Hono<Env>();
+
+searchApiRoutes.use("*", requirePublicApiAccess());
 
 // Per-IP rate limit. The request-time wrapper is needed because the
 // per-minute cap is pulled from `appConfig` which is only available on

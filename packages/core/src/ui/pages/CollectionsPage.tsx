@@ -14,13 +14,14 @@ import { CollectionsManager } from "../shared/CollectionsManager.js";
 export const CollectionsPage: FC<CollectionsPageProps> = ({
   items,
   isAuthenticated,
+  navigationCollectionIds = [],
   sitePathPrefix = "",
   siteOrigin = "",
 }) => {
   const { i18n } = useLingui();
   const emptyMessage = i18n._(
     msg({
-      message: "No collections yet. Start one to organize posts by topic.",
+      message: "No collections yet. Start one to organize threads by topic.",
       comment: "@context: Empty state message on collections page",
     }),
   );
@@ -30,6 +31,7 @@ export const CollectionsPage: FC<CollectionsPageProps> = ({
       <div class="py-6" data-page="collections">
         <CollectionsManager
           items={items}
+          navigationCollectionIds={navigationCollectionIds}
           sitePathPrefix={sitePathPrefix}
           siteOrigin={siteOrigin}
         />

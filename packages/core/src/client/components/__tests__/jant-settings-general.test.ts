@@ -96,9 +96,9 @@ const labels: SettingsLabels = {
   contentLanguagePreview: "Readers and search engines see",
   dashboardLanguage: "Dashboard language",
   dashboardLanguageHelp: "The language this admin dashboard shows in.",
-  cjkFont: "CJK Font",
+  cjkFont: "CJK fallback",
   cjkFontHelp:
-    "Load a serif font optimized for Chinese, Japanese, or Korean content.",
+    "Used when the content language has no built-in font profile. Your font theme still controls serif and sans styling.",
   timeZone: "Time Zone",
   feeds: "Feeds",
   mainRssFeed: "Main RSS feed",
@@ -137,7 +137,7 @@ const timezones: SettingsTimezone[] = [
 ];
 
 const cjkFonts: SettingsCjkFont[] = [
-  { value: "off", label: "None" },
+  { value: "off", label: "Follow content language" },
   { value: "zh-Hans", label: "简体中文 (Simplified Chinese)" },
 ];
 

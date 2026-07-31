@@ -33,6 +33,7 @@ import {
   IS_VITE_DEV,
 } from "../../lib/version.js";
 import { I18nProvider } from "../../i18n/index.js";
+import { resolveCjkFontProfile } from "../font-themes.js";
 import { resetIconCollector } from "../shared/icon-collector.js";
 import { Icon } from "../shared/Icon.js";
 import { IconSprite } from "../shared/IconSprite.js";
@@ -177,20 +178,24 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
   const resolvedClientBundle =
     clientBundle ?? (isAuthenticated ? "full" : "public");
   const cjkSerifFont = appConfig?.cjkSerifFont ?? "off";
+  const cjkFontProfile = resolveCjkFontProfile(
+    appConfig?.siteLanguage ?? resolvedLang,
+    cjkSerifFont,
+  );
   const cjkStylesheetPath =
-    cjkSerifFont === "zh-Hans"
+    cjkFontProfile === "zh-Hans"
       ? IS_VITE_DEV
         ? assetPath("/src/style-cjk.css")
         : toPublicAssetPath(CLIENT_CJK_CSS_FILE, assetBasePath)
-      : cjkSerifFont === "zh-Hant"
+      : cjkFontProfile === "zh-Hant"
         ? IS_VITE_DEV
           ? assetPath("/src/style-cjk-tc.css")
           : toPublicAssetPath(CLIENT_CJK_TC_CSS_FILE, assetBasePath)
-        : cjkSerifFont === "ja"
+        : cjkFontProfile === "ja"
           ? IS_VITE_DEV
             ? assetPath("/src/style-cjk-jp.css")
             : toPublicAssetPath(CLIENT_CJK_JP_CSS_FILE, assetBasePath)
-          : cjkSerifFont === "ko"
+          : cjkFontProfile === "ko"
             ? IS_VITE_DEV
               ? assetPath("/src/style-cjk-kr.css")
               : toPublicAssetPath(CLIENT_CJK_KR_CSS_FILE, assetBasePath)
@@ -248,11 +253,14 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
     socialImageHeightValue !== undefined &&
     socialImageWidthValue > socialImageHeightValue &&
     socialImageWidthValue >= 300;
-  const mainFeedHref = appConfig ? toPublicPath("/feed", sitePathPrefix) : null;
-  const latestFeedHref = appConfig
+  const feedsEnabled = appConfig?.rssFeedsEnabled === true;
+  const mainFeedHref = feedsEnabled
+    ? toPublicPath("/feed", sitePathPrefix)
+    : null;
+  const latestFeedHref = feedsEnabled
     ? toPublicPath("/latest/feed", sitePathPrefix)
     : null;
-  const featuredFeedHref = appConfig
+  const featuredFeedHref = feedsEnabled
     ? toPublicPath("/featured/feed", sitePathPrefix)
     : null;
   const mainFeedTitle =
@@ -451,7 +459,13 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
           {...(isAuthenticated ? { "data-authenticated": true } : {})}
         >
           {content}
-          <div id="toast-container" class="toast-container" popover="manual">
+          <div
+            id="toast-container"
+            class="toast-container"
+            popover="manual"
+            aria-live="polite"
+            aria-relevant="additions text"
+          >
             {toast && (
               <div
                 class={`toast ${toast.type === "error" ? "toast-error" : "toast-success"}`}

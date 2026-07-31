@@ -42,14 +42,18 @@ function resolve(
   const envKeys = "envKeys" in field ? field.envKeys : undefined;
 
   // User-configurable: DB > ENV > Default
-  if (!field.envOnly) {
-    const dbValue = allSettings[key];
-    if (dbValue) return dbValue;
+  if (!field.envOnly && Object.hasOwn(allSettings, key)) {
+    return allSettings[key] ?? "";
   }
 
   // ENV > Default
   const envValue = getEnvString(env, ...(envKeys ?? []));
   if (envValue) return envValue;
+
+  if (field.defaultValue) return field.defaultValue;
+  if ("fallbackKey" in field && field.fallbackKey) {
+    return resolve(field.fallbackKey, allSettings, env);
+  }
 
   return field.defaultValue;
 }
@@ -70,12 +74,73 @@ function resolveFallback(key: string, env: Bindings): string {
   const envValue = getEnvString(env, ...(envKeys ?? []));
   if (envValue) return envValue;
 
+  if (field.defaultValue) return field.defaultValue;
+  if ("fallbackKey" in field && field.fallbackKey) {
+    return resolveFallback(field.fallbackKey, env);
+  }
+
   return field.defaultValue;
 }
 
-function parseConfigInt(value: string, fallback: number): number {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+type RuntimeNumberConfigKey =
+  | "PAGE_SIZE"
+  | "SEARCH_PAGE_SIZE"
+  | "ARCHIVE_PAGE_SIZE"
+  | "SUMMARY_MAX_PARAGRAPHS"
+  | "SUMMARY_MAX_CHARS"
+  | "RSS_FEED_LIMIT"
+  | "RSS_PUBLISH_DELAY_SECONDS";
+
+function parseConfigInt(
+  key: RuntimeNumberConfigKey,
+  value: string,
+  fallback: number,
+): number {
+  const normalized = value.trim();
+  const parsed = Number(normalized);
+  const definition = CONFIG_FIELDS[key].editor;
+  return normalized.length > 0 &&
+    Number.isInteger(parsed) &&
+    (definition.min === undefined || parsed >= definition.min) &&
+    (definition.max === undefined || parsed <= definition.max)
+    ? parsed
+    : fallback;
+}
+
+/**
+ * Resolve the runtime limits used for automatic post summaries.
+ *
+ * Internal maintenance routes run before the full config middleware, so they
+ * use this focused resolver instead of assuming `c.var.appConfig` exists.
+ *
+ * @param env - Runtime bindings.
+ * @param allSettings - DB settings map when available.
+ * @returns Positive summary extraction limits with configured defaults.
+ * @example
+ * ```ts
+ * resolveSummaryConfig({ SUMMARY_MAX_CHARS: "240" }).maxChars;
+ * // 240
+ * ```
+ */
+export function resolveSummaryConfig(
+  env: Bindings,
+  allSettings: Record<string, string> = {},
+): {
+  maxParagraphs: number;
+  maxChars: number;
+} {
+  return {
+    maxParagraphs: parseConfigInt(
+      "SUMMARY_MAX_PARAGRAPHS",
+      resolve("SUMMARY_MAX_PARAGRAPHS", allSettings, env),
+      5,
+    ),
+    maxChars: parseConfigInt(
+      "SUMMARY_MAX_CHARS",
+      resolve("SUMMARY_MAX_CHARS", allSettings, env),
+      500,
+    ),
+  };
 }
 
 function parseFeedKind(value: string, fallback: FeedKind): FeedKind {
@@ -102,12 +167,19 @@ export function resolveConfig(
   allSettings: Record<string, string>,
   options?: { siteUrl?: string },
 ): AppConfig {
-  const pageSize = parseConfigInt(resolve("PAGE_SIZE", allSettings, env), 50);
+  const summaryConfig = resolveSummaryConfig(env, allSettings);
+  const pageSize = parseConfigInt(
+    "PAGE_SIZE",
+    resolve("PAGE_SIZE", allSettings, env),
+    50,
+  );
   const searchPageSize = parseConfigInt(
+    "SEARCH_PAGE_SIZE",
     resolve("SEARCH_PAGE_SIZE", allSettings, env),
     pageSize,
   );
   const archivePageSize = parseConfigInt(
+    "ARCHIVE_PAGE_SIZE",
     resolve("ARCHIVE_PAGE_SIZE", allSettings, env),
     pageSize,
   );
@@ -137,9 +209,12 @@ export function resolveConfig(
   }
 
   // Description is "explicit" when set in DB or ENV (not just the default)
+  const hasDbDescription = Object.hasOwn(allSettings, "SITE_DESCRIPTION");
   const dbDescription = allSettings["SITE_DESCRIPTION"];
   const envDescription = getEnvString(env, "SITE_DESCRIPTION");
-  const siteDescriptionExplicit = !!(dbDescription || envDescription);
+  const siteDescriptionExplicit = hasDbDescription
+    ? !!dbDescription
+    : !!envDescription;
 
   return {
     // Site identity (DB > ENV > Default)
@@ -158,6 +233,9 @@ export function resolveConfig(
     showJantBrandingOnHome:
       resolve("SHOW_JANT_BRANDING_ON_HOME", allSettings, env) === "true",
     noindex: demoMode || resolve("NOINDEX", allSettings, env) === "true",
+    publicApiEnabled:
+      resolve("PUBLIC_API_ENABLED", allSettings, env) === "true",
+    rssFeedsEnabled: resolve("RSS_FEEDS_ENABLED", allSettings, env) === "true",
 
     // Infrastructure (ENV only)
     siteUrl,
@@ -185,21 +263,27 @@ export function resolveConfig(
       parseInt(getEnvString(env, "UPLOAD_MAX_FILE_SIZE_MB") ?? "1024", 10) ||
       1024,
 
-    // Summary extraction (ENV only)
-    summaryMaxParagraphs:
-      parseInt(getEnvString(env, "SUMMARY_MAX_PARAGRAPHS") ?? "5", 10) || 5,
-    summaryMaxChars:
-      parseInt(getEnvString(env, "SUMMARY_MAX_CHARS") ?? "500", 10) || 500,
+    // Summary extraction (DB > ENV > Default)
+    summaryMaxParagraphs: summaryConfig.maxParagraphs,
+    summaryMaxChars: summaryConfig.maxChars,
 
     // Slug (ENV only)
     slugIdLength: parseInt(getEnvString(env, "SLUG_ID_LENGTH") ?? "5", 10) || 5,
 
-    // Pagination/Feed (ENV only)
+    // Pagination/feed (DB > ENV > Default)
     pageSize,
     searchPageSize,
     archivePageSize,
-    rssFeedLimit:
-      parseInt(getEnvString(env, "RSS_FEED_LIMIT") ?? "50", 10) || 50,
+    rssFeedLimit: parseConfigInt(
+      "RSS_FEED_LIMIT",
+      resolve("RSS_FEED_LIMIT", allSettings, env),
+      50,
+    ),
+    rssPublishDelaySeconds: parseConfigInt(
+      "RSS_PUBLISH_DELAY_SECONDS",
+      resolve("RSS_PUBLISH_DELAY_SECONDS", allSettings, env),
+      300,
+    ),
 
     // Demo (ENV only)
     demoEmail: getEnvString(env, "DEMO_EMAIL") || "",

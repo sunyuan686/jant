@@ -7,7 +7,7 @@ describe("HomePageBranding", () => {
     const html = renderToString(HomePageBranding({}));
 
     expect(html).toContain("Build with");
-    expect(html).toContain("https://github.com/jant-me/jant");
+    expect(html).toContain('href="https://jant.me"');
     expect(html).toContain(">Jant</span>");
     expect(html).not.toContain("<svg");
   });

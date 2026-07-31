@@ -27,11 +27,20 @@ import {
 import { showConfirmDialog } from "../confirm.js";
 import { showToast } from "../toast.js";
 import { publicPath } from "../runtime-paths.js";
-import { destroySiteHeaderNav, initSiteHeaderNav } from "../site-header-nav.js";
+import { applySiteHeaderHtml } from "../site-header-fragment.js";
+import { NAVIGATION_SETTINGS_PATH } from "../../lib/settings-paths.js";
+import {
+  getCollectionEditPath,
+  getCollectionPagePath,
+} from "../../lib/collection-paths.js";
+import { getSlugValidationIssue } from "../../lib/slug-format.js";
+import type { CollectionSubmitDetail } from "./collection-types.js";
+import "./jant-collection-form.js";
 import type {
   NavManagerCollection,
   NavManagerItem,
   NavManagerLabels,
+  NavManagerPage,
   NavManagerSuggestedLink,
   SystemNavConfig,
 } from "./nav-manager-types.js";
@@ -45,6 +54,21 @@ type NavManagerMutationResponse<T extends object> = T & {
 
 type SortableEndEvent = Parameters<NonNullable<SortableOptions["onEnd"]>>[0];
 
+type PageDialogView = "picker" | "create" | "created";
+type CollectionDialogView = "create" | "created";
+
+interface CreatedPage {
+  id: string;
+  title: string;
+  slug: string;
+}
+
+interface CreatedCollection {
+  id: string;
+  title: string;
+  slug: string;
+}
+
 export class JantNavManager extends LitElement {
   static properties = {
     items: { type: Array },
@@ -53,6 +77,7 @@ export class JantNavManager extends LitElement {
     collections: { type: Array },
     suggestedLinks: { type: Array, attribute: "suggested-links" },
     siteName: { type: String, attribute: "site-name" },
+    rssFeedsEnabled: { type: Boolean, attribute: "rss-feeds-enabled" },
 
     _items: { state: true },
     _editingId: { state: true },
@@ -66,7 +91,28 @@ export class JantNavManager extends LitElement {
     _showPreviewMore: { state: true },
     _addingCollectionId: { state: true },
     _showCollectionPicker: { state: true },
+    _collectionDialogOpen: { state: true },
+    _collectionDialogView: { state: true },
+    _creatingCollection: { state: true },
+    _createCollectionError: { state: true },
+    _createdCollection: { state: true },
     _addingSuggestedKey: { state: true },
+    _pageDialogOpen: { state: true },
+    _pageDialogView: { state: true },
+    _pageQuery: { state: true },
+    _pages: { state: true },
+    _pageSearchLoading: { state: true },
+    _pageSearchError: { state: true },
+    _selectedPageIndex: { state: true },
+    _addingPageId: { state: true },
+    _newPageTitle: { state: true },
+    _newPageSlug: { state: true },
+    _slugEdited: { state: true },
+    _slugCheckLoading: { state: true },
+    _slugTaken: { state: true },
+    _creatingPage: { state: true },
+    _createPageError: { state: true },
+    _createdPage: { state: true },
   };
 
   declare items: NavManagerItem[];
@@ -75,6 +121,7 @@ export class JantNavManager extends LitElement {
   declare collections: NavManagerCollection[];
   declare suggestedLinks: NavManagerSuggestedLink[];
   declare siteName: string;
+  declare rssFeedsEnabled: boolean;
 
   declare _items: NavManagerItem[];
   declare _editingId: string | null;
@@ -90,13 +137,40 @@ export class JantNavManager extends LitElement {
   /** ID of the collection currently being added (for loading state) */
   declare _addingCollectionId: string | null;
   declare _showCollectionPicker: boolean;
+  declare _collectionDialogOpen: boolean;
+  declare _collectionDialogView: CollectionDialogView;
+  declare _creatingCollection: boolean;
+  declare _createCollectionError: string;
+  declare _createdCollection: CreatedCollection | null;
   /** Key of the suggested link currently being added */
   declare _addingSuggestedKey: string | null;
+  declare _pageDialogOpen: boolean;
+  declare _pageDialogView: PageDialogView;
+  declare _pageQuery: string;
+  declare _pages: NavManagerPage[];
+  declare _pageSearchLoading: boolean;
+  declare _pageSearchError: boolean;
+  declare _selectedPageIndex: number;
+  declare _addingPageId: string | null;
+  declare _newPageTitle: string;
+  declare _newPageSlug: string;
+  declare _slugEdited: boolean;
+  declare _slugCheckLoading: boolean;
+  declare _slugTaken: boolean;
+  declare _creatingPage: boolean;
+  declare _createPageError: string;
+  declare _createdPage: CreatedPage | null;
 
   #sortableHeader: { destroy(): void } | null = null;
   #sortableMore: { destroy(): void } | null = null;
   #initialized = false;
   #revertNextSibling: Node | null = null;
+  #pageSearchTimer: ReturnType<typeof setTimeout> | null = null;
+  #pageSearchRequestId = 0;
+  #slugSuggestTimer: ReturnType<typeof setTimeout> | null = null;
+  #slugSuggestRequestId = 0;
+  #slugCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  #slugCheckRequestId = 0;
   #closeLinkForm = () => {
     this._showLinkForm = false;
     document.removeEventListener("click", this.#closeLinkForm);
@@ -126,6 +200,21 @@ export class JantNavManager extends LitElement {
     this.#closePreviewMore();
     this.querySelector<HTMLElement>("[data-preview-more-trigger]")?.focus();
   };
+  #handleCollectionPickerKeydown = (event: globalThis.KeyboardEvent) => {
+    if (
+      event.key !== "Escape" ||
+      event.isComposing ||
+      event.keyCode === 229 ||
+      !this._showCollectionPicker
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    this.#closeCollectionPicker();
+    this.querySelector<HTMLElement>("[data-add-collection-trigger]")?.focus();
+  };
 
   createRenderRoot() {
     this.innerHTML = "";
@@ -140,6 +229,7 @@ export class JantNavManager extends LitElement {
     this.collections = [];
     this.suggestedLinks = [];
     this.siteName = "";
+    this.rssFeedsEnabled = false;
 
     this._items = [];
     this._editingId = null;
@@ -153,7 +243,28 @@ export class JantNavManager extends LitElement {
     this._showPreviewMore = false;
     this._addingCollectionId = null;
     this._showCollectionPicker = false;
+    this._collectionDialogOpen = false;
+    this._collectionDialogView = "create";
+    this._creatingCollection = false;
+    this._createCollectionError = "";
+    this._createdCollection = null;
     this._addingSuggestedKey = null;
+    this._pageDialogOpen = false;
+    this._pageDialogView = "picker";
+    this._pageQuery = "";
+    this._pages = [];
+    this._pageSearchLoading = false;
+    this._pageSearchError = false;
+    this._selectedPageIndex = 0;
+    this._addingPageId = null;
+    this._newPageTitle = "";
+    this._newPageSlug = "";
+    this._slugEdited = false;
+    this._slugCheckLoading = false;
+    this._slugTaken = false;
+    this._creatingPage = false;
+    this._createPageError = "";
+    this._createdPage = null;
   }
 
   protected update(changedProperties: PropertyValueMap<JantNavManager>): void {
@@ -165,7 +276,7 @@ export class JantNavManager extends LitElement {
   }
 
   protected updated(): void {
-    if (this._showPreviewMore && this.#moreItems.length === 0) {
+    if (this._showPreviewMore && this.#previewMoreItems.length === 0) {
       this.#closePreviewMore();
     }
     this.#initSortable();
@@ -180,6 +291,7 @@ export class JantNavManager extends LitElement {
     document.removeEventListener("click", this.#closeLinkForm);
     document.removeEventListener("click", this.#closeCollectionPicker);
     this.#closePreviewMore();
+    this.#cancelPageDialogRequests();
   }
 
   #jsonMutationHeaders(): Record<string, string> {
@@ -217,31 +329,454 @@ export class JantNavManager extends LitElement {
     return { ...item, displayLabel };
   }
 
-  #applySiteHeaderHtml(headerHtml: string | undefined) {
-    if (!headerHtml) return;
+  // ===========================================================================
+  // Page picker and quick-create dialog
+  // ===========================================================================
 
-    const template = document.createElement("template");
-    template.innerHTML = headerHtml.trim();
+  #cancelPageDialogRequests() {
+    if (this.#pageSearchTimer !== null) {
+      clearTimeout(this.#pageSearchTimer);
+      this.#pageSearchTimer = null;
+    }
+    if (this.#slugSuggestTimer !== null) {
+      clearTimeout(this.#slugSuggestTimer);
+      this.#slugSuggestTimer = null;
+    }
+    if (this.#slugCheckTimer !== null) {
+      clearTimeout(this.#slugCheckTimer);
+      this.#slugCheckTimer = null;
+    }
+    this.#pageSearchRequestId += 1;
+    this.#slugSuggestRequestId += 1;
+    this.#slugCheckRequestId += 1;
+  }
 
-    const selectors = [
-      '[data-site-header-fragment="header"]',
-      '[data-site-header-fragment="drawer-backdrop"]',
-      '[data-site-header-fragment="drawer"]',
-    ];
-    let replaced = false;
+  async #openPageDialog() {
+    if (this._pageDialogOpen) return;
 
-    destroySiteHeaderNav(document);
-    for (const selector of selectors) {
-      const current = document.querySelector<HTMLElement>(selector);
-      const next = template.content.querySelector<HTMLElement>(selector);
-      if (!current || !next) continue;
+    this.#cancelPageDialogRequests();
+    this._pageDialogOpen = true;
+    this._pageDialogView = "picker";
+    this._pageQuery = "";
+    this._pages = [];
+    this._pageSearchError = false;
+    this._selectedPageIndex = 0;
+    this._addingPageId = null;
+    this._newPageTitle = "";
+    this._newPageSlug = "";
+    this._slugEdited = false;
+    this._slugCheckLoading = false;
+    this._slugTaken = false;
+    this._creatingPage = false;
+    this._createPageError = "";
+    this._createdPage = null;
 
-      current.replaceWith(next);
-      replaced = true;
+    await this.updateComplete;
+    const dialog = this.querySelector<HTMLDialogElement>("#nav-page-dialog");
+    if (dialog && !dialog.open) dialog.showModal();
+    this.querySelector<HTMLInputElement>("#nav-page-search")?.focus();
+    void this.#loadPageCandidates();
+  }
+
+  #closePageDialog() {
+    const trigger = this.querySelector<HTMLElement>("[data-add-page-trigger]");
+    const dialog = this.querySelector<HTMLDialogElement>("#nav-page-dialog");
+    if (dialog?.open) dialog.close();
+    this.#cancelPageDialogRequests();
+    this._pageDialogOpen = false;
+    void this.updateComplete.then(() => trigger?.focus());
+  }
+
+  async #loadPageCandidates() {
+    const requestId = ++this.#pageSearchRequestId;
+    const params = new URLSearchParams({ limit: "20" });
+    const query = this._pageQuery.trim();
+    if (query) params.set("q", query);
+
+    this._pageSearchLoading = true;
+    this._pageSearchError = false;
+    try {
+      const res = await fetch(`/api/nav-items/pages?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = (await res.json()) as { pages?: NavManagerPage[] };
+      if (requestId !== this.#pageSearchRequestId) return;
+
+      const addedPostIds = new Set(
+        this._items.flatMap((item) =>
+          item.type === "page" && item.postId ? [item.postId] : [],
+        ),
+      );
+      this._pages = (json.pages ?? []).filter(
+        (page) => !addedPostIds.has(page.id),
+      );
+      this._selectedPageIndex = 0;
+    } catch {
+      if (requestId === this.#pageSearchRequestId) {
+        this._pages = [];
+        this._pageSearchError = true;
+      }
+    } finally {
+      if (requestId === this.#pageSearchRequestId) {
+        this._pageSearchLoading = false;
+      }
+    }
+  }
+
+  #schedulePageSearch() {
+    if (this.#pageSearchTimer !== null) {
+      clearTimeout(this.#pageSearchTimer);
+    }
+    this.#pageSearchTimer = setTimeout(() => {
+      this.#pageSearchTimer = null;
+      void this.#loadPageCandidates();
+    }, 200);
+  }
+
+  async #addPageToNavigation(page: CreatedPage) {
+    if (this._addingPageId) return;
+
+    this._addingPageId = page.id;
+    try {
+      const res = await fetch("/api/nav-items", {
+        method: "POST",
+        headers: this.#jsonMutationHeaders(),
+        body: JSON.stringify({
+          type: "page",
+          postId: page.id,
+          placement: "header",
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const response =
+        (await res.json()) as NavManagerMutationResponse<NavManagerItem>;
+      const created = this.#normalizeItem(this.#stripHeaderHtml(response));
+      this.#destroySortables();
+      this._items = [...this._items, created];
+      this._pages = this._pages.filter((candidate) => candidate.id !== page.id);
+      applySiteHeaderHtml(response.headerHtml);
+      showToast(this.labels.pageAdded);
+
+      this.#closePageDialog();
+    } catch {
+      showToast(this.labels.saveFailed, "error");
+    } finally {
+      this._addingPageId = null;
+    }
+  }
+
+  #showCreatePage() {
+    this.#pageSearchRequestId += 1;
+    this._pageDialogView = "create";
+    this._newPageTitle = "";
+    this._newPageSlug = "";
+    this._slugEdited = false;
+    this._slugCheckLoading = false;
+    this._slugTaken = false;
+    this._createPageError = "";
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLInputElement>("#nav-new-page-title")?.focus();
+    });
+  }
+
+  #showPagePicker() {
+    this.#slugSuggestRequestId += 1;
+    this.#slugCheckRequestId += 1;
+    this._pageDialogView = "picker";
+    this._createPageError = "";
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLInputElement>("#nav-page-search")?.focus();
+    });
+  }
+
+  #scheduleSlugSuggestion() {
+    if (this._slugEdited) return;
+    if (this.#slugSuggestTimer !== null) {
+      clearTimeout(this.#slugSuggestTimer);
+    }
+    const title = this._newPageTitle.trim();
+    if (!title) {
+      this._newPageSlug = "";
+      return;
+    }
+    this.#slugSuggestTimer = setTimeout(() => {
+      this.#slugSuggestTimer = null;
+      void this.#suggestPageSlug(title);
+    }, 250);
+  }
+
+  async #suggestPageSlug(title: string) {
+    const requestId = ++this.#slugSuggestRequestId;
+    const params = new URLSearchParams({ mode: "suggest", title });
+    try {
+      const res = await fetch(`/api/posts/slug?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) return;
+      const json = (await res.json()) as { slug?: string };
+      if (
+        requestId !== this.#slugSuggestRequestId ||
+        this._slugEdited ||
+        this._pageDialogView !== "create"
+      ) {
+        return;
+      }
+      this._newPageSlug = json.slug?.trim() ?? "";
+      this._slugTaken = false;
+    } catch {
+      // Slug suggestion is optional; the create endpoint can generate one.
+    }
+  }
+
+  #scheduleSlugCheck() {
+    if (this.#slugCheckTimer !== null) {
+      clearTimeout(this.#slugCheckTimer);
+    }
+    this._slugTaken = false;
+    const slug = this._newPageSlug.trim();
+    if (!slug || getSlugValidationIssue(slug, { maxLength: 200 })) {
+      this._slugCheckLoading = false;
+      return;
     }
 
-    if (replaced) {
-      initSiteHeaderNav(document);
+    this._slugCheckLoading = true;
+    this.#slugCheckTimer = setTimeout(() => {
+      this.#slugCheckTimer = null;
+      void this.#checkPageSlug(slug);
+    }, 250);
+  }
+
+  async #checkPageSlug(slug: string) {
+    const requestId = ++this.#slugCheckRequestId;
+    const params = new URLSearchParams({ mode: "check", slug });
+    try {
+      const res = await fetch(`/api/posts/slug?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) return;
+      const json = (await res.json()) as { available?: boolean };
+      if (
+        requestId !== this.#slugCheckRequestId ||
+        this._newPageSlug.trim() !== slug
+      ) {
+        return;
+      }
+      this._slugTaken = json.available === false;
+    } catch {
+      // The create endpoint remains the final authority for slug conflicts.
+    } finally {
+      if (requestId === this.#slugCheckRequestId) {
+        this._slugCheckLoading = false;
+      }
+    }
+  }
+
+  #pageSlugError(): string {
+    const issue = getSlugValidationIssue(this._newPageSlug, { maxLength: 200 });
+    if (issue === "invalid") return this.labels.slugInvalid;
+    if (issue === "reserved") return this.labels.slugReserved;
+    if (issue === "too_long") return this.labels.slugTooLong;
+    if (this._slugTaken) return this.labels.slugUnavailable;
+    return "";
+  }
+
+  async #createPage() {
+    const title = this._newPageTitle.trim();
+    const slug = this._newPageSlug.trim();
+    if (!title) {
+      this._createPageError = this.labels.titleRequired;
+      return;
+    }
+    const slugError = this.#pageSlugError();
+    if (slugError) {
+      this._createPageError = slugError;
+      return;
+    }
+    if (this._slugCheckLoading) return;
+
+    this._creatingPage = true;
+    this._createPageError = "";
+    try {
+      const res = await fetch("/api/posts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          format: "note",
+          title,
+          ...(slug && { slug }),
+          status: "published",
+          visibility: "latest_hidden",
+        }),
+      });
+      if (!res.ok) {
+        if (res.status === 409) {
+          this._slugTaken = true;
+          this._createPageError = this.labels.slugUnavailable;
+          return;
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const created = (await res.json()) as CreatedPage;
+      this._createdPage = {
+        id: created.id,
+        title: created.title || title,
+        slug: created.slug,
+      };
+      this._pageDialogView = "created";
+    } catch {
+      this._createPageError = this.labels.createPageFailed;
+    } finally {
+      this._creatingPage = false;
+    }
+  }
+
+  #handlePageDialogKeydown(event: globalThis.KeyboardEvent) {
+    if (event.isComposing || event.keyCode === 229) return;
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.#closePageDialog();
+      return;
+    }
+
+    if (this._pageDialogView !== "picker") return;
+    if (event.target !== this.querySelector("#nav-page-search")) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      this._selectedPageIndex =
+        this._pages.length > 0
+          ? (this._selectedPageIndex + 1) % this._pages.length
+          : 0;
+      this.#scrollSelectedPageIntoView();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      this._selectedPageIndex =
+        this._pages.length > 0
+          ? (this._selectedPageIndex - 1 + this._pages.length) %
+            this._pages.length
+          : 0;
+      this.#scrollSelectedPageIntoView();
+    } else if (event.key === "Enter" && this._pages.length > 0) {
+      event.preventDefault();
+      const page = this._pages[this._selectedPageIndex];
+      if (page) void this.#addPageToNavigation(page);
+    }
+  }
+
+  #scrollSelectedPageIntoView() {
+    requestAnimationFrame(() => {
+      this.querySelector(".nav-page-result-selected")?.scrollIntoView({
+        block: "nearest",
+      });
+    });
+  }
+
+  // ===========================================================================
+  // Collection quick-create dialog
+  // ===========================================================================
+
+  async #openCollectionDialog() {
+    if (this._collectionDialogOpen) return;
+
+    this.#closeCollectionPicker();
+    this._collectionDialogOpen = true;
+    this._collectionDialogView = "create";
+    this._creatingCollection = false;
+    this._createCollectionError = "";
+    this._createdCollection = null;
+
+    await this.updateComplete;
+    const dialog = this.querySelector<HTMLDialogElement>(
+      "#nav-collection-dialog",
+    );
+    if (dialog && !dialog.open) dialog.showModal();
+    const titleInput = this.querySelector<HTMLInputElement>(
+      "#nav-collection-dialog [data-collection-title-input]",
+    );
+    titleInput?.focus();
+    titleInput?.select();
+  }
+
+  #closeCollectionDialog() {
+    const trigger = this.querySelector<HTMLElement>(
+      "[data-add-collection-trigger]",
+    );
+    const dialog = this.querySelector<HTMLDialogElement>(
+      "#nav-collection-dialog",
+    );
+    if (dialog?.open) dialog.close();
+    this._collectionDialogOpen = false;
+    this._creatingCollection = false;
+    this._createCollectionError = "";
+    void this.updateComplete.then(() => trigger?.focus());
+  }
+
+  #handleCollectionDialogKeydown(event: globalThis.KeyboardEvent) {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key !== "Escape") return;
+
+    event.preventDefault();
+    this.#closeCollectionDialog();
+  }
+
+  #submitCollectionForm() {
+    this.querySelector<HTMLFormElement>(
+      "#nav-collection-dialog jant-collection-form form",
+    )?.requestSubmit();
+  }
+
+  async #handleCreateCollectionSubmit(event: Event) {
+    const submitEvent = event as CustomEvent<CollectionSubmitDetail>;
+    submitEvent.stopPropagation();
+    if (!submitEvent.detail || this._creatingCollection) return;
+
+    const form = this.querySelector(
+      "#nav-collection-dialog jant-collection-form",
+    ) as (HTMLElement & { loading: boolean }) | null;
+    this._creatingCollection = true;
+    this._createCollectionError = "";
+    if (form) form.loading = true;
+
+    try {
+      const res = await fetch("/api/collections", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(submitEvent.detail.data),
+      });
+      const created = (await res.json().catch(() => null)) as
+        | (CreatedCollection & { error?: string })
+        | null;
+      if (!res.ok || !created?.id || !created.title || !created.slug) {
+        throw new Error("Invalid collection response");
+      }
+
+      const newCollection: NavManagerCollection = {
+        id: created.id,
+        title: created.title,
+        slug: created.slug,
+        group: null,
+      };
+      if (
+        !this.collections.some((collection) => collection.id === created.id)
+      ) {
+        this.collections = [...this.collections, newCollection];
+      }
+      this._createdCollection = created;
+      this._collectionDialogView = "created";
+    } catch {
+      this._createCollectionError = this.labels.createCollectionFailed;
+    } finally {
+      this._creatingCollection = false;
+      if (form) form.loading = false;
     }
   }
 
@@ -382,7 +917,7 @@ export class JantNavManager extends LitElement {
 
       const moved =
         (await moveRes.json()) as NavManagerMutationResponse<NavManagerItem>;
-      this.#applySiteHeaderHtml(moved.headerHtml);
+      applySiteHeaderHtml(moved.headerHtml);
       showToast(
         crossList ? this.labels.placementSaved : this.labels.orderSaved,
       );
@@ -433,7 +968,7 @@ export class JantNavManager extends LitElement {
         current.id === updated.id ? updated : current,
       );
       this._editingId = null;
-      this.#applySiteHeaderHtml(response.headerHtml);
+      applySiteHeaderHtml(response.headerHtml);
     } catch {
       showToast(this.labels.saveFailed, "error");
     }
@@ -443,9 +978,13 @@ export class JantNavManager extends LitElement {
     const message =
       item.type === "collection"
         ? this.labels.confirmDeleteCollection
-        : this.labels.confirmDeleteLink;
+        : item.type === "page"
+          ? this.labels.confirmDeletePage
+          : this.labels.confirmDeleteLink;
     const confirmLabel =
-      item.type === "collection" ? this.labels.remove : this.labels.delete;
+      item.type === "collection" || item.type === "page"
+        ? this.labels.remove
+        : this.labels.delete;
     const confirmed = await showConfirmDialog({
       message,
       confirmLabel,
@@ -467,7 +1006,7 @@ export class JantNavManager extends LitElement {
       this.#destroySortables();
       this._items = this._items.filter((current) => current.id !== item.id);
       this._editingId = null;
-      this.#applySiteHeaderHtml(response.headerHtml);
+      applySiteHeaderHtml(response.headerHtml);
     } catch {
       showToast(this.labels.deleteFailed, "error");
     }
@@ -503,7 +1042,7 @@ export class JantNavManager extends LitElement {
       this._newLinkUrl = "";
       this._showLinkForm = false;
       document.removeEventListener("click", this.#closeLinkForm);
-      this.#applySiteHeaderHtml(response.headerHtml);
+      applySiteHeaderHtml(response.headerHtml);
     } catch {
       showToast(this.labels.saveFailed, "error");
     } finally {
@@ -537,7 +1076,11 @@ export class JantNavManager extends LitElement {
       this.#destroySortables();
       this._items = [...this._items, created];
       this.#closeCollectionPicker();
-      this.#applySiteHeaderHtml(response.headerHtml);
+      applySiteHeaderHtml(response.headerHtml);
+      showToast(this.labels.collectionAdded);
+      if (this._collectionDialogOpen) {
+        this.#closeCollectionDialog();
+      }
     } catch {
       showToast(this.labels.saveFailed, "error");
     } finally {
@@ -584,11 +1127,16 @@ export class JantNavManager extends LitElement {
     if (hasMatchingPath) return true;
 
     return Boolean(
-      link.collectionId &&
-      this._items.some(
-        (item) =>
-          item.type === "collection" && item.collectionId === link.collectionId,
-      ),
+      (link.collectionId &&
+        this._items.some(
+          (item) =>
+            item.type === "collection" &&
+            item.collectionId === link.collectionId,
+        )) ||
+      (link.postId &&
+        this._items.some(
+          (item) => item.type === "page" && item.postId === link.postId,
+        )),
     );
   }
 
@@ -604,18 +1152,24 @@ export class JantNavManager extends LitElement {
     this._addingSuggestedKey = link.key;
     try {
       const body =
-        link.navItemType === "collection" && link.collectionId
+        link.navItemType === "page" && link.postId
           ? {
-              type: "collection",
-              collectionId: link.collectionId,
+              type: "page",
+              postId: link.postId,
               placement: "header",
             }
-          : {
-              type: "link",
-              label: link.label,
-              url: link.url,
-              placement: "header",
-            };
+          : link.navItemType === "collection" && link.collectionId
+            ? {
+                type: "collection",
+                collectionId: link.collectionId,
+                placement: "header",
+              }
+            : {
+                type: "link",
+                label: link.label,
+                url: link.url,
+                placement: "header",
+              };
 
       const res = await fetch("/api/nav-items", {
         method: "POST",
@@ -629,7 +1183,7 @@ export class JantNavManager extends LitElement {
       const created = this.#normalizeItem(this.#stripHeaderHtml(response));
       this.#destroySortables();
       this._items = [...this._items, created];
-      this.#applySiteHeaderHtml(response.headerHtml);
+      applySiteHeaderHtml(response.headerHtml);
       showToast(this.labels.suggestedLinkAdded);
     } catch {
       showToast(this.labels.saveFailed, "error");
@@ -668,7 +1222,7 @@ export class JantNavManager extends LitElement {
         const created = this.#normalizeItem(this.#stripHeaderHtml(response));
         this.#destroySortables();
         this._items = [...this._items, created];
-        this.#applySiteHeaderHtml(response.headerHtml);
+        applySiteHeaderHtml(response.headerHtml);
       } else {
         const existing = this._items.find(
           (item) => item.type === "system" && item.systemKey === config.key,
@@ -685,7 +1239,7 @@ export class JantNavManager extends LitElement {
           }>;
           this.#destroySortables();
           this._items = this._items.filter((item) => item.id !== existing.id);
-          this.#applySiteHeaderHtml(response.headerHtml);
+          applySiteHeaderHtml(response.headerHtml);
         }
       }
     } catch {
@@ -708,6 +1262,20 @@ export class JantNavManager extends LitElement {
 
   get #moreItems(): NavManagerItem[] {
     return this._items.filter((i) => i.placement === "more");
+  }
+
+  #isVisibleInPreview(item: NavManagerItem): boolean {
+    return (
+      this.rssFeedsEnabled || item.type !== "system" || item.systemKey !== "rss"
+    );
+  }
+
+  get #previewHeaderItems(): NavManagerItem[] {
+    return this.#headerItems.filter((item) => this.#isVisibleInPreview(item));
+  }
+
+  get #previewMoreItems(): NavManagerItem[] {
+    return this.#moreItems.filter((item) => this.#isVisibleInPreview(item));
   }
 
   #closePreviewMore() {
@@ -733,8 +1301,8 @@ export class JantNavManager extends LitElement {
   }
 
   #renderPreview() {
-    const headerItems = this.#headerItems;
-    const moreItems = this.#moreItems;
+    const headerItems = this.#previewHeaderItems;
+    const moreItems = this.#previewMoreItems;
 
     return html`
       <div class="nav-preview">
@@ -820,7 +1388,9 @@ export class JantNavManager extends LitElement {
         ? this.labels.system
         : type === "collection"
           ? this.labels.collection
-          : this.labels.link;
+          : type === "page"
+            ? this.labels.page
+            : this.labels.link;
     return html`<span class="badge-secondary">${label}</span>`;
   }
 
@@ -900,6 +1470,54 @@ export class JantNavManager extends LitElement {
             >
               ${this.labels.save}
             </button>
+          </div>
+        </div>
+      `;
+    }
+
+    if (item.type === "page") {
+      const editHref = `${publicPath(item.url)}?edit=1`;
+      return html`
+        <div class="nav-item-edit">
+          <div class="field">
+            <label class="label">${this.labels.label}</label>
+            <input
+              type="text"
+              class="input"
+              required
+              maxlength="100"
+              .value=${this._editLabel}
+              @input=${(e: Event) => {
+                this._editLabel = (e.target as HTMLInputElement).value;
+              }}
+            />
+          </div>
+          <div class="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              class="btn-sm-ghost text-destructive"
+              @click=${() => void this.#handleDelete(item)}
+            >
+              ${this.labels.remove}
+            </button>
+            <div class="flex items-center gap-2">
+              <a
+                class="btn-sm-outline"
+                href=${editHref}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                ${this.labels.editPage}
+                <span aria-hidden="true">↗</span>
+              </a>
+              <button
+                type="button"
+                class="btn-sm"
+                @click=${() => this.#handleUpdate(item)}
+              >
+                ${this.labels.save}
+              </button>
+            </div>
           </div>
         </div>
       `;
@@ -1064,6 +1682,414 @@ export class JantNavManager extends LitElement {
     `;
   }
 
+  #renderAddPageSection() {
+    return html`
+      <section class="mt-8">
+        <h2 class="text-lg font-semibold mb-1">
+          ${this.labels.addPageToNavigation}
+        </h2>
+        <p class="text-sm text-muted-foreground mb-3">
+          ${this.labels.addPageDescription}
+        </p>
+        <button
+          type="button"
+          class="btn-outline"
+          data-add-page-trigger
+          @click=${() => void this.#openPageDialog()}
+        >
+          ${this.labels.addPage}
+        </button>
+      </section>
+    `;
+  }
+
+  #renderPagePicker() {
+    const status = this._pageSearchLoading
+      ? this.labels.searchingPages
+      : this._pageSearchError
+        ? this.labels.pageSearchFailed
+        : this._pages.length === 0
+          ? this._pageQuery.trim()
+            ? this.labels.noMatchingPages
+            : this.labels.noPages
+          : "";
+
+    return html`
+      <header>
+        <h2 id="nav-page-dialog-title">${this.labels.addPage}</h2>
+        <p>${this.labels.addPageDescription}</p>
+      </header>
+      <section class="nav-page-picker-section">
+        <div class="nav-page-search-wrap">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+          <input
+            id="nav-page-search"
+            type="search"
+            class="input nav-page-search-input"
+            placeholder=${this.labels.searchPages}
+            autocomplete="off"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="nav-page-results"
+            aria-activedescendant=${this._pages.length > 0
+              ? `nav-page-result-${this._selectedPageIndex}`
+              : ""}
+            .value=${this._pageQuery}
+            @input=${(event: Event) => {
+              this._pageQuery = (event.target as HTMLInputElement).value;
+              this._selectedPageIndex = 0;
+              this.#schedulePageSearch();
+            }}
+          />
+        </div>
+
+        ${this._pages.length > 0
+          ? html`
+              <p class="nav-page-results-label">
+                ${this._pageQuery.trim()
+                  ? this.labels.searchPages
+                  : this.labels.recentPages}
+              </p>
+              <div
+                id="nav-page-results"
+                class="nav-page-results"
+                role="listbox"
+              >
+                ${this._pages.map((page, index) => {
+                  const selected = index === this._selectedPageIndex;
+                  const adding = this._addingPageId === page.id;
+                  return html`
+                    <button
+                      id=${`nav-page-result-${index}`}
+                      type="button"
+                      role="option"
+                      aria-selected=${selected ? "true" : "false"}
+                      class=${`nav-page-result${
+                        selected ? " nav-page-result-selected" : ""
+                      }`}
+                      ?disabled=${this._addingPageId !== null}
+                      @mouseenter=${() => {
+                        this._selectedPageIndex = index;
+                      }}
+                      @click=${() => void this.#addPageToNavigation(page)}
+                    >
+                      <span class="nav-page-result-copy">
+                        <span class="nav-page-result-title">${page.title}</span>
+                        <span class="nav-page-result-path"
+                          >${publicPath(`/${page.slug}`)}</span
+                        >
+                      </span>
+                      ${adding
+                        ? html`<span
+                            class="nav-page-spinner"
+                            aria-hidden="true"
+                          ></span>`
+                        : html`
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="2"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                              aria-hidden="true"
+                            >
+                              <path d="M12 5v14" />
+                              <path d="M5 12h14" />
+                            </svg>
+                          `}
+                    </button>
+                  `;
+                })}
+              </div>
+            `
+          : html`<p class="nav-page-status" role="status">${status}</p>`}
+      </section>
+      <footer class="nav-page-dialog-footer">
+        <button
+          type="button"
+          class="btn-outline nav-page-create-link"
+          @click=${this.#showCreatePage}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 5v14" />
+            <path d="M5 12h14" />
+          </svg>
+          ${this.labels.createNewPage}
+        </button>
+        <button type="button" class="btn-ghost" @click=${this.#closePageDialog}>
+          ${this.labels.cancel}
+        </button>
+      </footer>
+    `;
+  }
+
+  #renderCreatePage() {
+    const slugError = this.#pageSlugError();
+    const pagePath = this._newPageSlug.trim()
+      ? publicPath(`/${this._newPageSlug.trim()}`)
+      : publicPath("/");
+
+    return html`
+      <header>
+        <h2 id="nav-page-dialog-title">${this.labels.createPage}</h2>
+        <p>${this.labels.createPageDescription}</p>
+      </header>
+      <section>
+        <form
+          id="nav-create-page-form"
+          class="form grid gap-4"
+          @submit=${(event: Event) => {
+            event.preventDefault();
+            void this.#createPage();
+          }}
+        >
+          <div class="field">
+            <label class="label" for="nav-new-page-title"
+              >${this.labels.pageTitle}</label
+            >
+            <input
+              id="nav-new-page-title"
+              type="text"
+              class="input"
+              required
+              maxlength="300"
+              autocomplete="off"
+              .value=${this._newPageTitle}
+              @input=${(event: Event) => {
+                this._newPageTitle = (event.target as HTMLInputElement).value;
+                this._createPageError = "";
+                this.#scheduleSlugSuggestion();
+              }}
+            />
+          </div>
+          <div class="field">
+            <label class="label" for="nav-new-page-slug"
+              >${this.labels.pageAddress}</label
+            >
+            <div class="nav-page-slug-field">
+              <span class="nav-page-slug-prefix" aria-hidden="true"
+                >${publicPath("/")}</span
+              >
+              <input
+                id="nav-new-page-slug"
+                type="text"
+                class="input nav-page-slug-input"
+                maxlength="200"
+                autocomplete="off"
+                spellcheck="false"
+                .value=${this._newPageSlug}
+                @input=${(event: Event) => {
+                  this._newPageSlug = (
+                    event.target as HTMLInputElement
+                  ).value.toLowerCase();
+                  this._slugEdited = true;
+                  this._createPageError = "";
+                  this.#scheduleSlugCheck();
+                }}
+                aria-invalid=${slugError ? "true" : "false"}
+                aria-describedby="nav-new-page-slug-help"
+              />
+            </div>
+            <p
+              id="nav-new-page-slug-help"
+              class=${slugError
+                ? "text-xs text-destructive"
+                : "text-xs text-muted-foreground"}
+            >
+              ${slugError
+                ? slugError
+                : this._slugCheckLoading
+                  ? this.labels.checkingAddress
+                  : pagePath}
+            </p>
+          </div>
+          <p class="nav-page-visibility-note">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 16v-4" />
+              <path d="M12 8h.01" />
+            </svg>
+            ${this.labels.pageVisibilityHint}
+          </p>
+          ${this._createPageError
+            ? html`<p class="text-sm text-destructive" role="alert">
+                ${this._createPageError}
+              </p>`
+            : nothing}
+        </form>
+      </section>
+      <footer>
+        <button
+          type="button"
+          class="btn-ghost"
+          ?disabled=${this._creatingPage}
+          @click=${this.#showPagePicker}
+        >
+          ${this.labels.back}
+        </button>
+        <button
+          type="submit"
+          class="btn"
+          form="nav-create-page-form"
+          ?disabled=${this._creatingPage ||
+          this._slugCheckLoading ||
+          Boolean(slugError)}
+        >
+          ${this._creatingPage
+            ? this.labels.creatingPage
+            : this.labels.createPage}
+        </button>
+      </footer>
+    `;
+  }
+
+  #renderCreatedPage() {
+    const page = this._createdPage;
+    if (!page) return nothing;
+    const editHref = `${publicPath(`/${page.slug}`)}?edit=1`;
+
+    return html`
+      <header class="nav-create-success-header">
+        <span class="nav-create-success-icon" aria-hidden="true">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        </span>
+        <h2 id="nav-page-dialog-title">${this.labels.pageCreated}</h2>
+        <p>${this.labels.pageCreatedDescription}</p>
+      </header>
+      <section>
+        <div class="nav-create-success-card">
+          <span class="nav-page-result-title">${page.title}</span>
+          <span class="nav-page-result-path"
+            >${publicPath(`/${page.slug}`)}</span
+          >
+        </div>
+      </section>
+      <footer>
+        <a
+          class="btn-outline"
+          href=${editHref}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          ${this.labels.editPage}
+          <span aria-hidden="true">↗</span>
+        </a>
+        <button
+          type="button"
+          class="btn"
+          ?disabled=${this._addingPageId !== null}
+          @click=${() => void this.#addPageToNavigation(page)}
+        >
+          ${this.labels.addToNavigation}
+        </button>
+      </footer>
+    `;
+  }
+
+  #renderPageDialog() {
+    if (!this._pageDialogOpen) return nothing;
+
+    return html`
+      <dialog
+        id="nav-page-dialog"
+        class="dialog nav-page-dialog"
+        aria-labelledby="nav-page-dialog-title"
+        @cancel=${(event: Event) => {
+          event.preventDefault();
+          this.#closePageDialog();
+        }}
+        @click=${(event: Event) => {
+          if (event.target === event.currentTarget) this.#closePageDialog();
+        }}
+        @keydown=${this.#handlePageDialogKeydown}
+      >
+        <div
+          class="nav-page-dialog-panel"
+          @click=${(event: Event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            aria-label=${this.labels.cancel}
+            @click=${this.#closePageDialog}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
+          </button>
+          ${this._pageDialogView === "picker"
+            ? this.#renderPagePicker()
+            : this._pageDialogView === "create"
+              ? this.#renderCreatePage()
+              : this.#renderCreatedPage()}
+        </div>
+      </dialog>
+    `;
+  }
+
   #renderAddLinkSection() {
     return html`
       <section class="mt-8">
@@ -1175,9 +2201,17 @@ export class JantNavManager extends LitElement {
           <h2 class="text-lg font-semibold mb-1">
             ${this.labels.addCollectionToNavigation}
           </h2>
-          <p class="text-sm text-muted-foreground">
+          <p class="text-sm text-muted-foreground mb-3">
             ${this.labels.noCollections}
           </p>
+          <button
+            type="button"
+            class="btn-outline"
+            data-add-collection-trigger
+            @click=${() => void this.#openCollectionDialog()}
+          >
+            ${this.labels.createCollection}
+          </button>
         </section>
       `;
     }
@@ -1197,9 +2231,17 @@ export class JantNavManager extends LitElement {
           <h2 class="text-lg font-semibold mb-1">
             ${this.labels.addCollectionToNavigation}
           </h2>
-          <p class="text-sm text-muted-foreground">
+          <p class="text-sm text-muted-foreground mb-3">
             ${this.labels.allCollectionsAdded}
           </p>
+          <button
+            type="button"
+            class="btn-outline"
+            data-add-collection-trigger
+            @click=${() => void this.#openCollectionDialog()}
+          >
+            ${this.labels.createCollection}
+          </button>
         </section>
       `;
     }
@@ -1226,15 +2268,21 @@ export class JantNavManager extends LitElement {
         <p class="text-sm text-muted-foreground mb-3">
           ${this.labels.addCollectionDescription}
         </p>
-        <div class="relative inline-block">
+        <div
+          class="relative inline-block"
+          @keydown=${this.#handleCollectionPickerKeydown}
+        >
           <button
             type="button"
             aria-expanded=${this._showCollectionPicker}
             aria-haspopup="menu"
             class="btn-outline"
+            data-add-collection-trigger
             @click=${(e: Event) => {
               e.stopPropagation();
-              this._showCollectionPicker = !this._showCollectionPicker;
+              const opening = !this._showCollectionPicker;
+              if (opening) this.#closeLinkForm();
+              this._showCollectionPicker = opening;
               if (this._showCollectionPicker) {
                 setTimeout(() => {
                   document.addEventListener(
@@ -1319,11 +2367,190 @@ export class JantNavManager extends LitElement {
                       })}
                     `,
                   )}
+                  <div class="collection-picker-footer">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="collection-picker-create"
+                      data-create-collection-trigger
+                      @click=${() => void this.#openCollectionDialog()}
+                    >
+                      ${this.labels.createNewCollection}
+                      <span aria-hidden="true">+</span>
+                    </button>
+                  </div>
                 </div>
               `
             : nothing}
         </div>
       </section>
+    `;
+  }
+
+  #renderCreateCollection() {
+    const initial = {
+      title: "",
+      slug: "",
+      description: "",
+      sortOrder: "newest" as const,
+    };
+
+    return html`
+      <header>
+        <h2 id="nav-collection-dialog-title">
+          ${this.labels.createCollection}
+        </h2>
+        <p>${this.labels.collectionFormLabels.quickHint}</p>
+      </header>
+      <section>
+        <jant-collection-form
+          variant="quick"
+          .labels=${this.labels.collectionFormLabels}
+          .initial=${initial}
+          action=${publicPath("/api/collections")}
+          cancel-href=${publicPath(NAVIGATION_SETTINGS_PATH)}
+          @jant:collection-submit=${(event: Event) =>
+            void this.#handleCreateCollectionSubmit(event)}
+        ></jant-collection-form>
+        ${this._createCollectionError
+          ? html`<p class="mt-3 text-sm text-destructive" role="alert">
+              ${this._createCollectionError}
+            </p>`
+          : nothing}
+      </section>
+      <footer>
+        <button
+          type="button"
+          class="btn-ghost"
+          ?disabled=${this._creatingCollection}
+          @click=${this.#closeCollectionDialog}
+        >
+          ${this.labels.cancel}
+        </button>
+        <button
+          type="button"
+          class="btn"
+          ?disabled=${this._creatingCollection}
+          @click=${this.#submitCollectionForm}
+        >
+          ${this._creatingCollection
+            ? this.labels.creatingCollection
+            : this.labels.createCollection}
+        </button>
+      </footer>
+    `;
+  }
+
+  #renderCreatedCollection() {
+    const collection = this._createdCollection;
+    if (!collection) return nothing;
+
+    const returnTo = publicPath(NAVIGATION_SETTINGS_PATH);
+    const editHref = `${publicPath(
+      getCollectionEditPath(collection.slug),
+    )}?returnTo=${encodeURIComponent(returnTo)}`;
+
+    return html`
+      <header class="nav-create-success-header">
+        <span class="nav-create-success-icon" aria-hidden="true">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        </span>
+        <h2 id="nav-collection-dialog-title">
+          ${this.labels.collectionFormLabels.createdLabel}
+        </h2>
+        <p>${this.labels.collectionCreatedDescription}</p>
+      </header>
+      <section>
+        <div class="nav-create-success-card">
+          <span class="nav-page-result-title">${collection.title}</span>
+          <span class="nav-page-result-path">
+            ${publicPath(getCollectionPagePath(collection.slug))}
+          </span>
+        </div>
+      </section>
+      <footer>
+        <a
+          class="btn-outline"
+          href=${editHref}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          ${this.labels.editCollection}
+          <span aria-hidden="true">↗</span>
+        </a>
+        <button
+          type="button"
+          class="btn"
+          ?disabled=${this._addingCollectionId !== null}
+          @click=${() => void this.#handleAddCollection(collection.id)}
+        >
+          ${this.labels.addToNavigation}
+        </button>
+      </footer>
+    `;
+  }
+
+  #renderCollectionDialog() {
+    if (!this._collectionDialogOpen) return nothing;
+
+    return html`
+      <dialog
+        id="nav-collection-dialog"
+        class="dialog nav-collection-dialog"
+        aria-labelledby="nav-collection-dialog-title"
+        @cancel=${(event: Event) => {
+          event.preventDefault();
+          this.#closeCollectionDialog();
+        }}
+        @click=${(event: Event) => {
+          if (event.target === event.currentTarget) {
+            this.#closeCollectionDialog();
+          }
+        }}
+        @keydown=${this.#handleCollectionDialogKeydown}
+      >
+        <div
+          class="nav-collection-dialog-panel"
+          @click=${(event: Event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            aria-label=${this.labels.cancel}
+            @click=${this.#closeCollectionDialog}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
+          </button>
+          ${this._collectionDialogView === "create"
+            ? this.#renderCreateCollection()
+            : this.#renderCreatedCollection()}
+        </div>
+      </dialog>
     `;
   }
 
@@ -1405,8 +2632,10 @@ export class JantNavManager extends LitElement {
         </div>
       </section>
 
-      ${this.#renderSuggestedLinksSection()} ${this.#renderAddLinkSection()}
-      ${this.#renderAddCollectionSection()} ${this.#renderSystemToggles()}
+      ${this.#renderSuggestedLinksSection()} ${this.#renderAddPageSection()}
+      ${this.#renderAddCollectionSection()} ${this.#renderAddLinkSection()}
+      ${this.#renderSystemToggles()} ${this.#renderPageDialog()}
+      ${this.#renderCollectionDialog()}
     `;
   }
 }

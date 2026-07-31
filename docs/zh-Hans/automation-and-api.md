@@ -22,7 +22,7 @@ Jant 提供两条通道：
 
 - 写脚本、跑定时任务、接外部系统：用 **HTTP API**。
 - 调用方本身就是 MCP client：用 **MCP**。
-- 一次性从别的博客或 CMS 导入内容：把 [`jant.me/skill.md`](https://jant.me/skill.md) 交给 AI 助手——一份基于同一套 HTTP API 的导入指南。详见 [导出与导入](export-and-import.md#从别的博客或-cms-迁移过来)。
+- 让 AI 助手操作某个站点：把该站点的 `/skill.md` 地址（例如 `https://example.com/skill.md`）交给它——这是一份绑定当前站点的指南，涵盖通过 HTTP 或 MCP 读取、发布、整理和迁移内容。迁移时使用其中专门的导入流程，并参阅[导出与导入](export-and-import.md#从别的博客或-cms-迁移过来)。
 
 默认走 HTTP，MCP 只在调用方已经支持工具调用协议时才更顺手。
 
@@ -52,7 +52,7 @@ Jant 提供两条通道：
 Authorization: Bearer jnt_...
 ```
 
-少量公开读接口不需要 token：`GET /api/collections`、`GET /api/collections/:id`、`GET /api/search`、`GET /api/public/posts`、`GET /api/public/posts/:slug`、`GET /api/public/archive`。
+少量公开读接口默认不需要 token：`GET /api/collections`、`GET /api/collections/:id`、`GET /api/nav-items`、`GET /api/search`、`GET /api/public/posts`、`GET /api/public/posts/:slug`、`GET /api/public/archive`。如果设置了 `PUBLIC_API_ENABLED=false`，`/api/public/*` 会对所有调用方返回 `404`；Collection、导航和搜索 JSON 读取则需要浏览器 session 或 Bearer token。包括 `/search` 在内的公开 HTML 页面不受影响。
 
 ### 常用端点
 

@@ -88,6 +88,17 @@ Public 页面（首页、Featured、Latest 等导航文案）当前固定为英�
 
 Jant 把"发布到站点"和"广播给订阅者"看成两件事。默认 `/feed` 指向 Featured，让你可以写细碎记录而不打扰订阅者。要换回传统行为，**Settings → General → Feeds → Main RSS feed** 切到 Latest。三条 feed（`/featured/feed`、`/latest/feed`、`/archive/feed`）各管一段，详见 [写作与内容组织 § 为什么默认 feed 是 Featured](writing-and-organizing.md#为什么默认-feed-是-featured)。
 
+## 为什么刚发布的帖子没有立即出现在 RSS 里？
+
+新帖子和回复发布后，Jant 默认留出五分钟的修改时间，再允许它们进入 Atom
+feeds。内容会立即显示在网页上，等待的只有 feed 分发。这段时间可以用来修正
+错误，或者在 feed 阅读器抓取前撤回内容。
+
+由于 feed 缓存和阅读器各自的轮询周期，实际看到内容的时间可能稍晚。可以在
+**Settings → Advanced → Config Editor** 中把 `RSS_PUBLISH_DELAY_SECONDS`
+设为 `0–7200` 的整数；设为 `0` 会关闭延迟。详见
+[配置 § Feed 默认值](configuration.md#feed-默认值可选)。
+
 ## 能挂在子路径下吗（例如 `example.com/blog`）？
 
 可以。设置 `SITE_PATH_PREFIX=/blog`。Cloudflare 还需要在 Workers Routes 里把 `yourdomain.com/blog*` 路由到 Worker。详见 [部署 § 部署在子路径下](deployment.md#部署在子路径下)。
@@ -136,7 +147,7 @@ Jant 把"发布到站点"和"广播给订阅者"看成两件事。默认 `/feed`
 
 ## 怎么把别的博客的内容迁进来（WordPress、Tumblr 等）？
 
-没有固定的导入器——每个平台的导出格式都不一样。最省事的办法是把 [`jant.me/skill.md`](https://jant.me/skill.md) 交给 AI 助手：这是一份专为 AI 写的导入指南，讲清楚了 Jant 的数据模型、常见来源格式怎么映射、该调哪些 API。把导出文件和站点的 API token 给它，让它来跑这次迁移。详见 [导出与导入](export-and-import.md#从别的博客或-cms-迁移过来)。
+没有固定的导入器——每个平台的导出格式都不一样。最省事的办法是把当前站点的 `/skill.md` 地址（例如 `https://example.com/skill.md`）交给 AI 助手。这份绑定当前站点的 Jant 操作指南包含专门的导入流程，讲清楚了数据模型、来源格式映射、断点续跑和迁移验证。把导出文件和站点的 API token 给它，让它来跑这次迁移。详见[导出与导入](export-and-import.md#从别的博客或-cms-迁移过来)。
 
 ## 能迁回 WordPress / Ghost 吗？
 

@@ -1,9 +1,16 @@
 import { getCollectionsDirectoryPath } from "../lib/collection-paths.js";
+import { NAVIGATION_SETTINGS_PATH } from "../lib/settings-paths.js";
+import { addCollectionToNavigation } from "./collection-navigation.js";
 import { showConfirmDialog } from "./confirm.js";
-import { showToast } from "./toast.js";
+import { showToast, showToastWithAction } from "./toast.js";
 
 interface CollectionPageActionLabels {
   edit: string;
+  addToNavigation: string;
+  addingToNavigation: string;
+  addedToNavigation: string;
+  editNavigation: string;
+  addToNavigationFailed: string;
   moreActions: string;
   deleteCollection: string;
   confirmDelete: string;
@@ -16,6 +23,11 @@ const parseLabels = (value: string | undefined): CollectionPageActionLabels => {
   if (!value) {
     return {
       edit: "",
+      addToNavigation: "",
+      addingToNavigation: "",
+      addedToNavigation: "",
+      editNavigation: "",
+      addToNavigationFailed: "",
       moreActions: "",
       deleteCollection: "",
       confirmDelete: "",
@@ -30,6 +42,11 @@ const parseLabels = (value: string | undefined): CollectionPageActionLabels => {
   } catch {
     return {
       edit: "",
+      addToNavigation: "",
+      addingToNavigation: "",
+      addedToNavigation: "",
+      editNavigation: "",
+      addToNavigationFailed: "",
       moreActions: "",
       deleteCollection: "",
       confirmDelete: "",
@@ -53,6 +70,12 @@ document
       "[data-collection-page-action='toggle-menu']",
     );
     const menu = root.querySelector<HTMLElement>("[data-collection-page-menu]");
+    const addToNavigationButton = root.querySelector<HTMLButtonElement>(
+      "[data-collection-page-action='add-to-navigation']",
+    );
+    const editNavigationLink = root.querySelector<HTMLAnchorElement>(
+      "[data-collection-page-edit-navigation]",
+    );
 
     if (!collectionId || !trigger || !menu) return;
 
@@ -93,6 +116,35 @@ document
         window.location.href = redirectUrl;
       } catch {
         showToast(labels.saveFailed, "error");
+      }
+    };
+
+    const handleAddToNavigation = async () => {
+      if (!addToNavigationButton || addToNavigationButton.disabled) return;
+
+      closeMenu(false);
+      const label = addToNavigationButton.querySelector<HTMLElement>(
+        ".collections-page-menu-item-label",
+      );
+      addToNavigationButton.disabled = true;
+      if (label) label.textContent = labels.addingToNavigation;
+
+      try {
+        await addCollectionToNavigation(collectionId);
+        addToNavigationButton.hidden = true;
+        if (editNavigationLink) editNavigationLink.hidden = false;
+        root.dataset.collectionInNavigation = "true";
+        showToastWithAction(labels.addedToNavigation, {
+          label: labels.editNavigation,
+          href:
+            editNavigationLink?.getAttribute("href") ??
+            NAVIGATION_SETTINGS_PATH,
+        });
+      } catch {
+        showToast(labels.addToNavigationFailed, "error");
+      } finally {
+        addToNavigationButton.disabled = false;
+        if (label) label.textContent = labels.addToNavigation;
       }
     };
 
@@ -148,6 +200,10 @@ document
       if (action === "delete") {
         event.preventDefault();
         void handleDelete();
+      }
+      if (action === "add-to-navigation") {
+        event.preventDefault();
+        void handleAddToNavigation();
       }
     });
 

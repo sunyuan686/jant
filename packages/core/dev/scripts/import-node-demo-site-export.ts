@@ -379,7 +379,9 @@ async function ensureLocalDevShell(
   const onboardingComplete = await settings.isOnboardingComplete();
 
   await siteMembers.ensure(site.id, ownerUserId, "owner");
-  await navItems.ensureSystemDefaults();
+  if (!onboardingComplete) {
+    await navItems.materializeDefaultNavigation();
+  }
 
   if (!existingSiteName) {
     await settings.set("SITE_NAME", siteName);

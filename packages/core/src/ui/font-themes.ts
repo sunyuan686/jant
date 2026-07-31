@@ -10,6 +10,11 @@
  */
 
 import type { MessageDescriptor } from "@lingui/core";
+import {
+  getCjkFontFromLanguageTag,
+  isCjkSerifFont,
+  type CjkSerifFont,
+} from "../i18n/detect.js";
 
 /**
  * A font theme definition with heading + body pairing.
@@ -29,29 +34,35 @@ export interface FontTheme {
   description: MessageDescriptor;
 }
 
-const DEFAULT_CJK_SERIF_FALLBACK =
-  '"Songti SC", STSong, SimSun, "Songti TC", PMingLiU, MingLiU, "Noto Serif SC", "Noto Serif CJK SC", "Noto Serif TC", "Noto Serif CJK TC"';
+const DEFAULT_CJK_SERIF_FALLBACK = '"Jant Language Fallback"';
+const DEFAULT_CJK_SANS_FALLBACK = '"Jant Language Fallback"';
 const HANS_CJK_SERIF_FALLBACK =
   '"Songti SC", STSong, SimSun, "Noto Serif SC", "Noto Serif CJK SC", "Songti TC", PMingLiU, MingLiU, "Noto Serif TC", "Noto Serif CJK TC"';
+const HANS_CJK_SANS_FALLBACK =
+  '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC", "PingFang TC", "Hiragino Sans CNS", "Microsoft JhengHei", "Noto Sans TC", "Noto Sans CJK TC"';
 const HANT_CJK_SERIF_FALLBACK =
   '"Songti TC", PMingLiU, MingLiU, "Noto Serif TC", "Noto Serif CJK TC", "Songti SC", STSong, SimSun, "Noto Serif SC", "Noto Serif CJK SC"';
+const HANT_CJK_SANS_FALLBACK =
+  '"PingFang TC", "Hiragino Sans CNS", "Microsoft JhengHei", "Noto Sans TC", "Noto Sans CJK TC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC"';
 const JP_CJK_SERIF_FALLBACK =
-  '"Hiragino Mincho ProN", "Hiragino Mincho Pro", "Yu Mincho", YuMincho, "Noto Serif JP", "Noto Serif CJK JP", "MS PMincho", "MS Mincho", serif';
+  '"Hiragino Mincho ProN", "Hiragino Mincho Pro", "Yu Mincho", YuMincho, "Noto Serif JP", "Noto Serif CJK JP", "MS PMincho", "MS Mincho"';
+const JP_CJK_SANS_FALLBACK =
+  '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", YuGothic, "Noto Sans JP", "Noto Sans CJK JP", Meiryo';
 const KO_CJK_SERIF_FALLBACK =
-  '"Batang", "Noto Serif KR", "Noto Serif CJK KR", "NanumMyeongjo", serif';
+  'Batang, "Noto Serif KR", "Noto Serif CJK KR", NanumMyeongjo';
+const KO_CJK_SANS_FALLBACK =
+  '"Apple SD Gothic Neo", "Noto Sans KR", "Noto Sans CJK KR", "Malgun Gothic"';
 const CJK_SERIF_FALLBACK_VAR = "var(--font-cjk-serif-fallback)";
+const CJK_SANS_FALLBACK_VAR = "var(--font-cjk-sans-fallback)";
 
 /** System sans-serif stack */
-const SANS =
-  'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, "PingFang TC", "PingFang SC", "Hiragino Sans CNS", "Hiragino Sans GB", "Microsoft JhengHei", "Microsoft YaHei", "Noto Sans CJK TC", "Noto Sans CJK SC", sans-serif';
+const SANS = `ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, ${CJK_SANS_FALLBACK_VAR}, sans-serif`;
 
 /** Humanist sans stack with self-hosted Latin and system CJK fallback */
-const HUMANIST_SANS =
-  '"Source Sans 3 Variable", "Source Sans 3", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, "PingFang TC", "PingFang SC", "Hiragino Sans CNS", "Hiragino Sans GB", "Microsoft JhengHei", "Microsoft YaHei", "Noto Sans CJK TC", "Noto Sans CJK SC", sans-serif';
+const HUMANIST_SANS = `"Source Sans 3 Variable", "Source Sans 3", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, ${CJK_SANS_FALLBACK_VAR}, sans-serif`;
 
 /** Narrower newsroom sans for headlines and labels */
-const NEWSROOM_SANS =
-  '"News Cycle", "Franklin Gothic Medium", "Arial Narrow", "Helvetica Neue", Helvetica, Arial, "PingFang TC", "PingFang SC", "Hiragino Sans CNS", "Hiragino Sans GB", "Microsoft JhengHei", "Microsoft YaHei", "Noto Sans CJK TC", "Noto Sans CJK SC", sans-serif';
+const NEWSROOM_SANS = `"News Cycle", "Franklin Gothic Medium", "Arial Narrow", "Helvetica Neue", Helvetica, Arial, ${CJK_SANS_FALLBACK_VAR}, sans-serif`;
 
 /**
  * Editorial serif stack
@@ -81,8 +92,7 @@ const TUFTE_SERIF = `et-book, Palatino, "Palatino Linotype", "Palatino LT STD", 
  *
  * Futura (macOS); Century Gothic (Windows); clean geometric proportions
  */
-const GEOMETRIC_SANS =
-  '"Avenir Next", Avenir, Futura, "Century Gothic", Montserrat, "Noto Sans", "PingFang TC", "PingFang SC", "Hiragino Sans CNS", "Hiragino Sans GB", "Microsoft JhengHei", "Microsoft YaHei", "Noto Sans CJK TC", "Noto Sans CJK SC", sans-serif';
+const GEOMETRIC_SANS = `"Avenir Next", Avenir, Futura, "Century Gothic", Montserrat, "Noto Sans", ${CJK_SANS_FALLBACK_VAR}, sans-serif`;
 
 /**
  * Resolve all CSS variables a font theme contributes.
@@ -107,35 +117,73 @@ export function getFontThemeCssVariables(
 }
 
 /**
- * Resolve runtime CJK serif fallbacks for the configured CJK font setting.
+ * Resolve the language font profile for the current content language.
  *
- * @param cjkSerifFont - CJK serif font setting ("off", "zh-Hans", "zh-Hant", "ja", "ko")
- * @returns CSS variable overrides for CJK sites
+ * An adapted content language always wins. The explicit CJK setting is a
+ * fallback for sites whose primary content language does not have a profile.
  *
+ * @param siteLanguage - BCP 47 content language tag
+ * @param cjkFallback - Explicit CJK fallback setting
+ * @returns Resolved CJK font profile, or `undefined` for the default stack
  * @example
- * ```typescript
- * const vars = getCjkSerifCssVariables("zh-Hans");
- * // => { "--font-cjk-serif-fallback": '"Songti SC", ...' }
- * ```
+ * resolveCjkFontProfile("zh-TW", "zh-Hans") // "zh-Hant"
  */
-export function getCjkSerifCssVariables(
-  cjkSerifFont?: string,
+export function resolveCjkFontProfile(
+  siteLanguage?: string,
+  cjkFallback?: string,
+): Exclude<CjkSerifFont, "off"> | undefined {
+  const contentProfile = siteLanguage
+    ? getCjkFontFromLanguageTag(siteLanguage)
+    : undefined;
+  if (contentProfile) return contentProfile;
+
+  return isCjkSerifFont(cjkFallback) && cjkFallback !== "off"
+    ? cjkFallback
+    : undefined;
+}
+
+/**
+ * Build serif and sans fallback variables for the resolved language profile.
+ *
+ * @param siteLanguage - BCP 47 content language tag
+ * @param cjkFallback - Explicit CJK fallback setting
+ * @returns CSS variables consumed by every font theme
+ * @example
+ * getCjkFontCssVariables("en", "zh-Hans")
+ * // => { "--font-cjk-serif-fallback": '"Songti SC", ...', ... }
+ */
+export function getCjkFontCssVariables(
+  siteLanguage?: string,
+  cjkFallback?: string,
 ): Record<string, string> {
-  switch (cjkSerifFont) {
+  switch (resolveCjkFontProfile(siteLanguage, cjkFallback)) {
     case "zh-Hans":
-      return { "--font-cjk-serif-fallback": HANS_CJK_SERIF_FALLBACK };
+      return {
+        "--font-cjk-serif-fallback": HANS_CJK_SERIF_FALLBACK,
+        "--font-cjk-sans-fallback": HANS_CJK_SANS_FALLBACK,
+      };
     case "zh-Hant":
-      return { "--font-cjk-serif-fallback": HANT_CJK_SERIF_FALLBACK };
+      return {
+        "--font-cjk-serif-fallback": HANT_CJK_SERIF_FALLBACK,
+        "--font-cjk-sans-fallback": HANT_CJK_SANS_FALLBACK,
+      };
     case "ja":
-      return { "--font-cjk-serif-fallback": JP_CJK_SERIF_FALLBACK };
+      return {
+        "--font-cjk-serif-fallback": JP_CJK_SERIF_FALLBACK,
+        "--font-cjk-sans-fallback": JP_CJK_SANS_FALLBACK,
+      };
     case "ko":
-      return { "--font-cjk-serif-fallback": KO_CJK_SERIF_FALLBACK };
+      return {
+        "--font-cjk-serif-fallback": KO_CJK_SERIF_FALLBACK,
+        "--font-cjk-sans-fallback": KO_CJK_SANS_FALLBACK,
+      };
     default:
       return {};
   }
 }
 
 export const DEFAULT_FONT_CJK_SERIF_FALLBACK = DEFAULT_CJK_SERIF_FALLBACK;
+export const DEFAULT_FONT_CJK_SANS_FALLBACK = DEFAULT_CJK_SANS_FALLBACK;
 
 export const BUILTIN_FONT_THEMES: FontTheme[] = [
   {

@@ -7,6 +7,7 @@ describe("getNavigationData", () => {
     const context = {
       var: {
         publicPath: "/",
+        currentSite: { id: "sit_navigation" },
         appConfig: {
           siteName: "Jant",
           sitePathPrefix: "",
@@ -34,8 +35,9 @@ describe("getNavigationData", () => {
 
     expect(result.isAuthenticated).toBe(false);
     expect(result.collections).toEqual([]);
-    expect(result.siteFooterHtml).toContain('<label for="sn-');
-    expect(result.siteFooterHtml).toContain('<span class="sidenote">');
+    expect(result.siteFooterHtml).toContain('role="doc-noteref"');
+    expect(result.siteFooterHtml).toContain('role="doc-endnotes"');
+    expect(result.siteFooterHtml).toContain("fn-2wpij13sz70fe-1");
     expect(result.siteFooterHtml).toContain("<strong>note</strong>");
     expect(result.siteFooterHtml).toContain(
       "&lt;script&gt;alert(1)&lt;/script&gt;",
@@ -95,5 +97,60 @@ describe("getNavigationData", () => {
 
     expect(result.links[0]?.url).toBe("/featured");
     expect(result.links[1]?.url).toBe("/");
+  });
+
+  it("hides only the built-in RSS item when feeds are disabled", async () => {
+    const context = {
+      var: {
+        publicPath: "/",
+        appConfig: {
+          siteName: "Jant",
+          sitePathPrefix: "",
+          siteOrigin: "https://example.com",
+          siteDescription: "",
+          siteDescriptionExplicit: false,
+          siteAvatarUrl: "",
+          showHeaderAvatar: false,
+          siteFooter: "",
+          rssFeedsEnabled: false,
+        },
+        services: {
+          navItems: {
+            list: async () => [
+              {
+                id: "nav_rss",
+                type: "system",
+                systemKey: "rss",
+                label: "Feed",
+                url: "/feed",
+                placement: "header",
+                position: "a0",
+                createdAt: 1,
+                updatedAt: 1,
+              },
+              {
+                id: "nav_custom",
+                type: "link",
+                label: "Custom feed link",
+                url: "/feed",
+                placement: "header",
+                position: "a1",
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            ],
+          },
+          collections: {
+            listByRecentActivity: async () => [],
+          },
+        },
+        isAuthenticated: false,
+        session: null,
+      },
+    } as unknown as Context;
+
+    const result = await getNavigationData(context);
+
+    expect(result.links.map((link) => link.id)).toEqual(["nav_custom"]);
   });
 });

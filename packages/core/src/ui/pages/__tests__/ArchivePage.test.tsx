@@ -106,4 +106,18 @@ describe("ArchivePage", () => {
     expect(html).toContain("archive-chip-active");
     expect(html).toContain("Single posts");
   });
+
+  it("uses a recognizable quote mark for the quote format filter", () => {
+    const html = renderArchivePage({ filters: { format: "quote" } });
+
+    expect(html).toContain('class="lucide lucide-quote"');
+    expect(html).not.toContain('class="lucide lucide-text-quote"');
+  });
+
+  it("renders the feed button only when a feed href is provided", () => {
+    expect(renderArchivePage()).not.toContain('class="feed-link"');
+    expect(renderArchivePage({ feedHref: "/archive/feed" })).toContain(
+      'class="feed-link"',
+    );
+  });
 });

@@ -24,6 +24,7 @@ function renderNavigationContent(
       directoryData: { collections: [], items: [], directoryItems: [] },
       suggestedLinks: [],
       mainRssFeed: "latest",
+      rssFeedsEnabled: true,
       siteName: "Test Site",
       ...props,
     }),
@@ -51,6 +52,28 @@ describe("NavigationContent", () => {
     const html = renderNavigationContent();
 
     expect(html).toContain("Built-in links");
+  });
+
+  it("hides the saved RSS item only from the preview when feeds are off", () => {
+    const html = renderNavigationContent({
+      rssFeedsEnabled: false,
+      navItems: [
+        {
+          id: "nav_rss",
+          type: "system",
+          systemKey: "rss",
+          label: "Saved feed",
+          url: "/feed",
+          placement: "header",
+          position: "a0",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+
+    expect(html).not.toContain(">Saved feed<");
+    expect(html).toContain("&quot;systemKey&quot;:&quot;rss&quot;");
   });
 
   it("serializes suggested links with translated target labels", () => {

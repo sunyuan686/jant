@@ -114,6 +114,22 @@ Transitions use these CSS variables:
 
 Self-hosted CJK font subsets live under `packages/core/src/styles/fonts/`.
 
+Font profiles resolve in this order:
+
+1. An adapted `SITE_LANGUAGE` (`zh-Hans`, `zh-Hant`, `ja`, or `ko`, including
+   equivalent regional BCP 47 tags) selects the matching profile.
+2. `CJK_SERIF_FONT` is used only as a manual fallback when the content
+   language has no profile. Its historical setting name is retained for stored
+   configuration compatibility, but the profile supplies both serif and sans
+   fallback stacks.
+3. Other languages keep the font theme's default stack.
+
+Every font theme retains control over whether a surface uses serif or sans.
+Profiles only fill `--font-cjk-serif-fallback` and
+`--font-cjk-sans-fallback`; they never change a theme's pairing. The optional
+stylesheet supplies the self-hosted serif face, while the sans profile prefers
+locale-appropriate system families before falling back across CJK variants.
+
 - Simplified Chinese uses the vendored `Noto Serif SC` subsets in `packages/core/src/styles/fonts/noto-serif-sc/`.
 - Traditional Chinese uses vendored `Noto Serif TC` subsets in `packages/core/src/styles/fonts/noto-serif-tc/`.
 

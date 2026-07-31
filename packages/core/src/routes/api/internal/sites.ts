@@ -3,12 +3,14 @@ import { z } from "zod";
 import { requireInternalAdminApi } from "../../../middleware/auth.js";
 import { ConflictError } from "../../../lib/errors.js";
 import { parseValidated } from "../../../lib/schemas.js";
+import { rebuildPostBodyHtmlWithRuntimeSettings } from "../../../services/post.js";
 import {
   getConfiguredStorageDriver,
   getSiteResolutionMode,
 } from "../../../lib/env.js";
 import type { Bindings } from "../../../types.js";
 import type { AppVariables } from "../../../types/app-context.js";
+import { RebuildPostBodyHtmlSchema } from "./post-body-html.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
@@ -196,6 +198,28 @@ internalSitesRoutes.post(
     });
 
     return c.json(result);
+  },
+);
+
+// Rebuild one managed site's materialized body HTML projection. Hosted fleet
+// orchestration stays in the control plane; core never silently widens a
+// content-facing operation to every tenant.
+internalSitesRoutes.post(
+  "/:siteId/posts/body-html/rebuild",
+  requireInternalAdminApi(),
+  async (c) => {
+    assertHostBasedMode(c.env);
+
+    const contentType = c.req.header("Content-Type") || "";
+    const rawBody = contentType.includes("application/json")
+      ? await c.req.json().catch(() => ({}))
+      : {};
+    const body = parseValidated(RebuildPostBodyHtmlSchema, rawBody);
+    const services = c.var.servicesForSite(c.req.param("siteId"));
+
+    return c.json(
+      await rebuildPostBodyHtmlWithRuntimeSettings(services, c.env, body),
+    );
   },
 );
 

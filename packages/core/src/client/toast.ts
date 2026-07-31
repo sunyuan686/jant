@@ -96,6 +96,8 @@ const COPY_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 const CHECK_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path d="M20 6 9 17l-5-5"/></svg>';
+const TOAST_DURATION_MS = 3000;
+const ACTION_TOAST_DURATION_MS = 8000;
 
 /** Build toast inner content using safe DOM APIs (icon is trusted, text uses textContent). */
 function setToastContent(
@@ -158,14 +160,14 @@ export function showToast(message: string, type: ToastType = "success"): void {
   setTimeout(() => {
     toast.classList.add("toast-out");
     toast.addEventListener("animationend", () => toast.remove());
-  }, 3000);
+  }, TOAST_DURATION_MS);
 }
 
 /**
  * Show a toast with an action link.
  *
  * @param message - Text to display
- * @param action - Action link with label and href
+ * @param action - Action link rendered beside the message
  * @param type - Visual style: "success" (default) or "error"
  *
  * @example
@@ -191,7 +193,7 @@ export function showToastWithAction(
   setTimeout(() => {
     toast.classList.add("toast-out");
     toast.addEventListener("animationend", () => toast.remove());
-  }, 3000);
+  }, ACTION_TOAST_DURATION_MS);
 }
 
 /**
@@ -285,7 +287,7 @@ export function replaceWithAutoClose(
   setTimeout(() => {
     toast.classList.add("toast-out");
     toast.addEventListener("animationend", () => toast.remove());
-  }, 3000);
+  }, TOAST_DURATION_MS);
 }
 
 /**
@@ -293,7 +295,7 @@ export function replaceWithAutoClose(
  *
  * @param id - The toast identifier
  * @param message - New message text
- * @param action - Action link with label and href
+ * @param action - Action link rendered beside the message
  * @param type - Visual style: "success" (default) or "error"
  *
  * @example
@@ -318,7 +320,7 @@ export function replaceWithAutoCloseAction(
   setTimeout(() => {
     toast.classList.add("toast-out");
     toast.addEventListener("animationend", () => toast.remove());
-  }, 3000);
+  }, ACTION_TOAST_DURATION_MS);
 }
 
 /**

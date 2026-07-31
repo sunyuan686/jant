@@ -11,9 +11,14 @@
 
 import { LitElement, html, nothing, svg } from "lit";
 import { shouldUseShortVideoExperience } from "../../lib/video-playback.js";
-import { MEDIA_LIGHTBOX_TOGGLE_EVENT } from "../media-lightbox-events.js";
+import {
+  isMediaVideoPlaybackPaused,
+  MEDIA_LIGHTBOX_TOGGLE_EVENT,
+  setMediaVideoPlaybackPaused,
+} from "../media-lightbox-events.js";
 
 interface LightboxImage {
+  id?: string;
   url: string;
   alt: string;
   width?: number;
@@ -140,6 +145,7 @@ export class JantMediaLightbox extends LitElement {
     _videoCurrentTime: { state: true },
     _videoDuration: { state: true },
     _videoMuted: { state: true },
+    _videoPaused: { state: true },
     _imageZoomed: { state: true },
   };
 
@@ -151,6 +157,7 @@ export class JantMediaLightbox extends LitElement {
   declare _videoCurrentTime: number;
   declare _videoDuration: number;
   declare _videoMuted: boolean;
+  declare _videoPaused: boolean;
   declare _imageZoomed: boolean;
 
   createRenderRoot() {
@@ -169,6 +176,7 @@ export class JantMediaLightbox extends LitElement {
     this._videoCurrentTime = 0;
     this._videoDuration = 0;
     this._videoMuted = false;
+    this._videoPaused = false;
     this._imageZoomed = false;
   }
 
@@ -356,8 +364,7 @@ export class JantMediaLightbox extends LitElement {
 
     if (key === " " || lower === "k") {
       ke.preventDefault();
-      if (video.paused) void video.play().catch(() => {});
-      else video.pause();
+      this.#toggleVideoPlayback(video);
     } else if (key === "ArrowLeft") {
       ke.preventDefault();
       seekTo(video.currentTime - 2);
@@ -491,6 +498,7 @@ export class JantMediaLightbox extends LitElement {
         ? image.durationSeconds
         : 0;
     this._videoMuted = false;
+    this._videoPaused = isMediaVideoPlaybackPaused(image?.id);
   }
 
   #syncCurrentVideo() {
@@ -505,7 +513,15 @@ export class JantMediaLightbox extends LitElement {
 
     video.currentTime = 0;
     video.muted = this._videoMuted;
-    void video.play().catch(() => {});
+    this._videoPaused = isMediaVideoPlaybackPaused(currentImage.id);
+    if (this._videoPaused) {
+      video.pause();
+      return;
+    }
+
+    void video.play().catch(() => {
+      this._videoPaused = true;
+    });
   }
 
   #handleShortVideoLoadedMetadata = (e: Event) => {
@@ -522,6 +538,47 @@ export class JantMediaLightbox extends LitElement {
     this._videoCurrentTime = video.currentTime;
     if (Number.isFinite(video.duration) && video.duration > 0) {
       this._videoDuration = video.duration;
+    }
+  };
+
+  #handleShortVideoPlay = () => {
+    this._videoPaused = false;
+  };
+
+  #handleShortVideoPause = () => {
+    this._videoPaused = true;
+  };
+
+  #dispatchVideoPlaybackIntent(paused: boolean) {
+    const currentImage = this._images[this._currentIndex];
+    const mediaId = currentImage?.id?.trim();
+    if (!mediaId || !shouldUseShortVideoExperience(currentImage)) {
+      return;
+    }
+
+    setMediaVideoPlaybackPaused(mediaId, paused);
+  }
+
+  #toggleVideoPlayback(video: HTMLVideoElement) {
+    if (video.paused) {
+      this._videoPaused = false;
+      this.#dispatchVideoPlaybackIntent(false);
+      void video.play().catch(() => {
+        this._videoPaused = true;
+        this.#dispatchVideoPlaybackIntent(true);
+      });
+      return;
+    }
+
+    video.pause();
+    this._videoPaused = true;
+    this.#dispatchVideoPlaybackIntent(true);
+  }
+
+  #handleShortVideoPlaybackToggle = () => {
+    const video = this.querySelector<HTMLVideoElement>(".media-lightbox-video");
+    if (video) {
+      this.#toggleVideoPlayback(video);
     }
   };
 
@@ -592,7 +649,7 @@ export class JantMediaLightbox extends LitElement {
       !!shortVideoFrameSize &&
       shortVideoFrameSize.height > shortVideoFrameSize.width;
     const shortVideoFrameStyle = shortVideoFrameSize
-      ? `width:${shortVideoFrameSize.width}px;height:${shortVideoFrameSize.height}px;`
+      ? `--media-lightbox-short-width:${shortVideoFrameSize.width}px;--media-lightbox-short-height:${shortVideoFrameSize.height}px;`
       : nothing;
     const progressMax =
       this._videoDuration > 0
@@ -642,24 +699,49 @@ export class JantMediaLightbox extends LitElement {
             ${isVideo
               ? usesShortVideoControls
                 ? html`<div
-                    class=${`media-lightbox-short-frame${isPortraitShortVideo ? " media-lightbox-short-frame-portrait" : " media-lightbox-short-frame-landscape"}`}
+                    class=${`media-lightbox-short-frame${shortVideoFrameSize ? " media-lightbox-short-frame-contained" : ""}${isPortraitShortVideo ? " media-lightbox-short-frame-portrait" : " media-lightbox-short-frame-landscape"}`}
                     style=${shortVideoFrameStyle}
                   >
-                    <video
-                      class="media-lightbox-video media-lightbox-video-short"
-                      src=${img?.url ?? ""}
-                      poster=${img?.posterUrl ?? ""}
-                      autoplay
-                      playsinline
-                      loop
-                      ?muted=${this._videoMuted}
-                      @focus=${this.#handleVideoFocus}
-                      @loadedmetadata=${this.#handleShortVideoLoadedMetadata}
-                      @timeupdate=${this.#handleShortVideoTimeUpdate}
-                    ></video>
+                    <div class="media-lightbox-short-viewport">
+                      <video
+                        class="media-lightbox-video media-lightbox-video-short"
+                        src=${img?.url ?? ""}
+                        poster=${img?.posterUrl ?? ""}
+                        ?autoplay=${!this._videoPaused}
+                        playsinline
+                        loop
+                        ?muted=${this._videoMuted}
+                        @click=${this.#handleShortVideoPlaybackToggle}
+                        @focus=${this.#handleVideoFocus}
+                        @loadedmetadata=${this.#handleShortVideoLoadedMetadata}
+                        @timeupdate=${this.#handleShortVideoTimeUpdate}
+                        @play=${this.#handleShortVideoPlay}
+                        @pause=${this.#handleShortVideoPause}
+                      ></video>
+                    </div>
                     <div
                       class=${`media-lightbox-short-controls${isPortraitShortVideo ? " media-lightbox-short-controls-portrait" : ""}`}
                     >
+                      <button
+                        type="button"
+                        class="media-lightbox-short-playback"
+                        @click=${this.#handleShortVideoPlaybackToggle}
+                        aria-label=${this._videoPaused
+                          ? "Play video"
+                          : "Pause video"}
+                      >
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                          aria-hidden="true"
+                        >
+                          ${this._videoPaused
+                            ? svg`<path d="M8 5v14l11-7z" />`
+                            : svg`<path d="M6 5h4v14H6zM14 5h4v14h-4z" />`}
+                        </svg>
+                      </button>
                       <input
                         class="media-lightbox-short-progress"
                         type="range"

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "../../../__tests__/helpers/app.js";
 import { archiveRoutes } from "../archive.js";
 
@@ -21,13 +21,45 @@ async function fetchFeed(
   return res.text();
 }
 
-function setupApp() {
-  const { app, services } = createTestApp({ authenticated: false });
+function setupApp(rssPublishDelaySeconds = 0) {
+  const { app, services } = createTestApp({
+    authenticated: false,
+    rssPublishDelaySeconds,
+  });
   app.route("/archive", archiveRoutes);
   return { app, services };
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("archive feed filter params", () => {
+  it("applies the RSS publication delay", async () => {
+    const currentTime = 2_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(currentTime * 1000);
+    const { app, services } = setupApp(300);
+    await services.posts.create({
+      format: "note",
+      title: "Eligible Archive Post",
+      bodyMarkdown: "Old enough for RSS",
+      status: "published",
+      publishedAt: currentTime - 300,
+    });
+    await services.posts.create({
+      format: "note",
+      title: "Recent Archive Post",
+      bodyMarkdown: "Still inside the edit window",
+      status: "published",
+      publishedAt: currentTime,
+    });
+
+    const xml = await fetchFeed(app, "");
+
+    expect(xml).toContain("Eligible Archive Post");
+    expect(xml).not.toContain("Recent Archive Post");
+  });
+
   it("filters by title with the new param and the legacy fallback", async () => {
     const { app, services } = setupApp();
     await services.posts.create({
@@ -84,9 +116,22 @@ describe("archive feed filter params", () => {
       format: "note",
       bodyMarkdown: "text only body",
     });
+    await services.media.create({
+      filename: "unattached.jpg",
+      originalName: "unattached.jpg",
+      mimeType: "image/jpeg",
+      size: 1024,
+      storageKey: "media/unattached.jpg",
+    });
 
     const fresh = await fetchFeed(app, "?media=none");
     expect(fresh).toContain("text only body");
+
+    const page = await app.request("/archive?media=none");
+    expect(page.status).toBe(200);
+    const pageHtml = await page.text();
+    expect(pageHtml).toContain('aria-label="1 thread"');
+    expect(pageHtml).toContain("text only body");
 
     const legacy = await fetchFeed(app, "?hasMedia=0");
     expect(legacy).toContain("text only body");
@@ -131,5 +176,62 @@ describe("archive page legacy param redirect", () => {
     const res = await app.request("/archive?title=any&hasTitle=0");
     expect(res.status).toBe(308);
     expect(res.headers.get("location")).toBe("/archive?title=any");
+  });
+});
+
+describe("archive page ordering", () => {
+  it("orders threads by their root publication time, not recent replies", async () => {
+    const { app, services } = setupApp();
+    const olderThread = await services.posts.create({
+      format: "note",
+      title: "Older active thread",
+      bodyMarkdown: "older root",
+      publishedAt: Date.UTC(2024, 0, 1) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "recent reply",
+      replyToId: olderThread.id,
+      publishedAt: Date.UTC(2026, 0, 1) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      title: "Newer root thread",
+      bodyMarkdown: "newer root",
+      publishedAt: Date.UTC(2025, 0, 1) / 1000,
+    });
+
+    const res = await app.request("/archive");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+
+    expect(html.indexOf("Newer root thread")).toBeLessThan(
+      html.indexOf("Older active thread"),
+    );
+  });
+
+  it("keeps newer posts ahead of older pinned posts", async () => {
+    const { app, services } = setupApp();
+    await services.posts.create({
+      format: "note",
+      title: "Older pinned post",
+      bodyMarkdown: "older",
+      pinned: true,
+      publishedAt: Date.UTC(2025, 0, 1) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      title: "Newer unpinned post",
+      bodyMarkdown: "newer",
+      publishedAt: Date.UTC(2026, 0, 1) / 1000,
+    });
+
+    const res = await app.request("/archive?view=list");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+
+    expect(html.indexOf("Newer unpinned post")).toBeLessThan(
+      html.indexOf("Older pinned post"),
+    );
   });
 });

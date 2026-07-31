@@ -18,7 +18,7 @@ import {
 import { buildThemeStyle, resolveBuiltinTheme } from "../lib/theme.js";
 import {
   BUILTIN_FONT_THEMES,
-  getCjkSerifCssVariables,
+  getCjkFontCssVariables,
   getFontThemeCssVariables,
 } from "../ui/font-themes.js";
 
@@ -52,7 +52,7 @@ export function withConfig(): MiddlewareHandler<Env> {
       (f) => f.id === appConfig.fontThemeId,
     );
     const fontOverrides = {
-      ...getCjkSerifCssVariables(appConfig.cjkSerifFont),
+      ...getCjkFontCssVariables(appConfig.siteLanguage, appConfig.cjkSerifFont),
       ...(fontTheme ? getFontThemeCssVariables(fontTheme) : {}),
     };
 

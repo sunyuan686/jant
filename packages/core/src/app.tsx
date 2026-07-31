@@ -55,6 +55,7 @@ import {
 import { telegramWebhookRoutes } from "./routes/api/telegram.js";
 import { internalTextAttachmentsRoutes } from "./routes/api/internal/text-attachments.js";
 import { internalSearchReindexRoutes } from "./routes/api/internal/search-reindex.js";
+import { internalPostBodyHtmlRoutes } from "./routes/api/internal/post-body-html.js";
 import { internalUploadsRoutes } from "./routes/api/internal/uploads.js";
 import { publicArchiveApiRoutes } from "./routes/api/public/archive.js";
 import { publicPostsApiRoutes } from "./routes/api/public/posts.js";
@@ -65,11 +66,13 @@ import { composeRoutes } from "./routes/compose.js";
 import { feedRoutes } from "./routes/feed/feed.js";
 import { sitemapRoutes } from "./routes/feed/sitemap.js";
 import { manifestRoutes } from "./routes/feed/manifest.js";
+import { siteSkillRoutes } from "./routes/site-skill.js";
 
 // Middleware
 import { requireAuth } from "./middleware/auth.js";
 import { attachSession } from "./middleware/session.js";
 import { defaultCacheControl } from "./middleware/cache-control.js";
+import { requireRssFeedsEnabled } from "./middleware/public-content-access.js";
 import { requireOnboarding } from "./middleware/onboarding.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { withConfig } from "./middleware/config.js";
@@ -355,6 +358,7 @@ export function createApp(): App {
   app.route("/api/internal/sites", internalSitesRoutes);
   app.route("/api/internal/text-attachments", internalTextAttachmentsRoutes);
   app.route("/api/internal/search/reindex", internalSearchReindexRoutes);
+  app.route("/api/internal/posts/body-html", internalPostBodyHtmlRoutes);
   app.route("/api/internal/uploads", internalUploadsRoutes);
   app.route("/api/github-sync", githubSyncWebhookRoutes);
   app.route("/api/telegram", telegramWebhookRoutes);
@@ -382,7 +386,9 @@ export function createApp(): App {
       if (!object) return c.notFound();
 
       const markdown = await new Response(object.body).text();
-      const html = renderTiptapJson(markdownToTiptapJson(markdown));
+      const html = renderTiptapJson(markdownToTiptapJson(markdown), {
+        namespace: media.id,
+      });
 
       return c.json({ html, markdown }, 200, {
         "Cache-Control": "public, no-cache",
@@ -485,8 +491,8 @@ export function createApp(): App {
   // Redirect middleware — only handles redirect-type custom URLs
   app.use("*", async (c, next) => {
     const path = new URL(c.req.url).pathname;
-    // Skip redirect check for API routes and static assets
-    if (path.startsWith("/api/") || isAssetPath(path)) {
+    // Skip redirect lookup for fixed machine routes and static assets.
+    if (path.startsWith("/api/") || path === "/skill.md" || isAssetPath(path)) {
       return next();
     }
 
@@ -511,7 +517,14 @@ export function createApp(): App {
   app.use("*", withConfig());
   app.use("*", i18nMiddleware());
 
+  // Feed URLs are spread across page route groups (including dynamic
+  // collection aliases), so one config-aware guard owns the URL policy.
+  app.use("*", requireRssFeedsEnabled());
+
   // --- Routes that need config ---
+
+  // Public machine-readable site guide
+  app.route("/", siteSkillRoutes);
 
   // API Routes
   app.route("/api/public/posts", publicPostsApiRoutes);

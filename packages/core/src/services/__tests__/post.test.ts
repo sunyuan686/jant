@@ -4,13 +4,16 @@ import {
   createTestDatabase,
   DEFAULT_TEST_SITE_ID,
 } from "../../__tests__/helpers/db.js";
-import { postCollections, posts } from "../../db/schema.js";
+import { threadCollections, posts, sites } from "../../db/schema.js";
 import { createPostService } from "../post.js";
 import { createMediaService } from "../media.js";
 import { createCollectionService } from "../collection.js";
+import { createNavItemService } from "../navigation.js";
 import type { Database } from "../../db/index.js";
 import { createPathService } from "../path.js";
 import type { MediaService } from "../media.js";
+import { POST_BODY_HTML_VERSION } from "../../lib/post-body-html.js";
+import type BetterSqlite3 from "better-sqlite3";
 
 function createMockStorage() {
   const files = new Map<string, { body: Uint8Array; contentType?: string }>();
@@ -44,12 +47,14 @@ function createMockStorage() {
 
 describe("PostService", () => {
   let db: Database;
+  let sqlite: BetterSqlite3.Database;
   let postService: ReturnType<typeof createPostService>;
   let collectionService: ReturnType<typeof createCollectionService>;
 
   beforeEach(() => {
     const testDb = createTestDatabase();
     db = testDb.db as unknown as Database;
+    sqlite = testDb.sqlite;
     postService = createPostService(
       db,
       { slugIdLength: 5 },
@@ -150,6 +155,26 @@ describe("PostService", () => {
       });
 
       expect(post.bodyHtml).toContain("<strong>bold</strong>");
+    });
+
+    it("writes current namespaced body HTML projection metadata", async () => {
+      const post = await postService.create({
+        format: "note",
+        bodyMarkdown: "Body[^1]\n\n[^1]: Definition",
+      });
+      const row = await db
+        .select({
+          bodyHtml: posts.bodyHtml,
+          bodyHtmlVersion: posts.bodyHtmlVersion,
+        })
+        .from(posts)
+        .where(eq(posts.id, post.id))
+        .limit(1);
+
+      expect(row[0]?.bodyHtmlVersion).toBe(POST_BODY_HTML_VERSION);
+      expect(row[0]?.bodyHtml).toMatch(/id="fn-[a-z0-9]{13}-1"/);
+      expect(row[0]?.bodyHtml).not.toContain(post.id);
+      expect(post.bodyHtml).toContain('role="doc-endnotes"');
     });
 
     it("sets publishedAt and timestamps", async () => {
@@ -342,6 +367,16 @@ describe("PostService", () => {
           replyToId: "00000000-0000-0000-0000-000000009999",
         }),
       ).rejects.toThrow("Parent post not found");
+    });
+
+    it("rejects reserved paths that would otherwise become aliases", async () => {
+      await expect(
+        postService.create({
+          format: "note",
+          bodyMarkdown: "reserved path",
+          path: "skill.md",
+        }),
+      ).rejects.toThrow('Path "skill.md" is reserved and cannot be used');
     });
 
     it("rolls back the post insert when slug persistence fails inside the batch", async () => {
@@ -681,6 +716,55 @@ describe("PostService", () => {
       expect(notFeatured).toHaveLength(1);
       expect(notFeatured[0]?.featuredAt).toBeNull();
       expect(notFeatured[0]?.bodyText).toBe("normal post");
+    });
+
+    it("orders Featured Post lists and cursors by publishedAt", async () => {
+      const oldest = await postService.create({
+        format: "note",
+        bodyMarkdown: "oldest",
+        featured: true,
+        publishedAt: 1000,
+      });
+      const middle = await postService.create({
+        format: "note",
+        bodyMarkdown: "middle",
+        featured: true,
+        publishedAt: 2000,
+      });
+      const newest = await postService.create({
+        format: "note",
+        bodyMarkdown: "newest",
+        featured: true,
+        publishedAt: 3000,
+      });
+
+      await db
+        .update(posts)
+        .set({ featuredAt: 9000 })
+        .where(eq(posts.id, oldest.id));
+      await db
+        .update(posts)
+        .set({ featuredAt: 8000 })
+        .where(eq(posts.id, middle.id));
+      await db
+        .update(posts)
+        .set({ featuredAt: 7000 })
+        .where(eq(posts.id, newest.id));
+
+      const firstPage = await postService.list({
+        featured: true,
+        ignorePinnedSort: true,
+        limit: 2,
+      });
+      const secondPage = await postService.list({
+        featured: true,
+        ignorePinnedSort: true,
+        cursor: middle.id,
+        limit: 2,
+      });
+
+      expect(firstPage.map((post) => post.id)).toEqual([newest.id, middle.id]);
+      expect(secondPage.map((post) => post.id)).toEqual([oldest.id]);
     });
 
     it("excludes posts hidden from Latest when requested", async () => {
@@ -1072,9 +1156,9 @@ describe("PostService", () => {
           rating: i + 1,
         });
 
-        await db.insert(postCollections).values({
+        await db.insert(threadCollections).values({
           siteId: DEFAULT_TEST_SITE_ID,
-          postId: post.id,
+          threadId: post.id,
           collectionId: collection.id,
           createdAt: 100 + i,
         });
@@ -1298,6 +1382,76 @@ describe("PostService", () => {
       }
     });
 
+    it("updates the shared Thread collections when editing a child", async () => {
+      const firstCollection = await collectionService.create({
+        slug: "first-thread-collection",
+        title: "First",
+      });
+      const secondCollection = await collectionService.create({
+        slug: "second-thread-collection",
+        title: "Second",
+      });
+      const root = await postService.create({
+        format: "note",
+        bodyMarkdown: "root",
+        collectionIds: [firstCollection.id],
+      });
+      const child = await postService.create({
+        format: "note",
+        bodyMarkdown: "child",
+        replyToId: root.id,
+      });
+
+      expect(
+        (await collectionService.getCollectionsByPostId(child.id)).map(
+          (collection) => collection.id,
+        ),
+      ).toEqual([firstCollection.id]);
+
+      await postService.update(child.id, {
+        collectionIds: [secondCollection.id],
+      });
+
+      const [rootCollections, childCollections, rows] = await Promise.all([
+        collectionService.getCollectionsByPostId(root.id),
+        collectionService.getCollectionsByPostId(child.id),
+        db.select().from(threadCollections),
+      ]);
+      expect(rootCollections.map((collection) => collection.id)).toEqual([
+        secondCollection.id,
+      ]);
+      expect(childCollections.map((collection) => collection.id)).toEqual([
+        secondCollection.id,
+      ]);
+      expect(rows).toEqual([
+        expect.objectContaining({
+          threadId: root.id,
+          collectionId: secondCollection.id,
+        }),
+      ]);
+    });
+
+    it("rejects Collection membership while creating a child", async () => {
+      const collection = await collectionService.create({
+        slug: "reply-create-collection",
+        title: "Reply Create Collection",
+      });
+      const root = await postService.create({
+        format: "note",
+        bodyMarkdown: "root",
+      });
+
+      await expect(
+        postService.create({
+          format: "note",
+          bodyMarkdown: "child",
+          replyToId: root.id,
+          collectionIds: [collection.id],
+        }),
+      ).rejects.toThrow("Cannot set Collections while creating a Thread reply");
+      expect(await collectionService.getThreadIds(collection.id)).toEqual([]);
+    });
+
     it("sets publishedAt when publishing a draft", async () => {
       const post = await postService.create({
         format: "note",
@@ -1316,6 +1470,9 @@ describe("PostService", () => {
       expect(published?.status).toBe("published");
       expect(published?.publishedAt).toBeTypeOf("number");
       expect((published?.publishedAt ?? 0) >= post.updatedAt).toBe(true);
+      expect(
+        (await postService.list({ status: "draft" })).map((draft) => draft.id),
+      ).not.toContain(post.id);
     });
 
     it("clears publishedAt when converting a published post back to draft", async () => {
@@ -1413,11 +1570,17 @@ describe("PostService", () => {
       expect(updated?.pinnedAt).toBeTypeOf("number");
     });
 
-    it("updates slug", async () => {
+    it("updates slug and its page navigation URL", async () => {
       const post = await postService.create({
         format: "note",
-        bodyMarkdown: "test",
+        title: "Test page",
         slug: "old-slug",
+        visibility: "latest_hidden",
+      });
+      const navItemService = createNavItemService(db, DEFAULT_TEST_SITE_ID);
+      const navItem = await navItemService.create({
+        type: "page",
+        postId: post.id,
       });
 
       const updated = await postService.update(post.id, {
@@ -1425,6 +1588,25 @@ describe("PostService", () => {
       });
 
       expect(updated?.slug).toBe("new-slug");
+      expect(await navItemService.getById(navItem.id)).toMatchObject({
+        label: "Test page",
+        url: "/new-slug",
+      });
+    });
+
+    it("removes page navigation when the page becomes a draft", async () => {
+      const post = await postService.create({
+        format: "note",
+        title: "Temporary page",
+        slug: "temporary-page",
+        visibility: "latest_hidden",
+      });
+      const navItemService = createNavItemService(db, DEFAULT_TEST_SITE_ID);
+      await navItemService.create({ type: "page", postId: post.id });
+
+      await postService.update(post.id, { status: "draft" });
+
+      expect(await navItemService.list()).toEqual([]);
     });
 
     it("updates quoteText and rating", async () => {
@@ -1599,6 +1781,21 @@ describe("PostService", () => {
 
       const found = await postService.getById(post.id);
       expect(found).toBeNull();
+    });
+
+    it("cascade deletes the post's page navigation item", async () => {
+      const post = await postService.create({
+        format: "note",
+        title: "Disposable page",
+        slug: "disposable-page",
+        visibility: "latest_hidden",
+      });
+      const navItemService = createNavItemService(db, DEFAULT_TEST_SITE_ID);
+      await navItemService.create({ type: "page", postId: post.id });
+
+      await postService.delete(post.id);
+
+      expect(await navItemService.list()).toEqual([]);
     });
 
     it("returns false for non-existent post", async () => {
@@ -2283,6 +2480,374 @@ describe("PostService", () => {
       expect(second.processed).toBe(1);
       expect(second.done).toBe(true);
       expect(second.nextCursor).toBeNull();
+    });
+  });
+
+  describe("rebuildBodyHtml", () => {
+    async function createFootnotePost(label: string) {
+      return postService.create({
+        format: "note",
+        bodyMarkdown: `Body ${label}[^1]\n\n[^1]: Definition ${label}`,
+      });
+    }
+
+    function legacyFootnoteBody(): string {
+      return JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "Body " },
+              {
+                type: "text",
+                text: "[1]",
+                marks: [{ type: "link", attrs: { href: "#fn-1" } }],
+              },
+            ],
+          },
+          { type: "horizontalRule" },
+          {
+            type: "orderedList",
+            content: [
+              {
+                type: "listItem",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [
+                      { type: "text", text: "Definition " },
+                      {
+                        type: "text",
+                        text: "↩︎",
+                        marks: [{ type: "link", attrs: { href: "#fnref-1" } }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    it("resolves stale stored HTML on reads before the rebuild writes", async () => {
+      const post = await createFootnotePost("stale");
+      await db
+        .update(posts)
+        .set({
+          bodyHtml: '<span class="sidenote">legacy</span>',
+          bodyHtmlVersion: 1,
+        })
+        .where(eq(posts.id, post.id));
+
+      const resolved = await postService.getById(post.id);
+      expect(resolved?.bodyHtml).toContain('role="doc-noteref"');
+      expect(resolved?.bodyHtml).toContain('role="doc-endnotes"');
+      expect(resolved?.bodyHtml).not.toContain("legacy");
+
+      const stored = await db
+        .select({ bodyHtml: posts.bodyHtml })
+        .from(posts)
+        .where(eq(posts.id, post.id))
+        .limit(1);
+      expect(stored[0]?.bodyHtml).toContain("legacy");
+    });
+
+    it("supports dry-run, preserves timestamps, and is idempotent", async () => {
+      const post = await createFootnotePost("rebuild");
+      await db
+        .update(posts)
+        .set({
+          bodyHtml: '<span class="sidenote">legacy</span>',
+          bodyHtmlVersion: 1,
+        })
+        .where(eq(posts.id, post.id));
+
+      const before = await db
+        .select({
+          updatedAt: posts.updatedAt,
+          publishedAt: posts.publishedAt,
+        })
+        .from(posts)
+        .where(eq(posts.id, post.id))
+        .limit(1);
+
+      const dryRun = await postService.rebuildBodyHtml({ dryRun: true });
+      expect(dryRun).toMatchObject({
+        processed: 1,
+        wouldRebuild: 1,
+        rebuilt: 0,
+        skipped: 0,
+        conflicted: 0,
+        failed: 0,
+        done: true,
+        targetVersion: POST_BODY_HTML_VERSION,
+      });
+
+      const firstPass = await postService.rebuildBodyHtml();
+      expect(firstPass).toMatchObject({
+        wouldRebuild: 1,
+        rebuilt: 1,
+        failed: 0,
+      });
+
+      const stored = await db
+        .select({
+          bodyHtml: posts.bodyHtml,
+          bodyHtmlVersion: posts.bodyHtmlVersion,
+          updatedAt: posts.updatedAt,
+          publishedAt: posts.publishedAt,
+        })
+        .from(posts)
+        .where(eq(posts.id, post.id))
+        .limit(1);
+      expect(stored[0]?.bodyHtmlVersion).toBe(POST_BODY_HTML_VERSION);
+      expect(stored[0]?.bodyHtml).toContain('role="doc-endnotes"');
+      expect(stored[0]?.updatedAt).toBe(before[0]?.updatedAt);
+      expect(stored[0]?.publishedAt).toBe(before[0]?.publishedAt);
+
+      const secondPass = await postService.rebuildBodyHtml();
+      expect(secondPass).toMatchObject({
+        wouldRebuild: 0,
+        rebuilt: 0,
+        skipped: 1,
+        failed: 0,
+      });
+    });
+
+    it("atomically upgrades historical generic footnotes and their projections", async () => {
+      const post = await postService.create({
+        format: "note",
+        title: "Legacy",
+        bodyMarkdown: "Placeholder",
+      });
+      const legacyBody = legacyFootnoteBody();
+      await db
+        .update(posts)
+        .set({
+          body: legacyBody,
+          bodyHtml:
+            '<p>Body <a href="#fn-1">[1]</a></p><hr><ol><li><p>Definition <a href="#fnref-1">↩︎</a></p></li></ol>',
+          bodyHtmlVersion: 3,
+          bodyText: "Body [1] #fn-1 Definition ↩︎ #fnref-1",
+          summary: "Body [1]\n\nDefinition ↩︎",
+        })
+        .where(eq(posts.id, post.id));
+      const before = await db
+        .select({ updatedAt: posts.updatedAt, body: posts.body })
+        .from(posts)
+        .where(eq(posts.id, post.id))
+        .limit(1);
+
+      const dryRun = await postService.rebuildBodyHtml({
+        dryRun: true,
+        summaryConfig: { maxParagraphs: 5, maxChars: 500 },
+      });
+      expect(dryRun).toMatchObject({
+        wouldRebuild: 1,
+        rebuilt: 0,
+        wouldUpgradeFootnotes: 1,
+        upgradedFootnotes: 0,
+        failed: 0,
+      });
+      expect(
+        await db
+          .select({ body: posts.body })
+          .from(posts)
+          .where(eq(posts.id, post.id))
+          .limit(1),
+      ).toEqual([{ body: legacyBody }]);
+
+      const result = await postService.rebuildBodyHtml({
+        summaryConfig: { maxParagraphs: 5, maxChars: 500 },
+      });
+      expect(result).toMatchObject({
+        rebuilt: 1,
+        wouldUpgradeFootnotes: 1,
+        upgradedFootnotes: 1,
+        conflicted: 0,
+        failed: 0,
+      });
+
+      const stored = await db
+        .select({
+          body: posts.body,
+          bodyHtml: posts.bodyHtml,
+          bodyHtmlVersion: posts.bodyHtmlVersion,
+          bodyText: posts.bodyText,
+          summary: posts.summary,
+          updatedAt: posts.updatedAt,
+        })
+        .from(posts)
+        .where(eq(posts.id, post.id))
+        .limit(1);
+      expect(stored[0]?.body).toContain('"type":"footnoteReference"');
+      expect(stored[0]?.body).toContain('"type":"footnoteDefinition"');
+      expect(stored[0]?.bodyHtml).toContain('role="doc-noteref"');
+      expect(stored[0]?.bodyHtml).toContain('role="doc-endnotes"');
+      expect(stored[0]?.bodyText).toBe("Body Definition");
+      expect(stored[0]?.summary).toBe("Body");
+      expect(stored[0]?.bodyHtmlVersion).toBe(POST_BODY_HTML_VERSION);
+      expect(stored[0]?.updatedAt).toBe(before[0]?.updatedAt);
+
+      await expect(postService.rebuildBodyHtml()).resolves.toMatchObject({
+        wouldRebuild: 0,
+        wouldUpgradeFootnotes: 0,
+        upgradedFootnotes: 0,
+        skipped: 1,
+      });
+    });
+
+    it("reports malformed canonical bodies without marking them current", async () => {
+      const post = await createFootnotePost("invalid");
+      await db
+        .update(posts)
+        .set({
+          body: "not json",
+          bodyHtml: "<p>legacy fallback</p>",
+          bodyHtmlVersion: 1,
+        })
+        .where(eq(posts.id, post.id));
+
+      const result = await postService.rebuildBodyHtml();
+      expect(result.failed).toBe(1);
+      expect(result.failures[0]?.postId).toBe(post.id);
+      expect(result.rebuilt).toBe(0);
+
+      const stored = await db
+        .select({
+          bodyHtml: posts.bodyHtml,
+          bodyHtmlVersion: posts.bodyHtmlVersion,
+        })
+        .from(posts)
+        .where(eq(posts.id, post.id))
+        .limit(1);
+      expect(stored[0]).toEqual({
+        bodyHtml: "<p>legacy fallback</p>",
+        bodyHtmlVersion: 1,
+      });
+      expect((await postService.getById(post.id))?.bodyHtml).toBe(
+        "<p>legacy fallback</p>",
+      );
+    });
+
+    it("paginates deterministically", async () => {
+      const created = [];
+      for (const label of ["one", "two", "three"]) {
+        created.push(await createFootnotePost(label));
+      }
+      await db
+        .update(posts)
+        .set({ bodyHtmlVersion: 1 })
+        .where(eq(posts.siteId, DEFAULT_TEST_SITE_ID));
+
+      const first = await postService.rebuildBodyHtml({ limit: 2 });
+      expect(first.processed).toBe(2);
+      expect(first.done).toBe(false);
+      expect(first.nextCursor).not.toBeNull();
+
+      const second = await postService.rebuildBodyHtml({
+        limit: 2,
+        cursor: first.nextCursor ?? undefined,
+      });
+      expect(second.processed).toBe(1);
+      expect(second.done).toBe(true);
+      expect(first.rebuilt + second.rebuilt).toBe(created.length);
+    });
+
+    it("lets a concurrent canonical-body edit win the compare-and-swap", async () => {
+      const post = await createFootnotePost("conflict");
+      await db
+        .update(posts)
+        .set({ bodyHtmlVersion: 1 })
+        .where(eq(posts.id, post.id));
+
+      const concurrentBody = JSON.stringify({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Concurrent edit" }],
+          },
+        ],
+      });
+      let injected = false;
+      const conflictDb = new Proxy(db, {
+        get(target, property, receiver) {
+          if (property === "update") {
+            return (...args: Parameters<Database["update"]>) => {
+              if (!injected) {
+                injected = true;
+                sqlite
+                  .prepare("UPDATE post SET body = ? WHERE id = ?")
+                  .run(concurrentBody, post.id);
+              }
+              return target.update(...args);
+            };
+          }
+
+          const value = Reflect.get(target, property, receiver) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const conflictService = createPostService(
+        conflictDb,
+        { slugIdLength: 5 },
+        DEFAULT_TEST_SITE_ID,
+      );
+
+      const result = await conflictService.rebuildBodyHtml();
+
+      expect(result).toMatchObject({ rebuilt: 0, conflicted: 1 });
+      const stored = await db
+        .select({ body: posts.body, version: posts.bodyHtmlVersion })
+        .from(posts)
+        .where(eq(posts.id, post.id))
+        .limit(1);
+      expect(stored[0]).toEqual({ body: concurrentBody, version: 1 });
+    });
+
+    it("never widens a rebuild to another site", async () => {
+      const defaultPost = await createFootnotePost("default");
+      const secondSiteId = "sit_second000000000000000000000";
+      const timestamp = Math.floor(Date.now() / 1000);
+      await db.insert(sites).values({
+        id: secondSiteId,
+        key: "second",
+        status: "active",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      const secondService = createPostService(
+        db,
+        { slugIdLength: 5 },
+        secondSiteId,
+      );
+      const secondPost = await secondService.create({
+        format: "note",
+        bodyMarkdown: "Second[^1]\n\n[^1]: Other site",
+      });
+      await db
+        .update(posts)
+        .set({ bodyHtmlVersion: 1 })
+        .where(eq(posts.id, defaultPost.id));
+      await db
+        .update(posts)
+        .set({ bodyHtmlVersion: 1 })
+        .where(eq(posts.id, secondPost.id));
+
+      const result = await postService.rebuildBodyHtml();
+      expect(result.processed).toBe(1);
+
+      const rows = await db
+        .select({ id: posts.id, version: posts.bodyHtmlVersion })
+        .from(posts);
+      expect(rows.find((row) => row.id === defaultPost.id)?.version).toBe(
+        POST_BODY_HTML_VERSION,
+      );
+      expect(rows.find((row) => row.id === secondPost.id)?.version).toBe(1);
     });
   });
 

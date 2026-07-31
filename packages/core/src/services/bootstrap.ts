@@ -31,7 +31,8 @@ export interface CompleteInitialSetupData {
 export interface BootstrapService {
   /**
    * Complete first-run setup for a newly created account.
-   * Ensures default system navigation exists and marks onboarding complete last.
+   * Materializes the versioned navigation profile and marks onboarding complete
+   * last so an interrupted setup can recover safely.
    *
    * @param data - Initial site shell values captured during setup
    */
@@ -58,7 +59,7 @@ export function createBootstrapService(
       const siteMembers = createSiteMemberService(db, databaseSchema);
 
       await siteMembers.ensure(site.id, data.ownerUserId, "owner");
-      await navItems.ensureSystemDefaults();
+      await navItems.materializeDefaultNavigation();
       await settings.set("SITE_NAME", data.siteName.trim());
       await settings.set("TIME_ZONE", data.timeZone ?? "UTC");
       const siteLanguage =

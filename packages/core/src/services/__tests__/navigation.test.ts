@@ -11,6 +11,8 @@ const TEST_COLLECTION_ID = "col_test00000000000000000000001";
 const TEST_COLLECTION_ID_2 = "col_test00000000000000000000002";
 const TEST_POST_ID = "pst_test00000000000000000000001";
 const TEST_POST_ID_2 = "pst_test00000000000000000000002";
+const TEST_POST_ID_3 = "pst_test00000000000000000000003";
+const TEST_POST_ID_4 = "pst_test00000000000000000000004";
 
 function insertTestPath(
   sqlite: ReturnType<typeof createTestDatabase>["sqlite"],
@@ -76,6 +78,7 @@ function insertTestPost(
     id: string;
     slug: string;
     title: string | null;
+    format?: "note" | "link" | "quote";
     status?: "draft" | "published";
     visibility?: "public" | "latest_hidden" | "private";
   },
@@ -87,11 +90,12 @@ function insertTestPost(
         id, site_id, format, status, visibility, title, thread_id,
         published_at, last_activity_at, created_at, updated_at
       )
-       VALUES (?, ?, 'note', ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.id,
       DEFAULT_TEST_SITE_ID,
+      input.format ?? "note",
       input.status ?? "published",
       input.visibility ?? "latest_hidden",
       input.title,
@@ -232,15 +236,71 @@ describe("NavItemService", () => {
         }),
       ).rejects.toThrow("Built-in navigation item already exists");
     });
+
+    it("creates a page nav item from an eligible titled note", async () => {
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID,
+        slug: "about-me",
+        title: "About me",
+      });
+
+      const item = await navItemService.create({
+        type: "page",
+        postId: TEST_POST_ID,
+      });
+
+      expect(item).toMatchObject({
+        type: "page",
+        postId: TEST_POST_ID,
+        label: "About me",
+        url: "/about-me",
+        placement: "header",
+      });
+    });
+
+    it("rejects duplicate and ineligible page nav items", async () => {
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID,
+        slug: "about",
+        title: "About",
+      });
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID_2,
+        slug: "private-page",
+        title: "Private page",
+        visibility: "private",
+      });
+      await navItemService.create({ type: "page", postId: TEST_POST_ID });
+
+      await expect(
+        navItemService.create({ type: "page", postId: TEST_POST_ID }),
+      ).rejects.toThrow("Page already added to navigation");
+      await expect(
+        navItemService.create({ type: "page", postId: TEST_POST_ID_2 }),
+      ).rejects.toThrow("Page must be a published, non-private titled note");
+    });
+
+    it("truncates a page's default navigation label", async () => {
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID,
+        slug: "long-title",
+        title: "A".repeat(150),
+      });
+
+      const item = await navItemService.create({
+        type: "page",
+        postId: TEST_POST_ID,
+      });
+
+      expect(item.label).toBe("A".repeat(100));
+    });
   });
 
-  describe("ensureSystemDefaults", () => {
-    it("creates the six default system items once", async () => {
-      const created = await navItemService.ensureSystemDefaults();
+  describe("materializeDefaultNavigation", () => {
+    it("creates the five-item default profile without Latest", async () => {
+      const created = await navItemService.materializeDefaultNavigation();
 
-      expect(created).toHaveLength(6);
       expect(created.map((item) => item.systemKey)).toEqual([
-        "latest",
         "featured",
         "collections",
         "archive",
@@ -251,39 +311,86 @@ describe("NavItemService", () => {
         "header",
         "header",
         "header",
-        "header",
         "more",
         "more",
       ]);
+      expect(created.map((item) => item.systemKey)).not.toContain("latest");
     });
 
-    it("creates only missing default system items", async () => {
-      await navItemService.create({
+    it("preserves an existing optional Latest item", async () => {
+      const latest = await navItemService.create({
         type: "system",
-        systemKey: "archive",
+        systemKey: "latest",
+      });
+      const customizedLatest = await navItemService.update(latest.id, {
+        label: "Recent writing",
+        placement: "more",
+        position: "a3",
       });
 
-      const created = await navItemService.ensureSystemDefaults();
+      const created = await navItemService.materializeDefaultNavigation();
       const items = await navItemService.list();
 
       expect(created.map((item) => item.systemKey)).toEqual([
-        "latest",
+        "featured",
+        "collections",
+        "archive",
+        "rss",
+        "settings",
+      ]);
+      expect(items.find((item) => item.id === latest.id)).toEqual(
+        customizedLatest,
+      );
+      expect(items.filter((item) => item.type === "system")).toHaveLength(6);
+    });
+
+    it("only appends missing profile items during recovery", async () => {
+      const archive = await navItemService.create({
+        type: "system",
+        systemKey: "archive",
+      });
+      const customizedArchive = await navItemService.update(archive.id, {
+        label: "All posts",
+        placement: "more",
+        position: "a2",
+      });
+      const customLink = await navItemService.create({
+        type: "link",
+        label: "Elsewhere",
+        url: "https://example.com",
+        position: "a3",
+      });
+
+      const created = await navItemService.materializeDefaultNavigation();
+      const items = await navItemService.list();
+
+      expect(created.map((item) => item.systemKey)).toEqual([
         "featured",
         "collections",
         "rss",
         "settings",
       ]);
-      expect(items.filter((item) => item.type === "system")).toHaveLength(6);
+      expect(items.slice(0, 2).map((item) => item.id)).toEqual([
+        archive.id,
+        customLink.id,
+      ]);
+      expect(items.find((item) => item.id === archive.id)).toEqual(
+        customizedArchive,
+      );
+      expect(items.find((item) => item.id === customLink.id)).toEqual(
+        customLink,
+      );
+      expect(items.map((item) => item.systemKey)).not.toContain("latest");
     });
 
-    it("is idempotent when defaults already exist", async () => {
-      await navItemService.ensureSystemDefaults();
+    it("is idempotent when the current profile already exists", async () => {
+      await navItemService.materializeDefaultNavigation();
 
-      const created = await navItemService.ensureSystemDefaults();
+      const created = await navItemService.materializeDefaultNavigation();
       const items = await navItemService.list();
 
       expect(created).toEqual([]);
-      expect(items.filter((item) => item.type === "system")).toHaveLength(6);
+      expect(items.filter((item) => item.type === "system")).toHaveLength(5);
     });
   });
 
@@ -361,8 +468,53 @@ describe("NavItemService", () => {
     });
   });
 
+  describe("listPageCandidates", () => {
+    it("returns eligible notes by title and excludes added pages", async () => {
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID,
+        slug: "about",
+        title: "About this site",
+        visibility: "latest_hidden",
+      });
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID_2,
+        slug: "another-note",
+        title: "Another note",
+        visibility: "public",
+      });
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID_3,
+        slug: "about-link",
+        title: "About link",
+        format: "link",
+      });
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID_4,
+        slug: "about-draft",
+        title: "About draft",
+        status: "draft",
+      });
+
+      expect(
+        await navItemService.listPageCandidates({ query: "ABOUT" }),
+      ).toEqual([
+        {
+          id: TEST_POST_ID,
+          title: "About this site",
+          slug: "about",
+          updatedAt: expect.any(Number),
+        },
+      ]);
+
+      await navItemService.create({ type: "page", postId: TEST_POST_ID });
+      expect(
+        await navItemService.listPageCandidates({ query: "about" }),
+      ).toEqual([]);
+    });
+  });
+
   describe("listSuggestedLinks", () => {
-    it("suggests a published /about page as a normal link", async () => {
+    it("suggests a published /about page as a page nav item", async () => {
       insertTestPost(sqlite, {
         id: TEST_POST_ID,
         slug: "about",
@@ -377,7 +529,8 @@ describe("NavItemService", () => {
           label: "About me",
           url: "/about",
           targetType: "page",
-          navItemType: "link",
+          navItemType: "page",
+          postId: TEST_POST_ID,
         },
       ]);
     });
@@ -786,6 +939,32 @@ describe("NavItemService", () => {
     });
   });
 
+  describe("page nav items", () => {
+    beforeEach(() => {
+      insertTestPost(sqlite, {
+        id: TEST_POST_ID,
+        slug: "about",
+        title: "About",
+      });
+    });
+
+    it("allows label updates but keeps the page URL managed", async () => {
+      const item = await navItemService.create({
+        type: "page",
+        postId: TEST_POST_ID,
+      });
+
+      const updated = await navItemService.update(item.id, {
+        label: "Start here",
+      });
+      expect(updated?.label).toBe("Start here");
+
+      await expect(
+        navItemService.update(item.id, { url: "/other" }),
+      ).rejects.toThrow("Page navigation URLs are managed automatically");
+    });
+  });
+
   describe("getCollectionFreshness", () => {
     beforeEach(() => {
       insertTestCollection(sqlite, TEST_COLLECTION_ID, "design", "Design");
@@ -810,7 +989,7 @@ describe("NavItemService", () => {
       // Add it to the collection recently
       sqlite
         .prepare(
-          `INSERT INTO post_collection (site_id, post_id, collection_id, created_at, position)
+          `INSERT INTO thread_collection (site_id, thread_id, collection_id, created_at, position)
            VALUES (?, ?, ?, ?, 0)`,
         )
         .run(DEFAULT_TEST_SITE_ID, "pst_test001", TEST_COLLECTION_ID, ts);
@@ -838,7 +1017,7 @@ describe("NavItemService", () => {
         );
       sqlite
         .prepare(
-          `INSERT INTO post_collection (site_id, post_id, collection_id, created_at, position)
+          `INSERT INTO thread_collection (site_id, thread_id, collection_id, created_at, position)
            VALUES (?, ?, ?, ?, 0)`,
         )
         .run(DEFAULT_TEST_SITE_ID, "pst_test002", TEST_COLLECTION_ID, oldTs);
@@ -847,6 +1026,35 @@ describe("NavItemService", () => {
         TEST_COLLECTION_ID,
       ]);
       expect(result.has(TEST_COLLECTION_ID)).toBe(false);
+    });
+
+    it("detects freshness from a recent root edit even when Thread activity is old", async () => {
+      const oldTs = now() - 60 * 60 * 72;
+      const recentTs = now();
+      sqlite
+        .prepare(
+          `INSERT INTO post (id, site_id, thread_id, format, status, visibility, created_at, updated_at, last_activity_at)
+           VALUES (?, ?, ?, 'note', 'published', 'public', ?, ?, ?)`,
+        )
+        .run(
+          "pst_edited",
+          DEFAULT_TEST_SITE_ID,
+          "pst_edited",
+          oldTs,
+          recentTs,
+          oldTs,
+        );
+      sqlite
+        .prepare(
+          `INSERT INTO thread_collection (site_id, thread_id, collection_id, created_at, position)
+           VALUES (?, ?, ?, ?, 0)`,
+        )
+        .run(DEFAULT_TEST_SITE_ID, "pst_edited", TEST_COLLECTION_ID, oldTs);
+
+      const result = await navItemService.getCollectionFreshness([
+        TEST_COLLECTION_ID,
+      ]);
+      expect(result.get(TEST_COLLECTION_ID)).toBe(recentTs);
     });
 
     it("detects freshness from recent thread replies", async () => {
@@ -871,7 +1079,7 @@ describe("NavItemService", () => {
       // Add the root to the collection (old)
       sqlite
         .prepare(
-          `INSERT INTO post_collection (site_id, post_id, collection_id, created_at, position)
+          `INSERT INTO thread_collection (site_id, thread_id, collection_id, created_at, position)
            VALUES (?, ?, ?, ?, 0)`,
         )
         .run(DEFAULT_TEST_SITE_ID, "pst_root", TEST_COLLECTION_ID, oldTs);

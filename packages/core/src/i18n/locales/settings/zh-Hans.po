@@ -13,6 +13,11 @@ msgstr ""
 "Language-Team: \n"
 "Plural-Forms: \n"
 
+#. @context: Config Editor live search result count
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "{count} settings shown"
+msgstr "{count} 个设置已显示"
+
 #. @context: Custom CSS textarea placeholder
 #: src/ui/dash/appearance/AdvancedContent.tsx
 msgid "/* Your custom CSS here */"
@@ -134,10 +139,50 @@ msgstr "添加自定义 CSS 以覆盖任何样式. 使用数据属性如 [data-p
 msgid "Add custom link to navigation"
 msgstr "向导航添加自定义链接"
 
+#. @context: Description after quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add it to navigation now or open the editor to add content."
+msgstr "现在添加到导航，或打开编辑器补充内容。"
+
+#. @context: Description after quick collection creation in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add it to navigation now or open the editor to add details."
+msgstr "现在添加到导航，或打开编辑器补充详细信息。"
+
 #. @context: Button and heading for adding custom link
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Add Link"
 msgstr "添加链接"
+
+#. @context: Button that opens the navigation page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add Page"
+msgstr "添加页面"
+
+#. @context: Section heading for adding a page to navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add page to navigation"
+msgstr "向导航添加页面"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Add site-wide CSS in the dedicated code editor."
+msgstr "在专用代码编辑器中添加全站 CSS。"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Add site-wide HTML before the closing body tag."
+msgstr "在 </body> 闭合标签之前添加全站 HTML。"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Add site-wide HTML before the closing head tag."
+msgstr "在 </head> 结束标签之前添加全站 HTML。"
+
+#. @context: Button that adds a created page to navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Add to Navigation"
+msgstr "添加到导航"
 
 #. @context: Settings group label for advanced settings
 #: src/ui/dash/settings/SettingsRootContent.tsx
@@ -153,6 +198,11 @@ msgstr "所有可用的端点和请求格式。"
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "All collections are already in your navigation."
 msgstr "所有合集已在您的导航中。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Allow published content to be read without an API token."
+msgstr "允许无需 API 令牌读取已发布内容。"
 
 #. @context: Checkbox for allowing search engine indexing
 #: src/ui/dash/settings/GeneralContent.tsx
@@ -222,6 +272,11 @@ msgstr "归档订阅源"
 msgid "Archive filter parameters (e.g. format=note&view=list)"
 msgstr "归档 筛选参数 (例如 format=笔记&view=list)"
 
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Ask search engines not to index public pages or include them in results."
+msgstr "请求搜索引擎不要对公开页面建立索引或将其包含在搜索结果中。"
+
 #. @context: Theme mode option label
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Auto"
@@ -245,6 +300,11 @@ msgstr "头像"
 #: src/routes/dash/settings.tsx
 msgid "Avatar display updated."
 msgstr "头像显示已更新."
+
+#. @context: Button returning from page creation to page search
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Back"
+msgstr "返回"
 
 #. @context: Settings item description for GitHub sync
 #: src/ui/dash/settings/SettingsRootContent.tsx
@@ -339,25 +399,60 @@ msgstr "更改密码"
 msgid "Changing this updates what subscribers get from /feed."
 msgstr "更改此项会更新订阅者从 /feed 获取的内容。"
 
+#. @context: Loading text while checking page slug availability
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Checking address…"
+msgstr "正在检查地址…"
+
 #. @context: GitHub sync picker — status text while classifying the picked repo
 #: src/routes/dash/settings.tsx
 msgid "Checking repository…"
 msgstr "正在检查仓库…"
+
+#. @context: Description for adding a page to navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Choose a titled note that isn't already in navigation, or create a new page."
+msgstr "选择一篇尚未添加到导航的有标题笔记，或创建新页面。"
 
 #. @context: Font theme settings description
 #: src/ui/dash/appearance/FontThemeContent.tsx
 msgid "Choose a typographic direction for your site. Each theme changes both the font pairing and the reading rhythm."
 msgstr "为您的网站选择一种排版方向。每个主题都会同时改变字体搭配和阅读节奏。"
 
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Choose the color palette used across Jant."
+msgstr "选择在整个 Jant 中使用的配色方案。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Choose the content language announced to readers and search engines."
+msgstr "选择向读者和搜索引擎声明的内容语言。"
+
 #. @context: GitHub sync picker — page subtitle
 #: src/routes/dash/settings.tsx
 msgid "Choose the GitHub account and repository to sync with this site."
 msgstr "选择要与此站点同步的 GitHub 账户和仓库。"
 
-#. @context: Settings form field for CJK serif font selection
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Choose the repository used for content backups."
+msgstr "选择用于内容备份的仓库。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Choose the time zone used to display dates and times."
+msgstr "选择用于显示日期和时间的时区。"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Choose the typography used across Jant."
+msgstr "选择 Jant 全局使用的字体。"
+
+#. @context: Settings field for a manual Chinese, Japanese, or Korean font fallback
 #: src/ui/dash/settings/GeneralContent.tsx
-msgid "CJK Font"
-msgstr "CJK 字体"
+msgid "CJK fallback"
+msgstr "CJK 字体回退"
 
 #. @context: Paper color theme preview help line
 #: src/ui/dash/appearance/ColorThemeContent.tsx
@@ -390,6 +485,21 @@ msgstr "合集"
 msgid "Collection"
 msgstr "合集"
 
+#. @context: Confirmation after adding a collection to navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Collection added to navigation."
+msgstr "合集已添加到导航。"
+
+#. @context: Heading after quick collection creation in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Collection created."
+msgstr "合集已创建。"
+
+#. @context: Collection slug field in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Collection link"
+msgstr "合集链接"
+
 #. @context: Appearance settings heading
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Color theme"
@@ -401,6 +511,22 @@ msgstr "配色主题"
 #: src/ui/dash/settings/SettingsRootContent.tsx
 msgid "Color Theme"
 msgstr "颜色主题"
+
+#. @context: Breadcrumb label
+#. @context: Config Editor page title
+#. @context: Settings item — Config Editor
+#: src/routes/dash/settings.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/SettingsRootContent.tsx
+msgid "Config Editor"
+msgstr "配置编辑器"
+
+#. @context: Config Editor linked setting status
+#. @context: Config Editor linked setting status
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Configured"
+msgstr "已配置"
 
 #. @context: Step 2 heading — user must type confirmation phrase
 #: src/ui/dash/settings/DeleteAccountContent.tsx
@@ -433,6 +559,16 @@ msgstr "连接一个 Telegram 机器人，然后你发送给它的任何消息�
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Connect manually"
 msgstr "手动绑定"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Connect or manage automatic content backups to GitHub."
+msgstr "连接或管理 GitHub 内容自动备份。"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Connect or manage the bot used to post from Telegram."
+msgstr "连接或管理用于从 Telegram 发帖的 Bot。"
 
 #. @context: Heading on the Telegram settings page when ready to connect
 #: src/ui/dash/settings/TelegramContent.tsx
@@ -524,10 +660,25 @@ msgstr "无法复制。请再试一次。"
 msgid "Couldn't connect. Check the error and try again."
 msgstr "无法连接。检查错误并重试。"
 
+#. @context: Error when quick collection creation fails in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Couldn't create the collection. Check the details and try again."
+msgstr "无法创建合集。请检查信息后重试。"
+
+#. @context: Error when quick page creation fails
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Couldn't create the page. Check the details and try again."
+msgstr "无法创建页面。请检查详情并重试。"
+
 #. @context: Error toast when nav delete fails
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Couldn't delete. Try again in a moment."
 msgstr "删除失败。请稍后再试。"
+
+#. @context: Error shown when navigation page search fails
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Couldn't load pages. Try again in a moment."
+msgstr "无法加载页面。请稍后再试。"
 
 #. @context: Error toast when nav save fails
 #: src/ui/dash/appearance/NavigationContent.tsx
@@ -564,20 +715,45 @@ msgstr "在 GitHub 上创建新仓库"
 msgid "Create a post with curl:"
 msgstr "使用 curl 创建帖子："
 
+#. @context: Description in the quick-create page dialog
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Create a public page that won't appear in Latest."
+msgstr "创建一个不会出现在 Latest 的公开页面。"
+
 #. @context: Button to create the standard About page
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Create About page"
 msgstr "创建 About 页面"
+
+#. @context: Button and dialog title for quick collection creation in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Create Collection"
+msgstr "创建合集"
 
 #. @context: Button to save new custom URL
 #: src/routes/dash/custom-urls.tsx
 msgid "Create Custom URL"
 msgstr "创建自定义 URL"
 
+#. @context: Action at the bottom of the Navigation collection picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Create new collection"
+msgstr "创建新合集"
+
+#. @context: Action at the bottom of the navigation page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Create new page"
+msgstr "创建新页面"
+
 #. @context: Link text pointing to GitHub's fine-grained PAT creation page
 #: src/ui/dash/settings/GitHubSyncContent.tsx
 msgid "Create one on GitHub"
 msgstr "在 GitHub 上创建一个"
+
+#. @context: Button and dialog title for quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Create Page"
+msgstr "创建页面"
 
 #. @context: Help text for GitHub repository input on GitHub Sync settings, telling users they must create the repo themselves
 #: src/ui/dash/settings/GitHubSyncContent.tsx
@@ -588,6 +764,16 @@ msgstr "请先在 GitHub 上创建仓库 — 可以为空。"
 #: src/ui/dash/settings/ApiTokensContent.tsx
 msgid "Created {date}"
 msgstr "创建于 {date}"
+
+#. @context: Loading label while creating a collection in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Creating collection…"
+msgstr "正在创建合集…"
+
+#. @context: Loading label while creating a page
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Creating page…"
+msgstr "正在创建页面…"
 
 #. @context: Badge indicating the current active session
 #: src/ui/dash/settings/SessionsContent.tsx
@@ -648,6 +834,11 @@ msgstr "后台语言"
 #: src/ui/dash/settings/AccountMenuContent.tsx
 msgid "Data"
 msgstr "数据"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Delay new posts and replies before they appear in feeds. Use 0 to turn this off."
+msgstr "延迟新帖子和回复进入订阅源的时间。设为 0 可关闭延迟。"
 
 #. @context: Button to delete custom URL
 #. @context: Button to delete item
@@ -791,10 +982,40 @@ msgstr "编辑"
 msgid "Edit About page"
 msgstr "编辑 About 页面"
 
+#. @context: Button that opens a newly created collection for editing
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Edit Collection"
+msgstr "编辑合集"
+
+#. @context: Button to edit the generated collection slug in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Edit link"
+msgstr "编辑链接"
+
+#. @context: Button that opens a page for editing
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Edit Page"
+msgstr "编辑页面"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Edit the multi-line footer rendered at the bottom of public pages."
+msgstr "在完整表单中编辑显示在公共页面底部的多行页脚。"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Edit the multi-line introduction used on your home page and in metadata."
+msgstr "在完整表单中编辑首页和元数据使用的多行简介。"
+
 #. @context: GitHub sync picker — shown when the selected repo has no commits
 #: src/routes/dash/settings.tsx
 msgid "Empty repository. Ready to connect."
 msgstr "仓库为空。准备连接。"
+
+#. @context: Validation error for an empty quick page title
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Enter a page title."
+msgstr "请输入页面标题。"
 
 #. @context: Help text under the archive feed URL, explaining it is the complete feed
 #: src/ui/dash/settings/GeneralContent.tsx
@@ -835,6 +1056,11 @@ msgstr "精选"
 msgid "Featured feed"
 msgstr "精选订阅源"
 
+#. @context: Config Editor RSS feed enum option
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Featured posts"
+msgstr "精选文章"
+
 #. @context: Toast after saving feed settings
 #: src/routes/dash/settings.tsx
 msgid "Feed settings updated."
@@ -865,10 +1091,24 @@ msgstr "细粒度样式覆盖"
 msgid "Fixed feed URLs"
 msgstr "固定订阅源 URL"
 
+#. @context: CJK font fallback option that uses the configured content language
+#. @context: Config Editor enum option for automatic CJK font fallback
+#. @context: Config Editor enum option for no explicit dashboard language
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Follow content language"
+msgstr "跟随内容语言"
+
 #. @context: Theme mode option description
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Follow each visitor's system preference."
 msgstr "遵循每位访客的系统偏好。"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Follow the device appearance or force a light or dark theme."
+msgstr "跟随设备外观或强制使用浅色或深色主题。"
 
 #. @context: Appearance settings heading for font theme
 #: src/ui/dash/appearance/FontThemeContent.tsx
@@ -982,6 +1222,16 @@ msgstr "安装 GitHub App 以在无需管理个人令牌的情况下授予访问
 msgid "Integrations"
 msgstr "集成"
 
+#. @context: Validation error for a long page slug
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Keep the page address under 200 characters."
+msgstr "页面地址不能超过 200 个字符。"
+
+#. @context: Long collection slug error in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Keep this link under 200 characters."
+msgstr "链接不能超过 200 个字符。"
+
 #. @context: Nav item label field
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Label"
@@ -1039,6 +1289,11 @@ msgstr "最新"
 msgid "Latest feed"
 msgstr "最新订阅源"
 
+#. @context: Config Editor RSS feed enum option
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Latest posts"
+msgstr "最新文章"
+
 #. @context: Suffix after Custom CSS link on color theme page
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "lets you override any theme variable."
@@ -1058,6 +1313,21 @@ msgstr "浅蓝灰底，冷静而均匀。"
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Light sage-green with a matching green accent."
 msgstr "浅鼠尾草绿底，配同色系的绿。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Limit characters used in automatically generated summaries."
+msgstr "限制自动生成摘要所使用的字符数。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Limit paragraphs used in automatically generated summaries."
+msgstr "限制自动生成摘要所使用的段落数。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Limit posts included in each RSS feed."
+msgstr "限制每个 RSS feed 中包含的帖子数。"
 
 #. @context: Nav item type badge
 #: src/ui/dash/appearance/NavigationContent.tsx
@@ -1079,15 +1349,15 @@ msgstr "链接已添加到导航。"
 msgid "List posts:"
 msgstr "列出帖子："
 
-#. @context: Help text for CJK serif font selection
-#: src/ui/dash/settings/GeneralContent.tsx
-msgid "Load a serif font optimized for Chinese, Japanese, or Korean content."
-msgstr "加载针对中文、日文或韩文内容优化的衬线字体。"
-
 #. @context: GitHub sync picker — loading state
 #: src/routes/dash/settings.tsx
 msgid "Loading…"
 msgstr "正在加载…"
+
+#. @context: Config Editor badge for a setting locked by the runtime
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Locked"
+msgstr "已锁定"
 
 #. @context: Label for the canonical /feed URL
 #: src/ui/dash/settings/GeneralContent.tsx
@@ -1149,6 +1419,11 @@ msgstr "向机器人发送任意文本，它会作为笔记已发布。"
 msgid "Minimal color, low distraction."
 msgstr "色彩极少，干扰最小。"
 
+#. @context: Config Editor badge for a database override
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Modified"
+msgstr "已修改"
+
 #. @context: Section label for nav items hidden under More dropdown
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "More"
@@ -1159,10 +1434,20 @@ msgstr "更多"
 msgid "More actions"
 msgstr "更多操作"
 
+#. @context: Helper text in quick collection creation in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "More options are available after you create it."
+msgstr "创建后可以设置更多选项。"
+
 #. @context: Clay color theme preview body
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Muted red-brown background, earthy and warm."
 msgstr "低饱和的红棕底，温暖、有泥土感。"
+
+#. @context: Collection title placeholder in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "My Collection"
+msgstr "我的合集"
 
 #. @context: Settings item description for general
 #: src/ui/dash/settings/SettingsRootContent.tsx
@@ -1174,7 +1459,7 @@ msgstr "名称、元数据、语言和搜索默认设置"
 #: src/routes/dash/settings.tsx
 #: src/ui/dash/settings/SettingsRootContent.tsx
 msgid "Navigation"
-msgstr "站点导航"
+msgstr "导航栏"
 
 #. @context: Section heading for nav items
 #: src/ui/dash/appearance/NavigationContent.tsx
@@ -1194,7 +1479,7 @@ msgstr "导航位置已更新."
 #. @context: Label for nav preview section
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Navigation Preview"
-msgstr "导航预览"
+msgstr "导航栏预览"
 
 #. @context: Ink color theme preview body
 #: src/ui/dash/appearance/ColorThemeContent.tsx
@@ -1242,8 +1527,8 @@ msgstr "当前没有活动会话。 已登录的设备会显示在此处。"
 
 #. @context: Empty state when no collections exist for nav picker
 #: src/ui/dash/appearance/NavigationContent.tsx
-msgid "No collections yet. Create one first, then add it to your navigation."
-msgstr "还没有合集。请先创建一个，然后将其添加到你的导航中。"
+msgid "No collections yet. Create one here to add it to navigation."
+msgstr "还没有合集。在这里创建一个并添加到导航。"
 
 #. @context: Empty state message
 #: src/routes/dash/custom-urls.tsx
@@ -1260,15 +1545,32 @@ msgstr "未选择文件。请选择要上传的文件。"
 msgid "No matches."
 msgstr "无匹配结果。"
 
+#. @context: Empty search results in the page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "No matching pages available to add. Try another title or create a new page."
+msgstr "没有可添加的匹配页面。换个标题搜索，或创建新页面。"
+
 #. @context: Empty state for navigation items
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "No navigation items yet. Add links or enable system items below."
 msgstr "当前还没有导航项目。添加链接或在下方启用系统项目。"
 
+#. @context: Empty state in the navigation page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "No pages available. Create one to add it to navigation."
+msgstr "没有可添加的页面。创建一个页面后即可添加到导航。"
+
 #. @context: GitHub sync picker — empty state when search returns nothing
 #: src/routes/dash/settings.tsx
 msgid "No repositories match."
 msgstr "没有匹配的仓库。"
+
+#. @context: Config Editor linked setting status
+#. @context: Config Editor linked setting status
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Not configured"
+msgstr "未配置"
 
 #. @context: Shown when no sync has happened yet on GitHub Sync status
 #: src/ui/dash/settings/GitHubSyncContent.tsx
@@ -1282,6 +1584,11 @@ msgstr "尚未同步"
 msgid "Note"
 msgstr "笔记"
 
+#. @context: Config Editor empty search state
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Nothing matches this search. Try a different name or description."
+msgstr "没有匹配此搜索的结果。试试其他名称或描述。"
+
 #. @context: Tufte color theme preview body
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Off-white paper with a deep forest-green accent."
@@ -1291,6 +1598,13 @@ msgstr "米白纸底，配深森绿。"
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Open {linkOpen}@{botUsername}{linkClose} and send:"
 msgstr "打开 {linkOpen}@{botUsername}{linkClose} 并发送:"
+
+#. @context: Config Editor link to a dedicated settings page
+#. @context: Config Editor link to a dedicated settings page
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Open setting"
+msgstr "打开设置"
 
 #. @context: Button that opens the Telegram bot via a deep link
 #: src/ui/dash/settings/TelegramContent.tsx
@@ -1317,10 +1631,30 @@ msgstr "带橘调的底色。最暖的一套。"
 msgid "owner/repo"
 msgstr "owner/repo"
 
+#. @context: Nav item type badge for page items
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "page"
+msgstr "页面"
+
 #. @context: Suggested navigation link target type
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Page"
 msgstr "页面"
+
+#. @context: Confirmation after adding a page to navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Page added to navigation."
+msgstr "页面已添加到导航。"
+
+#. @context: Slug field label in quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Page address"
+msgstr "页面地址"
+
+#. @context: Heading after quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Page created."
+msgstr "页面已创建。"
 
 #. @context: Bone color theme preview body
 #: src/ui/dash/appearance/ColorThemeContent.tsx
@@ -1421,6 +1755,11 @@ msgstr "私有"
 msgid "Processing..."
 msgstr "处理中..."
 
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Publish Atom feeds for the site, archive, and collections."
+msgstr "发布站点、归档和合集的 Atom feeds。"
+
 #. @context: Post status badge - published
 #: src/ui/dash/StatusBadge.tsx
 msgid "Published"
@@ -1460,6 +1799,11 @@ msgstr "引用"
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Readers and search engines see"
 msgstr "读者和搜索引擎看到的是"
+
+#. @context: Heading above recent pages in the page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Recently updated"
+msgstr "最近更新"
 
 #. @context: Custom URL target type badge for a redirect
 #. @context: Custom URL type option
@@ -1515,6 +1859,11 @@ msgstr "移除此头像？你的网站图标和站点顶部图标将恢复为默
 msgid "Remove this collection from navigation? The collection itself won't be deleted."
 msgstr "要从导航中移除此合集吗？合集本身不会被删除。"
 
+#. @context: Confirm dialog for removing a page from navigation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Remove this page from navigation? The page itself won't be deleted."
+msgstr "将此页面从导航中移除？页面本身不会被删除。"
+
 #. @context: GitHub sync picker — repo dropdown label
 #. @context: Label for GitHub repository input on GitHub Sync settings
 #. @context: Label for connected repository on GitHub Sync status
@@ -1523,6 +1872,16 @@ msgstr "要从导航中移除此合集吗？合集本身不会被删除。"
 #: src/ui/dash/settings/GitHubSyncContent.tsx
 msgid "Repository"
 msgstr "仓库"
+
+#. @context: Button to reset the collection slug in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Reset link"
+msgstr "重置链接"
+
+#. @context: Config Editor row action
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Reset to default"
+msgstr "重置为默认"
 
 #. @context: Button to revoke API token
 #. @context: Button to revoke a session
@@ -1572,15 +1931,47 @@ msgstr "保存机器人令牌"
 msgid "Save CSS"
 msgstr "保存 CSS"
 
+#. @context: Config Editor row save status
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Saved"
+msgstr "已保存"
+
+#. @context: Config Editor row save status
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Saving…"
+msgstr "正在保存…"
+
 #. @context: Settings section heading for search engine indexing settings
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Search"
 msgstr "搜索"
 
+#. @context: Config Editor page description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Search and edit runtime settings. Changes apply immediately; reset restores the environment or built-in default."
+msgstr "搜索和编辑运行时设置。更改会立即生效；重置会恢复环境变量或内置默认值。"
+
+#. @context: Placeholder for the navigation page search
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Search pages"
+msgstr "搜索页面"
+
 #. @context: GitHub sync picker — search input placeholder
 #: src/routes/dash/settings.tsx
 msgid "Search repositories"
 msgstr "搜索仓库"
+
+#. @context: Settings item description for Config Editor
+#: src/ui/dash/settings/SettingsRootContent.tsx
+msgid "Search runtime settings and open advanced configuration"
+msgstr "搜索运行时设置并打开高级配置"
+
+#. @context: Config Editor search input placeholder
+#. @context: Config Editor search input placeholder
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Search settings"
+msgstr "搜索设置"
 
 #. @context: Toast after saving search settings
 #. @context: Toast after saving search settings
@@ -1593,6 +1984,11 @@ msgstr "搜索设置已更新。"
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Search…"
 msgstr "搜索…"
+
+#. @context: Loading state in the navigation page picker
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Searching pages…"
+msgstr "正在搜索页面…"
 
 #. @context: Settings group label for account security settings
 #: src/ui/dash/settings/AccountMenuContent.tsx
@@ -1636,6 +2032,21 @@ msgstr "会话管理在演示模式下已关闭。请使用共享的演示会话
 msgid "Sessions"
 msgstr "会话"
 
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Set posts per archive page; reset to inherit the main page size."
+msgstr "设置每页归档帖子数；重置后继承默认分页大小。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Set results per search page; reset to inherit the main page size."
+msgstr "设置每页搜索结果数；重置后继承默认分页大小。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Set the default number of items shown per page."
+msgstr "设置默认每页显示的条目数。"
+
 #. @context: Breadcrumb label
 #. @context: Page title for the settings home page
 #: src/routes/dash/settings.tsx
@@ -1648,10 +2059,25 @@ msgstr "设置"
 msgid "Show \"Build with Jant\" at the bottom of the home page"
 msgstr "在主页底部显示 \"Build with Jant\""
 
+#. @context: Config Editor filter checkbox
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Show only modified"
+msgstr "仅显示已修改项"
+
 #. @context: Description for built-in nav toggles
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Show or hide built-in destinations in the header and More menu."
 msgstr "在导航栏和更多菜单中显示或隐藏内置目标。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Show the Jant credit on the home page."
+msgstr "在主页显示 Jant 署名。"
+
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Show the site avatar in the public header."
+msgstr "在公共页眉中显示站点头像。"
 
 #. @context: GitHub sync picker — paginated repo count hint. Placeholders {shown} and {total} are integers.
 #: src/routes/dash/settings.tsx
@@ -1768,6 +2194,16 @@ msgstr "Telegram"
 msgid "Telegram is set up, but the bot couldn't be reached. Check the bot token and try again."
 msgstr "Telegram 已设置，但无法连接到机器人。请检查机器人令牌并重试。"
 
+#. @context: Validation error for an unavailable page slug
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "That address is already in use. Choose another one."
+msgstr "此地址已被使用。请选择其他地址。"
+
+#. @context: Validation error for a reserved page slug
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "That address is reserved. Choose another one."
+msgstr "此地址为保留地址。请选择其他地址。"
+
 #. @context: Error toast when selected font theme is not valid
 #: src/routes/dash/settings.tsx
 msgid "That font theme isn't available. Pick another one."
@@ -1793,6 +2229,11 @@ msgstr "默认主题。沉静，适合长时间阅读。"
 msgid "The language this admin dashboard shows in. Available in English, 简体中文, and 繁體中文."
 msgstr "后台界面显示的语言。可选 English、简体中文 和 繁體中文。"
 
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "The language used by the private Jant dashboard."
+msgstr "私有 Jant 仪表板使用的语言。"
+
 #. @context: Help text under the content language picker
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "The language your posts are written in. Announced to readers and search engines through HTML lang and your RSS feed. Any BCP 47 tag works."
@@ -1803,10 +2244,25 @@ msgstr "你撰写内容所用的语言。通过 HTML lang 和 RSS 向读者与�
 msgid "The original Jant palette, and a solid everyday pick."
 msgstr "Jant 最初的配色，日常稳妥之选。"
 
+#. @context: Visibility note in quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "The page is public but stays out of Latest."
+msgstr "页面是公开的，但不会出现在 Latest。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "The serif fallback used when the content language has no built-in profile."
+msgstr "当内容语言没有内置配置时使用的衬线回退字体。"
+
 #. @context: Custom URL target slug help text
 #: src/routes/dash/custom-urls.tsx
 msgid "The slug of the target post or collection"
 msgstr "目标文章或合集的 slug"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "The title used across your site, browser tabs, and feeds."
+msgstr "在整个网站、浏览器标签页和订阅源中使用的标题。"
 
 #. @context: Link to theming documentation on Custom CSS page
 #: src/ui/dash/appearance/AdvancedContent.tsx
@@ -1838,10 +2294,20 @@ msgstr "这将控制 /feed 返回的内容。"
 msgid "This hosted site signs in through {providerLabel}. Manage password and hosted access there."
 msgstr "此托管站点通过 {providerLabel} 登录。请在那里管理密码和托管访问权限。"
 
+#. @context: Collection slug help text in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "This is the last part of the collection link."
+msgstr "这是合集链接的最后一部分。"
+
 #. @context: Help text for avatar upload
 #: src/ui/dash/settings/AvatarContent.tsx
 msgid "This is used for your favicon and apple-touch-icon. For best results, upload a square PNG with a solid background at least 512x512 pixels."
 msgstr "此图用于您的 favicon 和 apple-touch-icon。为获得最佳效果，请上传至少 512×512 像素、纯色背景的方形 PNG。"
+
+#. @context: Reserved collection slug error in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "This link is reserved. Choose something else."
+msgstr "此链接为保留链接。请选择其他链接。"
 
 #. @context: Fallback color theme preview title
 #: src/ui/dash/appearance/ColorThemeContent.tsx
@@ -1868,6 +2334,11 @@ msgstr "此仓库已在为另一个 Jant 站点 ({host}) 进行备份。请选�
 msgid "This repository is already backing up this site."
 msgstr "此仓库已在备份此站点。"
 
+#. @context: Config Editor fallback error message
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "This setting wasn't saved. Check the value and try again."
+msgstr "此设置未保存。请检查该值并重试。"
+
 #. @context: Warning text on account deletion page
 #: src/ui/dash/settings/DeleteAccountContent.tsx
 msgid "This will permanently delete all your data — posts, media, collections, settings, and your account. Your blog will be reset to its initial setup state. This cannot be undone."
@@ -1877,6 +2348,13 @@ msgstr "这将永久删除您所有的数据 — 帖子、媒体、合集、设�
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Time Zone"
 msgstr "时区"
+
+#. @context: Collection title field in Navigation settings
+#. @context: Title field label in quick page creation
+#: src/ui/dash/appearance/NavigationContent.tsx
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Title"
+msgstr "标题"
 
 #. @context: Button to expand/collapse nav item edit
 #: src/ui/dash/appearance/NavigationContent.tsx
@@ -1953,6 +2431,11 @@ msgstr "上传未成功。请稍后再试。"
 msgid "Upload failed. Please try again."
 msgstr "上传失败。请重试。"
 
+#. @context: Config Editor linked setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Upload the profile image and generated site icons."
+msgstr "上传个人资料图片和生成的网站图标。"
+
 #. @context: Avatar upload button text while uploading
 #: src/ui/dash/settings/AvatarContent.tsx
 msgid "Uploading..."
@@ -1968,10 +2451,25 @@ msgstr "网址"
 msgid "Usage"
 msgstr "用法"
 
+#. @context: Collection slug validation error in Navigation settings
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Use lowercase letters, numbers, and hyphens only."
+msgstr "只能使用小写字母、数字和连字符。"
+
+#. @context: Validation error for an invalid page slug
+#: src/ui/dash/appearance/NavigationContent.tsx
+msgid "Use lowercase letters, numbers, and hyphens."
+msgstr "使用小写字母、数字和连字符。"
+
 #. @context: Help text for the explicit latest and featured feed URLs
 #: src/ui/dash/settings/GeneralContent.tsx
 msgid "Use these when you want a feed URL that never changes."
 msgstr "当你想要一个永远不变的订阅源 URL 时使用它们。"
+
+#. @context: Help text for the manual CJK font fallback setting
+#: src/ui/dash/settings/GeneralContent.tsx
+msgid "Used when the content language has no built-in font profile. Your font theme still controls serif and sans styling."
+msgstr "当内容语言没有内置字体配置时使用。字体主题仍会决定衬线和无衬线样式。"
 
 #. @context: Description for choosing featured posts as the main RSS feed
 #: src/ui/dash/settings/GeneralContent.tsx
@@ -2072,6 +2570,11 @@ msgstr "何时使用站点导出、数据库备份和恢复演练。"
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "When you want a cooler, sharper look."
 msgstr "想要更冷、更利落的观感时。"
+
+#. @context: Config Editor setting description
+#: src/ui/dash/settings/ConfigEditorContent.tsx
+msgid "Which post stream the canonical /feed URL returns."
+msgstr "规范的 /feed URL 返回哪个帖子流。"
 
 #. @context: Parchment color theme preview body
 #: src/ui/dash/appearance/ColorThemeContent.tsx

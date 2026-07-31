@@ -39,6 +39,7 @@ import { FontThemeContent } from "../../ui/dash/appearance/FontThemeContent.js";
 import { AdvancedContent } from "../../ui/dash/appearance/AdvancedContent.js";
 import { CodeInjectionContent } from "../../ui/dash/appearance/CodeInjectionContent.js";
 import { ApiTokensContent } from "../../ui/dash/settings/ApiTokensContent.js";
+import { ConfigEditorContent } from "../../ui/dash/settings/ConfigEditorContent.js";
 import { DeleteAccountContent } from "../../ui/dash/settings/DeleteAccountContent.js";
 import {
   GitHubSyncContent,
@@ -78,6 +79,7 @@ import {
   triggerGitHubSyncInline,
 } from "../../lib/github-sync-trigger.js";
 import { buildSyncSiteConfig } from "../../lib/github-sync-site-config.js";
+import { buildConfigEditorFields } from "../../lib/api-settings.js";
 import {
   readGitHubSyncStatus,
   renderStatusCardHtml,
@@ -142,6 +144,7 @@ function breadcrumbLabel(
     | "fontTheme"
     | "customCss"
     | "codeInjection"
+    | "config"
     | "account"
     | "sessions"
     | "password"
@@ -184,6 +187,13 @@ function breadcrumbLabel(
       return i18n._(
         msg({
           message: "Code Injection",
+          comment: "@context: Breadcrumb label",
+        }),
+      );
+    case "config":
+      return i18n._(
+        msg({
+          message: "Config Editor",
           comment: "@context: Breadcrumb label",
         }),
       );
@@ -808,6 +818,7 @@ settingsRoutes.get("/navigation", async (c) => {
           directoryData={directoryData}
           suggestedLinks={suggestedLinks}
           mainRssFeed={c.var.appConfig.mainRssFeed}
+          rssFeedsEnabled={c.var.appConfig.rssFeedsEnabled}
           siteName={navData.siteName}
           sitePathPrefix={c.var.appConfig.sitePathPrefix}
         />
@@ -1049,6 +1060,38 @@ settingsRoutes.post("/code-injection", async (c) => {
       }),
     ),
   );
+});
+
+// ===========================================================================
+// Config Editor — explicitly approved runtime settings only.
+// ===========================================================================
+
+settingsRoutes.get("/config", async (c) => {
+  const navData = await getNavigationData(c);
+  const fields = buildConfigEditorFields(
+    c.var.allSettings,
+    c.env,
+    c.var.appConfig.demoMode,
+  );
+
+  return renderPublicPage(c, {
+    title: buildPageTitle("Config Editor", navData.siteName),
+    navData,
+    content: (
+      <>
+        <AdminBreadcrumb
+          parent={breadcrumbLabel(c, "settings")}
+          parentHref={publicPath(c, "/settings")}
+          current={breadcrumbLabel(c, "config")}
+        />
+        <ConfigEditorContent
+          fields={fields}
+          endpoint={publicPath(c, "/api/settings")}
+          sitePathPrefix={c.var.appConfig.sitePathPrefix}
+        />
+      </>
+    ),
+  });
 });
 
 // ===========================================================================

@@ -15,6 +15,9 @@ run = "pnpm --filter @jant/core i18n:build && pnpm --filter @jant/core dev"
 
 [tasks.dev-node]
 description = "Start the Node runtime with Vite-managed HMR"
+# Node fetch only reads HTTP_PROXY/HTTPS_PROXY/NO_PROXY when this startup
+# opt-in is present. The Vite config runs too late to enable it retroactively.
+env = { NODE_USE_ENV_PROXY = "1" }
 run = "pnpm --filter @jant/core i18n:build && pnpm --filter @jant/core dev:node"
 
 [tasks.dev-debug]
@@ -586,6 +589,16 @@ run = "bash scripts/worktree/remove-all.sh"
 [tasks.worktree-list]
 description = "List all git worktrees"
 run = "git worktree list"
+
+[tasks.worktree-sync]
+alias = "ws"
+description = "Merge the primary branch into worker worktrees and report targets that fail"
+run = "bash scripts/worktree/sync.sh"
+
+[tasks.worktree-sync-check]
+alias = "wsc"
+description = "Check worker worktrees for commits not contained in preview"
+run = "bash scripts/worktree/sync-check.sh"
 
 [tasks.branch-remove-all-local]
 description = "Delete all local branches except main"

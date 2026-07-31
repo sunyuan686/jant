@@ -168,6 +168,20 @@
   display: block;
   max-width: 100%;
   max-height: 100%;
+  overflow: hidden;
+  background-color: black;
+  border-radius: 4px;
+}
+
+.media-lightbox-short-frame-contained {
+  width: var(--media-lightbox-short-width);
+  height: var(--media-lightbox-short-height);
+}
+
+.media-lightbox-short-viewport {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
 }
 
 .media-lightbox-video-short {
@@ -177,6 +191,7 @@
   max-width: none;
   max-height: none;
   object-fit: contain;
+  cursor: pointer;
 }
 
 .media-lightbox-short-controls {
@@ -185,20 +200,28 @@
   right: 0;
   bottom: 0;
   z-index: 2;
-  height: 86px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 50px;
+  padding: 0 6px 6px;
+  box-sizing: border-box;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.68), rgba(0, 0, 0, 0));
   pointer-events: none;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
 }
 
 .media-lightbox-short-progress {
   --media-progress: 0%;
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 0;
+  position: relative;
   z-index: 1;
   display: block;
-  width: auto;
-  height: 34px;
+  flex: 1 1 auto;
+  width: 0;
+  min-width: 48px;
+  height: 44px;
   margin: 0;
   padding: 0;
   background: transparent;
@@ -265,9 +288,44 @@
     transform 0.15s ease;
 }
 
-.media-lightbox-short-controls-portrait .media-lightbox-short-progress {
-  width: calc(100% - 48px);
-  right: auto;
+.media-lightbox-short-playback {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background-color: transparent;
+  color: white;
+  pointer-events: auto;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.media-lightbox-short-playback svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.media-lightbox-short-playback:hover {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+.media-lightbox-short-playback:active {
+  transform: scale(0.92);
+}
+
+.media-lightbox-short-playback:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.2);
 }
 
 .media-lightbox-short-progress:hover::-webkit-slider-runnable-track,
@@ -291,18 +349,18 @@
 }
 
 .media-lightbox-short-mute {
-  position: absolute;
-  right: 24px;
-  bottom: 30px;
+  position: relative;
   z-index: 2;
   display: inline-flex;
+  flex: 0 0 44px;
   align-items: center;
   justify-content: center;
   width: 44px;
   height: 44px;
+  padding: 0;
   border: none;
   border-radius: 999px;
-  background-color: rgb(119, 119, 119);
+  background-color: transparent;
   color: white;
   pointer-events: auto;
   cursor: pointer;
@@ -319,8 +377,7 @@
 }
 
 .media-lightbox-short-mute:hover {
-  background-color: rgb(104, 104, 104);
-  transform: scale(1.03);
+  background-color: rgba(255, 255, 255, 0.14);
 }
 
 .media-lightbox-short-mute:focus-visible {
@@ -361,9 +418,44 @@
     right: 8px;
   }
 
-  .media-lightbox-short-mute {
-    right: 24px;
-    bottom: 26px;
+  .media-lightbox-short-frame {
+    border-radius: 0;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .media-lightbox-short-frame-contained {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) 50px;
+    height: calc(var(--media-lightbox-short-height) + 50px);
+  }
+
+  .media-lightbox-short-controls {
+    position: relative;
+    grid-row: 2;
+    background: black;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .media-lightbox-short-controls {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  .media-lightbox-short-controls > * {
+    pointer-events: none;
+  }
+
+  .media-lightbox-short-frame:hover .media-lightbox-short-controls,
+  .media-lightbox-short-frame:focus-within .media-lightbox-short-controls {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .media-lightbox-short-frame:hover .media-lightbox-short-controls > *,
+  .media-lightbox-short-frame:focus-within .media-lightbox-short-controls > * {
+    pointer-events: auto;
   }
 }
 

@@ -14,6 +14,7 @@ import {
   getCollectionsDirectoryPath,
 } from "../lib/collection-paths.js";
 import { publicPath } from "./runtime-paths.js";
+import { queueCollectionCreatedNotice } from "./collection-created-notice.js";
 import { showToast } from "./toast.js";
 
 function normalizeLocalHref(href: string): URL | null {
@@ -138,6 +139,7 @@ document.addEventListener("jant:collection-submit", async (event: Event) => {
       body: JSON.stringify(detail.data),
     });
     const json = (await res.json().catch(() => null)) as {
+      id?: string;
       slug?: string;
       error?: string;
     } | null;
@@ -157,6 +159,21 @@ document.addEventListener("jant:collection-submit", async (event: Event) => {
         ? json.slug
         : undefined,
     );
+
+    if (!detail.isEdit) {
+      const collectionId =
+        typeof json?.id === "string" && json.id.length > 0
+          ? json.id
+          : undefined;
+      const destination = normalizeLocalHref(redirectUrl);
+      const destinationPath = destination
+        ? toInternalPath(destination.pathname)
+        : null;
+
+      if (collectionId && destinationPath === getCollectionsDirectoryPath()) {
+        queueCollectionCreatedNotice(collectionId);
+      }
+    }
 
     window.location.href = redirectUrl;
     return;

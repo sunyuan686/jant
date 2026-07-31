@@ -19,6 +19,7 @@ import {
   customType,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { SYSTEM_NAV_KEY_VALUES } from "../../types/constants.js";
 
 const SITE_STATUSES = ["active", "suspended"] as const;
 const SITE_DOMAIN_KINDS = ["primary", "alias"] as const;
@@ -27,16 +28,8 @@ const FORMATS = ["note", "link", "quote"] as const;
 const STATUSES = ["draft", "published"] as const;
 const VISIBILITIES = ["public", "latest_hidden", "private"] as const;
 const COLLECTION_SORT_ORDERS = ["newest", "oldest", "rating_desc"] as const;
-const NAV_ITEM_TYPES = ["link", "system", "collection"] as const;
+const NAV_ITEM_TYPES = ["link", "system", "collection", "page"] as const;
 const NAV_ITEM_PLACEMENTS = ["header", "more"] as const;
-const SYSTEM_NAV_KEYS = [
-  "latest",
-  "featured",
-  "collections",
-  "archive",
-  "rss",
-  "settings",
-] as const;
 const UPLOAD_SESSION_STATES = [
   "pending",
   "uploaded",
@@ -167,6 +160,7 @@ export const posts = pgTable(
     url: text("url"),
     body: text("body"),
     bodyHtml: text("body_html"),
+    bodyHtmlVersion: integer("body_html_version").notNull().default(1),
     bodyText: text("body_text"),
     quoteText: text("quote_text"),
     summary: text("summary"),
@@ -242,8 +236,8 @@ export const posts = pgTable(
       .where(
         sql`${table.replyToId} IS NOT NULL AND ${table.status} = 'published'`,
       ),
-    index("idx_post_site_featured_featured_at")
-      .on(table.siteId, table.featuredAt, table.threadId, table.id)
+    index("idx_post_site_featured_thread_published")
+      .on(table.siteId, table.threadId, table.publishedAt, table.id)
       .where(
         sql`${table.status} = 'published' AND ${table.featuredAt} IS NOT NULL`,
       ),
@@ -591,16 +585,16 @@ export const collectionDirectoryItems = pgTable(
 );
 
 // =============================================================================
-// Post-Collection Junction Table (M:N)
+// Thread-Collection Junction Table (M:N)
 // =============================================================================
 
-export const postCollections = pgTable(
-  "post_collection",
+export const threadCollections = pgTable(
+  "thread_collection",
   {
     siteId: text("site_id")
       .notNull()
       .references(() => sites.id, { onDelete: "cascade" }),
-    postId: text("post_id")
+    threadId: text("thread_id")
       .notNull()
       .references(() => posts.id, { onDelete: "cascade" }),
     collectionId: text("collection_id")
@@ -611,16 +605,16 @@ export const postCollections = pgTable(
     pinnedAt: integer("pinned_at"),
   },
   (table) => [
-    primaryKey({ columns: [table.siteId, table.postId, table.collectionId] }),
-    index("idx_post_collection_site_collection_id").on(
+    primaryKey({ columns: [table.siteId, table.threadId, table.collectionId] }),
+    index("idx_thread_collection_site_collection_id").on(
       table.siteId,
       table.collectionId,
     ),
-    index("idx_post_collection_site_collection_created_post").on(
+    index("idx_thread_collection_site_collection_created_thread").on(
       table.siteId,
       table.collectionId,
       table.createdAt,
-      table.postId,
+      table.threadId,
     ),
   ],
 );
@@ -642,9 +636,12 @@ export const navItems = pgTable(
       .notNull()
       .default("link"),
     systemKey: text("system_key", {
-      enum: SYSTEM_NAV_KEYS,
+      enum: SYSTEM_NAV_KEY_VALUES,
     }),
     collectionId: text("collection_id").references(() => collections.id, {
+      onDelete: "cascade",
+    }),
+    postId: text("post_id").references(() => posts.id, {
       onDelete: "cascade",
     }),
     label: text("label").notNull(),
@@ -673,14 +670,22 @@ export const navItems = pgTable(
         ${table.type} = 'link'
         AND ${table.systemKey} IS NULL
         AND ${table.collectionId} IS NULL
+        AND ${table.postId} IS NULL
       ) OR (
         ${table.type} = 'system'
         AND ${table.systemKey} IS NOT NULL
         AND ${table.collectionId} IS NULL
+        AND ${table.postId} IS NULL
       ) OR (
         ${table.type} = 'collection'
         AND ${table.systemKey} IS NULL
         AND ${table.collectionId} IS NOT NULL
+        AND ${table.postId} IS NULL
+      ) OR (
+        ${table.type} = 'page'
+        AND ${table.systemKey} IS NULL
+        AND ${table.collectionId} IS NULL
+        AND ${table.postId} IS NOT NULL
       )`,
     ),
     uniqueIndex("uq_nav_item_site_position").on(table.siteId, table.position),
@@ -690,6 +695,9 @@ export const navItems = pgTable(
     uniqueIndex("uq_nav_item_site_collection_id")
       .on(table.siteId, table.collectionId)
       .where(sql`${table.collectionId} IS NOT NULL`),
+    uniqueIndex("uq_nav_item_site_post_id")
+      .on(table.siteId, table.postId)
+      .where(sql`${table.postId} IS NOT NULL`),
   ],
 );
 

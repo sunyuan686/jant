@@ -5,6 +5,7 @@
 #
 # Non-sensitive local defaults usually live in `packages/core/wrangler.toml`.
 # This file is primarily for secrets and local-only overrides.
+# Vite process settings such as PORT belong in `packages/core/.env` or the shell.
 
 # Required authentication secret. Must be at least 32 characters.
 # Generate one with: openssl rand -base64 32
@@ -34,6 +35,8 @@
 # SEARCH_PAGE_SIZE=50
 # ARCHIVE_PAGE_SIZE=50
 # RSS_FEED_LIMIT=50
+# 0 disables the delay; maximum 7200 seconds.
+# RSS_PUBLISH_DELAY_SECONDS=300
 
 # Cloudflare media URLs and image transformations.
 # R2_PUBLIC_URL=https://media.your-jant.example

@@ -1,3 +1,3 @@
-/* Optional Japanese font pack, loaded only when CJK font is set to Japanese. */
+/* Japanese serif profile, loaded when the resolved font profile is Japanese. */
 
 @import "./styles/fonts/noto-serif-jp/noto-serif-jp.css";

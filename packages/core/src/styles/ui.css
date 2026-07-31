@@ -30,6 +30,134 @@
     counter-reset: sidenote-counter;
   }
 
+  /* Authenticated utility chrome lives outside .site-page so the previewed
+     theme layout remains the same subtree visitors receive after publishing. */
+  .draft-preview-bar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    width: 100%;
+    border-bottom: 1px solid
+      color-mix(in srgb, var(--site-divider) 78%, transparent);
+    background: color-mix(
+      in srgb,
+      var(--site-elevated-bg) 94%,
+      var(--site-nav-hover-bg)
+    );
+    color: var(--site-text-secondary);
+    font-family: var(--font-ui);
+    box-shadow: 0 1px 0
+      color-mix(in srgb, var(--site-elevated-bg) 70%, transparent);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .draft-preview-bar-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.7rem;
+    min-height: 2.5rem;
+    max-width: var(--layout-body-max-width);
+    margin: 0 auto;
+    padding: 0.45rem var(--site-padding);
+    font-size: var(--type-ui-caption);
+    line-height: 1.35;
+    text-align: center;
+  }
+
+  .draft-preview-bar-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.7rem;
+    min-width: 0;
+  }
+
+  .draft-preview-bar-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    flex: none;
+    color: var(--site-text-primary);
+    font-weight: var(--fw-semibold);
+    letter-spacing: var(--type-label-tracking);
+    text-transform: uppercase;
+  }
+
+  .draft-preview-bar-dot {
+    width: 0.42rem;
+    height: 0.42rem;
+    border-radius: 999px;
+    background: var(--site-accent);
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--site-accent) 12%, transparent);
+  }
+
+  .draft-preview-bar-description {
+    color: var(--site-text-secondary);
+  }
+
+  .draft-preview-bar-action {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.9rem;
+    padding: 0.28rem 0.72rem;
+    border: 1px solid
+      color-mix(in srgb, var(--site-text-primary) 18%, transparent);
+    border-radius: 999px;
+    background: color-mix(
+      in srgb,
+      var(--site-elevated-bg) 78%,
+      var(--site-nav-hover-bg)
+    );
+    color: var(--site-text-primary);
+    font-size: var(--type-ui-caption);
+    font-weight: var(--fw-medium);
+    line-height: 1;
+    text-decoration: none;
+    cursor: pointer;
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease,
+      color 150ms ease,
+      transform 150ms ease;
+  }
+
+  .draft-preview-bar-action:hover {
+    border-color: color-mix(
+      in srgb,
+      var(--site-accent) 48%,
+      var(--site-divider)
+    );
+    background: var(--site-nav-hover-bg);
+    color: var(--site-accent);
+  }
+
+  .draft-preview-bar-action:active {
+    transform: translateY(1px);
+  }
+
+  .draft-preview-bar-action:focus-visible {
+    outline: 2px solid var(--site-accent);
+    outline-offset: 2px;
+  }
+
+  @media (max-width: 480px) {
+    .draft-preview-bar-inner {
+      align-items: center;
+      gap: 0.65rem;
+      text-align: left;
+    }
+
+    .draft-preview-bar-copy {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.12rem;
+    }
+  }
+
   /*
    * Tufte horizontal frame — single source of truth for left/right positioning.
    * Every page-level section gets the same asymmetric padding.
@@ -1127,6 +1255,148 @@
     align-items: center;
   }
 
+  .collection-created-notice {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.7rem;
+    width: fit-content;
+    max-width: 100%;
+    min-height: 2rem;
+    margin-bottom: 0.7rem;
+    padding: 0.35rem 0.45rem 0.35rem 0.65rem;
+    border-radius: 0.55rem;
+    background: color-mix(in srgb, var(--site-accent) 5%, var(--site-page-bg));
+    box-shadow: inset 2px 0 0
+      color-mix(in srgb, var(--site-accent) 30%, transparent);
+  }
+
+  .collection-created-notice-message {
+    margin: 0;
+    color: color-mix(
+      in srgb,
+      var(--site-text-secondary) 82%,
+      var(--site-text-primary)
+    );
+    font-family: var(--font-ui);
+    font-size: var(--type-sm);
+    line-height: 1.35;
+  }
+
+  @keyframes collection-created-notice-enter {
+    from {
+      opacity: 0;
+      transform: translateY(0.25rem);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes collection-created-notice-attention {
+    from {
+      background: color-mix(
+        in srgb,
+        var(--site-accent) 11%,
+        var(--site-page-bg)
+      );
+      box-shadow: inset 2px 0 0
+        color-mix(in srgb, var(--site-accent) 52%, transparent);
+    }
+
+    to {
+      background: color-mix(
+        in srgb,
+        var(--site-accent) 5%,
+        var(--site-page-bg)
+      );
+      box-shadow: inset 2px 0 0
+        color-mix(in srgb, var(--site-accent) 30%, transparent);
+    }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .collection-created-notice {
+      animation:
+        collection-created-notice-enter 360ms cubic-bezier(0.22, 1, 0.36, 1)
+          both,
+        collection-created-notice-attention 1.8s 120ms ease-out both;
+    }
+  }
+
+  .collection-created-notice-actions {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 0.35rem;
+  }
+
+  .collection-created-notice-action {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    min-height: 2rem;
+    padding: 0.2rem 0;
+    border: 0;
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: var(--type-sm);
+    line-height: 1.35;
+    text-decoration: none;
+    text-underline-offset: 0.22em;
+    cursor: pointer;
+  }
+
+  .collection-created-notice-action-primary {
+    color: var(--site-text-primary);
+    font-weight: var(--fw-medium);
+  }
+
+  .collection-created-notice-action-primary:hover {
+    color: var(--site-text-primary);
+    text-decoration: underline;
+  }
+
+  .collection-created-notice-action:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--site-accent) 28%, transparent);
+    outline-offset: 3px;
+    border-radius: var(--radius-sm, 0.25rem);
+  }
+
+  .collection-created-notice-action:disabled {
+    opacity: 0.5;
+    cursor: wait;
+  }
+
+  .collection-created-notice-dismiss {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--site-text-secondary);
+    opacity: 0.65;
+    cursor: pointer;
+  }
+
+  .collection-created-notice-dismiss:hover {
+    background: color-mix(in srgb, var(--site-accent) 6%, transparent);
+    color: var(--site-text-primary);
+    opacity: 1;
+  }
+
+  .collection-created-notice-dismiss:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--site-accent) 28%, transparent);
+    outline-offset: 2px;
+  }
+
   .collections-page-actions {
     display: flex;
     align-items: center;
@@ -1440,6 +1710,15 @@
     position: absolute;
     top: 0.7rem;
     right: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .collection-directory-managed-row:hover .collection-directory-item-menu,
+  .collection-directory-managed-row:focus-within
+    .collection-directory-item-menu {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .collections-link-create,
@@ -2080,6 +2359,13 @@
     }
   }
 
+  @media (hover: none) {
+    .collection-directory-item-menu {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+
   /* =========================================================================
    * Timeline & Post Components
    * ========================================================================= */
@@ -2350,9 +2636,128 @@
     );
   }
 
-  /* --- Sidenotes (Tufte-style margin notes) ------------------------------ */
+  /* --- Semantic footnotes with Tufte presentation ------------------------ */
 
-  .sidenote,
+  /* The published DOM stays semantic and readable without CSS: body blocks
+     come first, followed by doc-endnotes containing one native ordered list.
+     Detail and timeline posts use their real container width to opt into the
+     Tufte rail; narrow containers, print, feeds, and readers retain endnote
+     order. */
+  [data-post-view],
+  [data-timeline-item] {
+    container: post-view / inline-size;
+  }
+
+  .footnote-endnotes {
+    margin-block: 1.5rem 0;
+    padding-block-start: 0.85rem;
+    border-block-start: 1px solid var(--site-divider);
+  }
+
+  .footnote-list {
+    margin-block: 0;
+    padding-inline-start: 1.5rem;
+  }
+
+  .footnote {
+    scroll-margin-block-start: 2rem;
+    padding-inline-start: 0.15rem;
+    overflow-wrap: anywhere;
+    font-family: var(--font-body);
+    font-size: var(--type-sm);
+    font-style: normal;
+    font-weight: 400;
+    font-variant: normal;
+    line-height: 1.3;
+    letter-spacing: var(--type-body-tracking, normal);
+    text-align: left;
+    color: var(--site-footnote-text);
+  }
+
+  .footnote::marker {
+    color: inherit;
+    font-size: var(--type-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .footnote:target {
+    border-radius: var(--radius-sm, 0.25rem);
+    background: color-mix(in srgb, var(--site-reading-meta) 8%, transparent);
+  }
+
+  .footnote > :first-child {
+    margin-block-start: 0;
+  }
+
+  .footnote > :last-child {
+    margin-block-end: 0;
+  }
+
+  .footnote code {
+    font-size: var(--type-code);
+  }
+
+  .footnote-backlinks {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+    font-size: var(--type-xs);
+  }
+
+  span.footnote-backlinks {
+    margin-inline-start: 0.35rem;
+    vertical-align: baseline;
+  }
+
+  p.footnote-backlinks {
+    display: flex;
+    margin-block: 0.45rem 0;
+  }
+
+  .footnote + .footnote {
+    margin-block-start: 0.75rem;
+  }
+
+  .footnote-backref,
+  .footnote-ref > a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .footnote-backref:hover,
+  .footnote-ref > a:hover {
+    text-decoration: underline;
+  }
+
+  .footnote-backref:focus-visible,
+  .footnote-ref > a:focus-visible {
+    border-radius: var(--radius-sm, 0.25rem);
+    outline: 1px solid currentColor;
+    outline-offset: 2px;
+  }
+
+  .footnote-ref {
+    --site-prose-link-color: var(--site-footnote-marker);
+    --site-prose-link-hover: var(--site-footnote-marker);
+    --site-prose-link-underline: transparent;
+
+    margin-inline: 0.25rem;
+    vertical-align: super;
+    line-height: 0;
+    font-size: var(--type-footnote-ref);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--site-footnote-marker);
+  }
+
+  /* --- Legacy v1 sidenotes ----------------------------------------------- */
+
+  /* Kept for one compatibility window so imported snapshots or cached HTML
+     from an older runtime remain readable during rollout. Product reads render
+     stale post projections as v3 before the database rebuild runs. */
+
+  .sidenote:not([role="doc-footnote"]),
   .marginnote {
     /* Layout: float into the right margin. A floated note anchors to its containing
        block's right *content* edge, so if a theme gives that block inline-end padding
@@ -2395,7 +2800,7 @@
   }
 
   .sidenote-number::after,
-  .sidenote::before {
+  .sidenote:not([role="doc-footnote"])::before {
     position: relative;
     vertical-align: baseline;
   }
@@ -2411,13 +2816,13 @@
     margin-right: 0.25rem;
   }
 
-  .sidenote::before {
+  .sidenote:not([role="doc-footnote"])::before {
     content: counter(sidenote-counter) " ";
     font-size: var(--type-xs);
     top: -0.5rem;
   }
 
-  .sidenote > code,
+  .sidenote:not([role="doc-footnote"]) > code,
   .marginnote > code {
     font-size: var(--type-code);
   }
@@ -2446,12 +2851,12 @@
       cursor: pointer;
     }
 
-    .sidenote,
+    .sidenote:not([role="doc-footnote"]),
     .marginnote {
       display: none;
     }
 
-    .margin-toggle:checked + .sidenote,
+    .margin-toggle:checked + .sidenote:not([role="doc-footnote"]),
     .margin-toggle:checked + .marginnote {
       display: block;
       float: left;
@@ -5626,6 +6031,10 @@
     z-index: 6;
   }
 
+  .compose-action-row-without-collection {
+    justify-content: flex-end;
+  }
+
   @media (min-width: 700px) {
     .compose-action-row {
       padding: 12px 18px 16px;
@@ -6717,11 +7126,18 @@
     text-align: left;
     font-size: var(--compose-panel-control-size);
     color: var(--site-text-primary);
+    text-decoration: none;
     transition: background-color 0.12s ease;
   }
 
   .compose-dropdown-item:hover {
     background-color: var(--compose-control-bg);
+  }
+
+  .compose-dropdown-separator {
+    height: 1px;
+    margin: 4px 8px;
+    background-color: var(--compose-control-border);
   }
 
   .compose-slug-suggestion {
@@ -9041,8 +9457,30 @@
 
   .compose-tiptap-body .tiptap ol {
     list-style-type: decimal;
-    padding-left: 1.4em;
+    /* Keep multi-digit markers inside the editor's scrollable bounds. */
+    padding-left: 2.25em;
     margin: 1.25em 0;
+  }
+
+  .compose-tiptap-body .tiptap :is(ul, ol) :is(ul, ol) {
+    padding-left: 1.5em;
+    margin: 0.4em 0;
+  }
+
+  .compose-tiptap-body .tiptap ul ul {
+    list-style-type: circle;
+  }
+
+  .compose-tiptap-body .tiptap ul ul ul {
+    list-style-type: square;
+  }
+
+  .compose-tiptap-body .tiptap ol ol {
+    list-style-type: lower-alpha;
+  }
+
+  .compose-tiptap-body .tiptap ol ol ol {
+    list-style-type: lower-roman;
   }
 
   .compose-tiptap-body .tiptap li {
@@ -9054,6 +9492,16 @@
   }
 
   .compose-tiptap-body .tiptap li > p:last-child {
+    margin-bottom: 0;
+  }
+
+  /* A nested list makes its leading paragraph no longer the last child, so
+     clear the body-paragraph margin that would otherwise separate the levels. */
+  .compose-tiptap-body .tiptap li > p:has(+ :is(ul, ol)),
+  .compose-tiptap-body
+    .tiptap
+    li
+    > p:has(+ .ProseMirror-gapcursor + :is(ul, ol)) {
     margin-bottom: 0;
   }
 
@@ -9078,10 +9526,23 @@
   }
 
   /* Reply compose deliberately stays denser than ordinary authored prose. */
-  .compose-reply-compose-layout .compose-tiptap-body .tiptap ul,
-  .compose-reply-compose-layout .compose-tiptap-body .tiptap ol {
+  .compose-reply-compose-layout .compose-tiptap-body .tiptap ul {
     padding-left: 1.5em;
     margin: 0.25em 0;
+  }
+
+  .compose-reply-compose-layout .compose-tiptap-body .tiptap ol {
+    padding-left: 2.25em;
+    margin: 0.25em 0;
+  }
+
+  .compose-reply-compose-layout
+    .compose-tiptap-body
+    .tiptap
+    :is(ul, ol)
+    :is(ul, ol) {
+    padding-left: 1.5em;
+    margin: 0.2em 0;
   }
 
   .compose-reply-compose-layout .compose-tiptap-body .tiptap li {
@@ -10084,10 +10545,10 @@
   }
 
   .compose-tiptap-body .tiptap .tiptap-footnote-reference {
-    font-size: 0.75em;
+    font-size: var(--type-footnote-ref);
     line-height: 1;
     vertical-align: super;
-    color: var(--site-accent);
+    color: var(--site-footnote-marker);
     white-space: nowrap;
     cursor: pointer;
   }
@@ -10095,6 +10556,7 @@
   .compose-tiptap-body
     .tiptap
     .tiptap-footnote-reference.ProseMirror-selectednode {
+    color: var(--site-accent);
     outline: 1px solid var(--site-accent);
     outline-offset: 2px;
     border-radius: 4px;
@@ -10109,7 +10571,7 @@
   }
 
   .compose-tiptap-body .tiptap .tiptap-footnote-definition::before {
-    content: attr(data-footnote-label);
+    content: "[^" attr(data-footnote-label) "]:";
     grid-column: 1;
     align-self: start;
     color: var(--site-text-secondary);
@@ -12391,6 +12853,168 @@
     .archive-month-header-spaced {
       margin-top: 20px;
     }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Wide public-post footnote rail.
+ *
+ * Kept OUTSIDE @layer components so the runtime layout can override the
+ * unlayered `.prose` list rules. The source HTML remains one natural endnote
+ * list; these selectors only apply after the client has measured a wide detail
+ * or timeline container and confirmed that the rail fits safely.
+ * ------------------------------------------------------------------------- */
+
+:is(
+  [data-post-view] [data-page="post"] [data-post-body].post-detail-body,
+  [data-timeline-item] article[data-post] > [data-post-body].prose
+) {
+  --jant-footnote-rail-enabled: 0;
+}
+
+@media screen {
+  @container post-view (min-width: 56rem) {
+    :is(
+      [data-post-view] [data-page="post"] [data-post-body].post-detail-body,
+      [data-timeline-item] article[data-post] > [data-post-body].prose
+    ) {
+      --jant-footnote-rail-enabled: 1;
+    }
+
+    [data-post-body].prose:is(.footnote-rail-measuring, .footnote-rail-ready) {
+      position: relative;
+    }
+
+    [data-post-body].prose:is(.footnote-rail-measuring, .footnote-rail-ready)
+      > .footnote-endnotes {
+      position: absolute;
+      inset-block-start: 0;
+      inset-inline-start: calc(100% + var(--layout-sidenote-gap));
+      width: var(--layout-sidenote-width);
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+
+    [data-post-body].prose:is(.footnote-rail-measuring, .footnote-rail-ready)
+      > .footnote-endnotes
+      > .footnote-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      row-gap: 0.75rem;
+    }
+
+    [data-post-body].prose:is(.footnote-rail-measuring, .footnote-rail-ready)
+      > .footnote-endnotes
+      > .footnote-list
+      > .footnote {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      column-gap: 1ch;
+      align-items: baseline;
+      min-width: 0;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    [data-post-body].prose:is(.footnote-rail-measuring, .footnote-rail-ready)
+      > .footnote-endnotes
+      > .footnote-list
+      > .footnote::before {
+      content: var(--footnote-rail-number);
+      grid-column: 1;
+      grid-row: 1;
+      font-size: inherit;
+      line-height: inherit;
+      font-variant-numeric: tabular-nums;
+      color: var(--site-footnote-marker);
+    }
+
+    [data-post-body].prose:is(.footnote-rail-measuring, .footnote-rail-ready)
+      > .footnote-endnotes
+      > .footnote-list
+      > .footnote
+      > * {
+      grid-column: 2;
+      min-width: 0;
+    }
+
+    [data-post-body].prose:is(.footnote-rail-measuring, .footnote-rail-ready)
+      > .footnote-endnotes
+      > .footnote-list
+      > .footnote
+      > :first-child {
+      grid-row: 1;
+    }
+
+    [data-post-body].prose.footnote-rail-measuring > .footnote-endnotes {
+      visibility: hidden;
+    }
+
+    [data-post-body].prose.footnote-rail-measuring
+      > .footnote-endnotes
+      > .footnote-list {
+      display: grid;
+    }
+
+    [data-post-body].prose.footnote-rail-ready
+      > .footnote-endnotes
+      > .footnote-list {
+      position: relative;
+      display: block;
+      block-size: var(--footnote-rail-block-size);
+    }
+
+    [data-post-body].prose.footnote-rail-ready
+      > .footnote-endnotes
+      > .footnote-list
+      > .footnote {
+      position: absolute;
+      inset-block-start: var(--footnote-rail-y);
+      inset-inline: 0;
+      width: 100%;
+    }
+
+    /* The note is already beside its first reference. Keep reciprocal links in
+       the DOM for keyboard and assistive-technology users, revealing them when
+       focus enters rather than adding a persistent arrow to every rail item. */
+    [data-post-body].prose.footnote-rail-ready .footnote-backlinks {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      clip-path: inset(50%);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    [data-post-body].prose.footnote-rail-ready
+      .footnote-backlinks:focus-within {
+      position: static;
+      grid-column: 2;
+      width: auto;
+      height: auto;
+      margin: 0;
+      overflow: visible;
+      clip: auto;
+      clip-path: none;
+      white-space: normal;
+    }
+
+    [data-post-body].prose.footnote-rail-ready .footnote:target {
+      background: transparent;
+    }
+  }
+}
+
+@media print {
+  [data-post-body].prose:is(.footnote-rail-measuring, .footnote-rail-ready) {
+    min-block-size: auto !important;
   }
 }
 

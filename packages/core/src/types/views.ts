@@ -92,7 +92,7 @@ export interface PostView {
   // Media -- URLs pre-computed
   media: MediaView[];
 
-  // Collections this post belongs to
+  // Thread-level Collections projected onto this post
   collections: CollectionTagView[];
 
   // Thread context
@@ -157,6 +157,7 @@ export interface NavItemView {
   type: NavItemType;
   systemKey?: SystemNavKey;
   collectionId?: string;
+  postId?: string;
   label: string;
   url: string;
   /** "header" = visible in nav bar, "more" = under More dropdown */
@@ -173,7 +174,7 @@ export interface NavItemView {
 
 export type SuggestedNavLinkTargetType = "page" | "collection" | "archive";
 
-export type SuggestedNavLinkNavItemType = "link" | "collection";
+export type SuggestedNavLinkNavItemType = "link" | "collection" | "page";
 
 export interface SuggestedNavLink {
   key: string;
@@ -182,6 +183,15 @@ export interface SuggestedNavLink {
   targetType: SuggestedNavLinkTargetType;
   navItemType: SuggestedNavLinkNavItemType;
   collectionId?: string;
+  postId?: string;
+}
+
+/** A published titled note eligible to be added to site navigation. */
+export interface NavigationPageCandidate {
+  id: string;
+  title: string;
+  slug: string;
+  updatedAt: number;
 }
 
 /**
@@ -222,6 +232,8 @@ export interface TimelineItemView {
   };
   curatedThread?: {
     rootPost: PostView;
+    /** Show ratings on non-highlighted context posts (complete Collection Threads). */
+    showContextRatings: boolean;
     segments: {
       post: PostView;
       hiddenBeforeCount: number;

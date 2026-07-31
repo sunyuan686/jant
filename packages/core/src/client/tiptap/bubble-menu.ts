@@ -8,6 +8,7 @@
 
 import { Extension, type Editor } from "@tiptap/core";
 import { Plugin, PluginKey, Selection, TextSelection } from "@tiptap/pm/state";
+import { liftTarget } from "@tiptap/pm/transform";
 import type { EditorView } from "@tiptap/pm/view";
 import { isLinkToolbarInputActive } from "./link-toolbar.js";
 import type { FormattingToolbarMode } from "./toolbar-mode.js";
@@ -71,22 +72,89 @@ export function toggleMarkAndExit(editor: Editor, markName: string): void {
 }
 
 /**
- * Clears presentational inline marks without changing links or document structure.
+ * Clears presentational formatting while preserving semantic content structure.
  *
- * TipTap treats marks (bold, italic, links, and similar text formatting) and
- * nodes (headings, blockquotes, lists, and similar document structure) as
- * separate concerns. Links are semantic content and have their own explicit
- * unlink action, so the formatting reset preserves them as well. Structural
- * nodes are changed through their own toggle or conversion commands.
+ * Clearable marks (bold, italic, and similar text styling) are removed while
+ * marks configured with `clearable: false`, such as links, are retained.
+ * Headings become paragraphs and selected blockquote content is lifted out of
+ * its quote wrapper. Lists, code blocks, tables, media, and other structural
+ * nodes remain intact.
  *
  * @param editor - Editor whose current selection should be cleared
  * @returns Nothing
  */
 export function clearFormatting(editor: Editor): void {
-  editor.chain().focus().unsetAllMarks().run();
+  const { doc, selection } = editor.state;
+  const { from, to } = selection;
+  const headingPositions: number[] = [];
+  const blockquoteRanges: Array<{ from: number; to: number }> = [];
 
-  const { to } = editor.state.selection;
-  editor.commands.setTextSelection(to);
+  doc.nodesBetween(from, to, (node, pos) => {
+    if (node.type === editor.schema.nodes.heading) {
+      headingPositions.push(pos);
+    }
+
+    if (node.type === editor.schema.nodes.blockquote) {
+      blockquoteRanges.push({
+        from: Math.max(from, pos + 1),
+        to: Math.min(to, pos + node.nodeSize - 1),
+      });
+    }
+  });
+
+  editor
+    .chain()
+    .focus()
+    .unsetAllMarks()
+    .command(({ tr }) => {
+      const headingType = editor.schema.nodes.heading;
+      const paragraphType = editor.schema.nodes.paragraph;
+
+      if (headingType && paragraphType) {
+        for (const position of headingPositions) {
+          const mappedPosition = tr.mapping.map(position);
+          const node = tr.doc.nodeAt(mappedPosition);
+          if (node?.type !== headingType) continue;
+
+          const $position = tr.doc.resolve(mappedPosition);
+          const index = $position.index();
+          if (
+            $position.parent.canReplaceWith(index, index + 1, paragraphType)
+          ) {
+            tr.setNodeMarkup(mappedPosition, paragraphType);
+          }
+        }
+      }
+
+      const blockquoteType = editor.schema.nodes.blockquote;
+      if (blockquoteType) {
+        // Nested wrappers must be lifted from the inside out. Mapping the
+        // original ranges after each lift keeps later positions accurate.
+        for (let index = blockquoteRanges.length - 1; index >= 0; index -= 1) {
+          const range = blockquoteRanges[index];
+          if (!range) continue;
+          const mappedFrom = tr.mapping.map(range.from, 1);
+          const mappedTo = tr.mapping.map(range.to, -1);
+          if (mappedFrom > mappedTo) continue;
+
+          const nodeRange = tr.doc
+            .resolve(mappedFrom)
+            .blockRange(
+              tr.doc.resolve(mappedTo),
+              (node) => node.type === blockquoteType,
+            );
+          if (!nodeRange) continue;
+
+          const target = liftTarget(nodeRange);
+          if (target !== null) tr.lift(nodeRange, target);
+        }
+      }
+
+      const mappedEnd = tr.mapping.map(to, -1);
+      tr.setSelection(TextSelection.create(tr.doc, mappedEnd));
+      return true;
+    })
+    .run();
 }
 
 function getButtons(

@@ -76,12 +76,20 @@ import PARTIAL_POST_CARD from "./export-theme/layouts/partials/post-card.html?ra
 import PARTIAL_MEDIA_GALLERY from "./export-theme/layouts/partials/media-gallery.html?raw";
 import PARTIAL_REPLY from "./export-theme/layouts/partials/reply.html?raw";
 import PARTIAL_THREAD_PREVIEW from "./export-theme/layouts/partials/thread-preview.html?raw";
+import PARTIAL_FEATURED_THREAD from "./export-theme/layouts/partials/featured-thread.html?raw";
 import LAYOUT_RSS from "./export-theme/layouts/_default/rss.xml?raw";
 import PARTIAL_FEED_POST_CONTENT from "./export-theme/layouts/partials/feed-post-content.xml?raw";
 
 import type { StorageDriver } from "../lib/storage.js";
 import { base64ToUint8Array } from "../lib/favicon.js";
-import type { Post, Collection, Media, NavItem } from "../types.js";
+import {
+  SYSTEM_NAV_KEYS,
+  type Collection,
+  type Media,
+  type NavItem,
+  type Post,
+  type SystemNavKey,
+} from "../types.js";
 
 /** A file entry in the exported Hugo site. */
 export interface ExportFile {
@@ -102,6 +110,10 @@ export interface SiteConfig {
   siteDescription: string;
   siteLanguage: string;
   showJantBrandingOnHome: boolean;
+  /** Whether anonymous JSON reads are enabled on the source Jant site. */
+  publicApiEnabled: boolean;
+  /** Whether the exported Hugo site should emit Atom feeds. */
+  rssFeedsEnabled: boolean;
   /** "latest" or "featured" — drives the default RSS nav link in the exported site. */
   mainRssFeed: string;
   siteFooter: string;
@@ -171,7 +183,7 @@ interface ExportCollectionDirectorySourceItem {
     slug: string;
     title: string;
     description?: string | null;
-    postCount?: number;
+    threadCount?: number;
     recentActivityAt?: number;
   };
 }
@@ -184,14 +196,14 @@ interface SiteIconAssets {
 }
 
 interface ExportedCollectionMetrics {
-  postCount: number;
+  threadCount: number;
   recentActivityAt: number;
 }
 
 /**
  * A single `collections:` front-matter entry, already resolved to its
  * Hugo-visible slug. Assembled from
- * `collectionService.getCollectionEntriesByPostIds` + `collectionSlugMap`.
+ * `collectionService.getCollectionEntriesByThreadIds` + `collectionSlugMap`.
  */
 interface ExportedCollectionEntry {
   slug: string;
@@ -262,15 +274,15 @@ export function createExportService(
       const rootPostIds = roots.map((p) => p.id);
 
       const [
-        collectionsByPost,
-        collectionEntriesByPost,
+        collectionsByRoot,
+        collectionEntriesByThread,
         rawMediaByPost,
         slugMap,
         aliasMap,
         collectionSlugMap,
       ] = await Promise.all([
-        services.collections.getCollectionsByPostIds(allPostIds),
-        services.collections.getCollectionEntriesByPostIds(allPostIds),
+        services.collections.getCollectionsByPostIds(rootPostIds),
+        services.collections.getCollectionEntriesByThreadIds(rootPostIds),
         services.media.getByPostIds(allPostIds),
         services.paths.getPostSlugMap(allPostIds),
         services.paths.getPostAliases(rootPostIds),
@@ -289,7 +301,7 @@ export function createExportService(
       const collectionMetrics = buildExportedCollectionMetrics(
         allCollections,
         allPosts,
-        collectionsByPost,
+        collectionsByRoot,
       );
       const exportedCollectionDirectoryItems =
         buildExportedCollectionDirectoryItems(
@@ -325,9 +337,9 @@ export function createExportService(
         const threadReplies = repliesByThread.get(root.id) ?? [];
         const rootAliases = [...(aliasMap.get(root.id) ?? [])];
 
-        const rootCollectionEntries = buildExportedCollectionEntriesForPost(
+        const rootCollectionEntries = buildExportedCollectionEntriesForThread(
           root.id,
-          collectionEntriesByPost,
+          collectionEntriesByThread,
           collectionSlugMap,
           collectionTitleMap,
         );
@@ -339,9 +351,6 @@ export function createExportService(
           rootAliases,
           rootCollectionEntries,
           slugMap,
-          collectionEntriesByPost,
-          collectionSlugMap,
-          collectionTitleMap,
           rawMediaByPost,
           siteConfig,
           deps.storage ?? null,
@@ -353,10 +362,16 @@ export function createExportService(
       // Collection landing pages (`content/{slug}/_index.md`).
       for (const collection of allCollections) {
         const slug = collectionSlugMap.get(collection.id) ?? collection.slug;
-        const entryCount = collectionMetrics.get(collection.id)?.postCount ?? 0;
+        const entryCount =
+          collectionMetrics.get(collection.id)?.threadCount ?? 0;
         exportFiles.push({
           path: `content/${slug}/_index.md`,
-          content: await buildCollectionSection(collection, slug, entryCount),
+          content: await buildCollectionSection(
+            collection,
+            slug,
+            entryCount,
+            siteConfig.rssFeedsEnabled,
+          ),
         });
       }
 
@@ -375,7 +390,7 @@ export function createExportService(
       });
       exportFiles.push({
         path: "content/archive/_index.md",
-        content: await buildArchiveSection(),
+        content: await buildArchiveSection(siteConfig.rssFeedsEnabled),
       });
 
       const usedSlugs = new Set<string>();
@@ -384,7 +399,7 @@ export function createExportService(
       if (!usedSlugs.has("featured")) {
         exportFiles.push({
           path: "content/featured/_index.md",
-          content: await buildFeaturedSection(),
+          content: await buildFeaturedSection(siteConfig.rssFeedsEnabled),
         });
       }
 
@@ -476,6 +491,10 @@ export function createExportService(
       exportFiles.push({
         path: "themes/jant/layouts/partials/thread-preview.html",
         content: PARTIAL_THREAD_PREVIEW,
+      });
+      exportFiles.push({
+        path: "themes/jant/layouts/partials/featured-thread.html",
+        content: PARTIAL_FEATURED_THREAD,
       });
       exportFiles.push({
         path: "themes/jant/layouts/_default/rss.xml",
@@ -625,9 +644,9 @@ async function buildSiteIconAssets(
 // Thread bundle generation
 // ---------------------------------------------------------------------------
 
-function buildExportedCollectionEntriesForPost(
-  postId: string,
-  collectionEntriesByPost: Map<
+function buildExportedCollectionEntriesForThread(
+  threadId: string,
+  collectionEntriesByThread: Map<
     string,
     {
       collectionId: string;
@@ -639,7 +658,7 @@ function buildExportedCollectionEntriesForPost(
   collectionSlugMap: Map<string, string>,
   collectionTitleMap: Map<string, string>,
 ): ExportedCollectionEntry[] {
-  const entries = collectionEntriesByPost.get(postId) ?? [];
+  const entries = collectionEntriesByThread.get(threadId) ?? [];
   const resolved: ExportedCollectionEntry[] = [];
   for (const entry of entries) {
     const slug = collectionSlugMap.get(entry.collectionId);
@@ -805,23 +824,21 @@ async function buildThreadBundle(
   rootAliases: string[],
   rootCollectionEntries: ExportedCollectionEntry[],
   slugMap: Map<string, string>,
-  collectionEntriesByPost: Map<
-    string,
-    {
-      collectionId: string;
-      createdAt: number;
-      position: number;
-      pinnedAt: number | null;
-    }[]
-  >,
-  collectionSlugMap: Map<string, string>,
-  collectionTitleMap: Map<string, string>,
   mediaByPost: Map<string, Media[]>,
   siteConfig: SiteConfig,
   storage: StorageDriver | null,
   bundleMedia: boolean,
 ): Promise<ExportFile[]> {
   const files: ExportFile[] = [];
+  const featuredPosts = [root, ...threadReplies].filter(
+    (post) => post.status === "published" && post.featuredAt !== null,
+  );
+  const featuredPostIds = featuredPosts.map((post) => post.id);
+  const featuredSortAt = featuredPosts.reduce<number | null>(
+    (latest, post) =>
+      Math.max(latest ?? -1, post.publishedAt ?? post.createdAt),
+    null,
+  );
 
   // Root aliases = historical root slugs + every reply slug (so
   // /{reply-slug}/ gets a Hugo alias page that redirects/anchors to
@@ -876,6 +893,9 @@ async function buildThreadBundle(
     rating: root.rating ?? undefined,
     featured_at:
       root.featuredAt !== null ? toISOString(root.featuredAt) : undefined,
+    featured_post_ids: featuredPostIds.length > 0 ? featuredPostIds : undefined,
+    featured_sort_at:
+      featuredSortAt !== null ? toISOString(featuredSortAt) : undefined,
     pinned_at: root.pinnedAt !== null ? toISOString(root.pinnedAt) : undefined,
     root_aliases: rootAliases.length > 0 ? rootAliases : undefined,
     collections:
@@ -926,13 +946,6 @@ async function buildThreadBundle(
       buildMediaEmission(m, siteConfig, bundleMedia),
     );
     const replyMediaList = replyEmissions.map((e) => e.entry);
-    const replyCollectionEntries = buildExportedCollectionEntriesForPost(
-      reply.id,
-      collectionEntriesByPost,
-      collectionSlugMap,
-      collectionTitleMap,
-    );
-
     const replyFrontMatter: HugoFrontMatter = {
       id: reply.id,
       title: reply.format !== "quote" ? (reply.title ?? undefined) : undefined,
@@ -965,10 +978,6 @@ async function buildThreadBundle(
         reply.featuredAt !== null ? toISOString(reply.featuredAt) : undefined,
       pinned_at:
         reply.pinnedAt !== null ? toISOString(reply.pinnedAt) : undefined,
-      collections:
-        replyCollectionEntries.length > 0
-          ? collectionEntriesToRefs(replyCollectionEntries)
-          : undefined,
       media: replyMediaList.length > 0 ? replyMediaList : undefined,
     };
 
@@ -1046,22 +1055,22 @@ async function buildCollectionsSection(): Promise<string> {
   return `${await formatFrontMatter(frontMatter)}\n`;
 }
 
-async function buildArchiveSection(): Promise<string> {
+async function buildArchiveSection(rssFeedsEnabled: boolean): Promise<string> {
   const frontMatter: HugoFrontMatter = {
     title: "Archive",
     type: "archive",
     // Opt into Atom output at /archive/index.xml.
-    outputs: ["html", "rss"],
+    outputs: rssFeedsEnabled ? ["html", "rss"] : ["html"],
   };
   return `${await formatFrontMatter(frontMatter)}\n`;
 }
 
-async function buildFeaturedSection(): Promise<string> {
+async function buildFeaturedSection(rssFeedsEnabled: boolean): Promise<string> {
   const frontMatter: HugoFrontMatter = {
     title: "Featured",
     type: "featured",
     // Opt into Atom output at /featured/index.xml.
-    outputs: ["html", "rss"],
+    outputs: rssFeedsEnabled ? ["html", "rss"] : ["html"],
   };
   return `${await formatFrontMatter(frontMatter)}\n`;
 }
@@ -1070,6 +1079,7 @@ async function buildCollectionSection(
   collection: Collection,
   slug: string,
   entryCount: number,
+  rssFeedsEnabled: boolean,
 ): Promise<string> {
   const frontMatter: HugoFrontMatter = {
     title: collection.title,
@@ -1079,7 +1089,7 @@ async function buildCollectionSection(
     sort_order: collection.sortOrder,
     entry_count: entryCount,
     // Opt into Atom output at /{slug}/index.xml.
-    outputs: ["html", "rss"],
+    outputs: rssFeedsEnabled ? ["html", "rss"] : ["html"],
   };
   return `${await formatFrontMatter(frontMatter)}\n`;
 }
@@ -1248,7 +1258,11 @@ function buildExportedCollectionDirectoryItems(
         sequence: sequenceLabels[index] ?? "",
         label: item.label,
         url: item.url,
-        descriptionHtml: description ? renderMarkdown(description) : null,
+        descriptionHtml: description
+          ? renderMarkdown(description, {
+              namespace: `collection-directory-link-${sequenceLabels[index] ?? index}`,
+            })
+          : null,
       });
       return;
     }
@@ -1273,12 +1287,12 @@ function buildExportedCollectionDirectoryItems(
       slug,
       title: collection.title || slug,
       descriptionHtml: collectionDescription
-        ? renderMarkdown(collectionDescription)
+        ? renderMarkdown(collectionDescription, { namespace: collection.id })
         : null,
       entryCount:
-        metrics?.postCount ??
-        (typeof collection.postCount === "number"
-          ? collection.postCount
+        metrics?.threadCount ??
+        (typeof collection.threadCount === "number"
+          ? collection.threadCount
           : undefined),
       recentActivityLabel: formatCollectionActivityLabel(activityTimestamp),
       recentActivityIso: formatCollectionActivityIso(activityTimestamp),
@@ -1291,13 +1305,13 @@ function buildExportedCollectionDirectoryItems(
 function buildExportedCollectionMetrics(
   collections: readonly Collection[],
   posts: readonly Post[],
-  collectionsByPost: ReadonlyMap<string, readonly Collection[]>,
+  collectionsByThread: ReadonlyMap<string, readonly Collection[]>,
 ): Map<string, ExportedCollectionMetrics> {
   const metrics = new Map<string, ExportedCollectionMetrics>();
 
   for (const collection of collections) {
     metrics.set(collection.id, {
-      postCount: 0,
+      threadCount: 0,
       recentActivityAt: collection.updatedAt,
     });
   }
@@ -1317,15 +1331,15 @@ function buildExportedCollectionMetrics(
       post.publishedAt ??
       post.updatedAt ??
       post.createdAt;
-    const postCollections = collectionsByPost.get(post.id) ?? [];
+    const threadCollections = collectionsByThread.get(post.id) ?? [];
 
-    for (const collection of postCollections) {
+    for (const collection of threadCollections) {
       const current = metrics.get(collection.id);
       if (!current) {
         continue;
       }
 
-      if (current.postCount === 0) {
+      if (current.threadCount === 0) {
         current.recentActivityAt = activityAt;
       } else {
         current.recentActivityAt = Math.max(
@@ -1333,7 +1347,7 @@ function buildExportedCollectionMetrics(
           activityAt,
         );
       }
-      current.postCount += 1;
+      current.threadCount += 1;
     }
   }
 
@@ -1344,27 +1358,11 @@ function buildExportedCollectionMetrics(
 // Nav item resolution
 // ---------------------------------------------------------------------------
 
-/**
- * System nav items on the main site store an empty `label` in the DB and
- * resolve their display text at render time through i18n
- * (`getNavItemDisplayLabel`). The Hugo export has no i18n runtime, so fall
- * back to these English defaults when serializing to `data/jant.toml`.
- * Users can still override by setting a custom label on the nav item.
- */
-const SYSTEM_NAV_FALLBACK_LABELS: Record<string, string> = {
-  latest: "Latest",
-  featured: "Featured",
-  collections: "Collections",
-  archive: "Archive",
-  rss: "RSS",
-  settings: "Settings",
-};
-
 function resolveNavItemLabel(item: SiteConfig["navItems"][number]): string {
   if (item.label) return item.label;
   if (item.systemKey) {
-    const fallback = SYSTEM_NAV_FALLBACK_LABELS[item.systemKey];
-    if (fallback) return fallback;
+    const definition = SYSTEM_NAV_KEYS[item.systemKey as SystemNavKey];
+    if (definition) return definition.defaultLabel;
   }
   return item.label;
 }
@@ -1447,7 +1445,7 @@ function buildHugoToml(config: SiteConfig): string {
     // Override the built-in RSS output format to emit Atom instead of
     // RSS 2.0 so the wire format mirrors the main site's `lib/feed.ts`.
     "[outputs]",
-    '  home = ["html", "rss"]',
+    `  home = ["html"${config.rssFeedsEnabled ? ', "rss"' : ""}]`,
     // Hugo's default for sections is ["html", "rss"] — without overriding
     // it here every root post (which is a section) would get its own
     // /{slug}/index.xml. Turn sections off by default and re-enable RSS
@@ -1472,6 +1470,8 @@ function buildHugoToml(config: SiteConfig): string {
     "[params]",
     `  description = "${escapeTomlString(config.siteDescription)}"`,
     `  main_rss_feed = "${escapeTomlString(config.mainRssFeed)}"`,
+    `  public_api_enabled = ${config.publicApiEnabled}`,
+    `  rss_feeds_enabled = ${config.rssFeedsEnabled}`,
     `  show_jant_branding_on_home = ${config.showJantBrandingOnHome}`,
     `  show_header_avatar = ${config.showHeaderAvatar}`,
     `  noindex = ${config.noindex}`,
@@ -1502,7 +1502,9 @@ function buildJantDataToml(
   iconAssets: SiteIconAssets,
   directoryItems: readonly ExportedCollectionDirectoryItem[],
 ): string {
-  const footerHtml = config.siteFooter ? renderMarkdown(config.siteFooter) : "";
+  const footerHtml = config.siteFooter
+    ? renderMarkdown(config.siteFooter, { namespace: "site-footer" })
+    : "";
   const parts: string[] = [
     'format = "jant-site"',
     "version = 1",
@@ -1511,6 +1513,8 @@ function buildJantDataToml(
     `site_description = "${escapeTomlString(config.siteDescription)}"`,
     `site_language = "${escapeTomlString(config.siteLanguage)}"`,
     `main_rss_feed = "${escapeTomlString(config.mainRssFeed)}"`,
+    `public_api_enabled = ${config.publicApiEnabled}`,
+    `rss_feeds_enabled = ${config.rssFeedsEnabled}`,
     `show_jant_branding_on_home = ${config.showJantBrandingOnHome}`,
     `show_header_avatar = ${config.showHeaderAvatar}`,
     `noindex = ${config.noindex}`,
@@ -1548,6 +1552,13 @@ function buildJantDataToml(
     // `settings` is authenticated-only and has no corresponding page in the
     // static Hugo site — drop it at export time so it never shows up in nav.
     if (item.systemKey === "settings") continue;
+    if (
+      !config.rssFeedsEnabled &&
+      item.type === "system" &&
+      item.systemKey === "rss"
+    ) {
+      continue;
+    }
     parts.push("");
     parts.push("[[nav]]");
     parts.push(`type = "${escapeTomlString(item.type)}"`);

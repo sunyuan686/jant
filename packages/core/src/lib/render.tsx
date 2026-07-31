@@ -49,12 +49,16 @@ export interface RenderPublicPageOptions {
   navData: NavigationData;
   /** Page content JSX to render inside SiteLayout */
   content: Child;
+  /** Optional status chrome rendered outside the public site layout. */
+  pageChrome?: Child;
   /** Optional sidebar content for sidebar layout */
   sidebar?: Child;
   /** Optional toast notification */
   toast?: ToastProps;
   /** Whether to render the shared compose dialog shell */
   showComposeDialog?: boolean;
+  /** Override the site-wide crawler setting for sensitive utility pages. */
+  noindex?: boolean;
   /** Whether to render the site header */
   showHeader?: boolean;
   /** Whether to render the home branding credit after the site footer */
@@ -97,9 +101,11 @@ export function renderPublicPage(c: Context, options: RenderPublicPageOptions) {
     canonicalHref,
     navData,
     content,
+    pageChrome,
     sidebar,
     toast,
     showComposeDialog,
+    noindex,
     showHeader,
     showHomeBranding,
     composeCollectionId,
@@ -138,7 +144,7 @@ export function renderPublicPage(c: Context, options: RenderPublicPageOptions) {
   };
   const faviconUrl = appConfig.siteAvatarUrl || undefined;
   const faviconVersion = appConfig.faviconVersion || undefined;
-  const noindex = appConfig.noindex;
+  const resolvedNoindex = noindex ?? appConfig.noindex;
 
   return c.html(
     <BaseLayout
@@ -158,10 +164,11 @@ export function renderPublicPage(c: Context, options: RenderPublicPageOptions) {
       canonicalHref={canonicalHref}
       faviconUrl={faviconUrl}
       faviconVersion={faviconVersion}
-      noindex={noindex}
+      noindex={resolvedNoindex}
       isAuthenticated={navData.isAuthenticated}
       toast={toast}
     >
+      {pageChrome}
       <SiteLayout {...layoutProps}>{content}</SiteLayout>
     </BaseLayout>,
   );

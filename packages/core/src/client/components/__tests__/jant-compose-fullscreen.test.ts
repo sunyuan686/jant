@@ -90,6 +90,110 @@ describe("JantComposeFullscreen", () => {
     ).toBeNull();
   });
 
+  it.each(["metaKey", "ctrlKey"] as const)(
+    "publishes with %s+Enter and returns the latest editor state",
+    async (modifier) => {
+      const el = document.createElement(
+        "jant-compose-fullscreen",
+      ) as JantComposeFullscreen;
+      el.labels = labels;
+      document.body.appendChild(el);
+      await flush(el);
+
+      document.dispatchEvent(
+        new CustomEvent("jant:fullscreen-open", {
+          detail: {
+            json: null,
+            title: "Keyboard post",
+            showTitle: true,
+            labels,
+            editorIndex: 2,
+          },
+        }),
+      );
+      await flush(el);
+
+      requireEditor(el).commands.setContent({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "Publish from fullscreen" }],
+          },
+        ],
+      });
+
+      let detail: ComposeFullscreenCloseDetail | null = null;
+      document.addEventListener(
+        "jant:fullscreen-close",
+        (event) => {
+          detail = (event as CustomEvent<ComposeFullscreenCloseDetail>).detail;
+        },
+        { once: true },
+      );
+
+      el.querySelector(".compose-fullscreen-dialog")?.dispatchEvent(
+        new globalThis.KeyboardEvent("keydown", {
+          key: "Enter",
+          [modifier]: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await flush(el);
+
+      expect(detail).toMatchObject({
+        title: "Keyboard post",
+        intent: "publish",
+        editorIndex: 2,
+        json: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "Publish from fullscreen" }],
+            },
+          ],
+        },
+      });
+      expect(el.querySelector(".compose-fullscreen-dialog")).toBeNull();
+    },
+  );
+
+  it("does not publish while an IME composition is active", async () => {
+    const el = document.createElement(
+      "jant-compose-fullscreen",
+    ) as JantComposeFullscreen;
+    el.labels = labels;
+    document.body.appendChild(el);
+    await flush(el);
+
+    document.dispatchEvent(
+      new CustomEvent("jant:fullscreen-open", {
+        detail: {
+          json: null,
+          title: "",
+          showTitle: false,
+          labels,
+        },
+      }),
+    );
+    await flush(el);
+
+    el.querySelector(".compose-fullscreen-dialog")?.dispatchEvent(
+      new globalThis.KeyboardEvent("keydown", {
+        key: "Enter",
+        metaKey: true,
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flush(el);
+
+    expect(el.querySelector(".compose-fullscreen-dialog")).not.toBeNull();
+  });
+
   it("reveals the title on demand and returns its visibility on close", async () => {
     const el = document.createElement(
       "jant-compose-fullscreen",

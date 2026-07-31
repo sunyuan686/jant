@@ -30,6 +30,8 @@ export async function buildSyncSiteConfig(c: {
     siteDescription: appConfig.siteDescription,
     siteLanguage: appConfig.siteLanguage,
     showJantBrandingOnHome: appConfig.showJantBrandingOnHome,
+    publicApiEnabled: appConfig.publicApiEnabled,
+    rssFeedsEnabled: appConfig.rssFeedsEnabled,
     mainRssFeed: appConfig.mainRssFeed,
     siteFooter: appConfig.siteFooter,
     showHeaderAvatar: appConfig.showHeaderAvatar,

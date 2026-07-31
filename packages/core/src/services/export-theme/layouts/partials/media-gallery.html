@@ -34,6 +34,7 @@
     {{- $item := . -}}
     {{- if or (eq $kind "image") (eq $kind "video") -}}
       {{- $lbEntry := dict "url" .src "alt" (.alt | default "") -}}
+      {{- with .id }}{{- $lbEntry = merge $lbEntry (dict "id" .) -}}{{- end -}}
       {{- with .width }}{{- $lbEntry = merge $lbEntry (dict "width" .) -}}{{- end -}}
       {{- with .height }}{{- $lbEntry = merge $lbEntry (dict "height" .) -}}{{- end -}}
       {{- if eq $kind "video" -}}

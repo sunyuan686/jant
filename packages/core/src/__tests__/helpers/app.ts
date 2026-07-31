@@ -43,6 +43,8 @@ interface TestAppOptions {
   telegramBotTokens?: string;
   /** Optional `TELEGRAM_WEBHOOK_SECRET` env binding for Telegram webhook tests */
   telegramWebhookSecret?: string;
+  /** RSS publication delay; defaults to zero in general route tests. */
+  rssPublishDelaySeconds?: number;
 }
 
 /**
@@ -84,6 +86,7 @@ export function createTestApp(options: TestAppOptions = {}) {
       HOSTED_CONTROL_PLANE_SSO_SECRET: options.hostedControlPlaneSsoSecret,
       TELEGRAM_BOT_TOKENS: options.telegramBotTokens,
       TELEGRAM_WEBHOOK_SECRET: options.telegramWebhookSecret,
+      RSS_PUBLISH_DELAY_SECONDS: options.rssPublishDelaySeconds ?? 0,
       NODE_DATABASE: {
         db,
         dialect: "sqlite",

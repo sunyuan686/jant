@@ -15,10 +15,16 @@ vi.mock("sortablejs", () => ({
   },
 }));
 
+vi.mock("../../toast.js", () => ({
+  showToast: vi.fn(),
+  showToastWithAction: vi.fn(),
+}));
+
 import type {
   CollectionManagerItem,
   CollectionManagerLabels,
 } from "../collection-manager-types.js";
+import { queueCollectionCreatedNotice } from "../../collection-created-notice.js";
 import "../jant-collection-directory.js";
 import type { JantCollectionsManager } from "../jant-collection-directory.js";
 
@@ -35,6 +41,12 @@ const labels: CollectionManagerLabels = {
   dividerLabelPlaceholder: "Section",
   newCollection: "New collection",
   edit: "Edit",
+  addToNavigation: "Add to Navigation",
+  addingToNavigation: "Adding…",
+  addedToNavigation: "Collection added to navigation.",
+  editNavigation: "Edit Navigation",
+  addToNavigationFailed: "Couldn't add this collection to navigation.",
+  notNow: "Not now",
   label: "Label",
   url: "URL",
   linkLabelPlaceholder: "Quotes",
@@ -49,8 +61,8 @@ const labels: CollectionManagerLabels = {
   deleteLink: "Remove link",
   confirmDeleteLink: "Remove this link from Collections?",
   cancel: "Cancel",
-  entrySingular: "entry",
-  entryPlural: "entries",
+  threadSingular: "thread",
+  threadPlural: "threads",
   emptyState: "Create a collection to get started.",
   orderSaved: "Collection order updated.",
   saved: "Collection saved.",
@@ -94,7 +106,7 @@ const items: CollectionManagerItem[] = [
       title: "Reading",
       description: "Notes from books",
       sortOrder: "newest",
-      postCount: 4,
+      threadCount: 4,
       recentActivityAt: 1_763_619_200,
     },
   },
@@ -109,7 +121,7 @@ const items: CollectionManagerItem[] = [
       title: "Tools",
       description: "Tools I keep around",
       sortOrder: "newest",
-      postCount: 2,
+      threadCount: 2,
       recentActivityAt: 1_763_619_260,
     },
   },
@@ -140,7 +152,7 @@ const groupedItems: CollectionManagerItem[] = [
       title: "Solo",
       description: null,
       sortOrder: "newest",
-      postCount: 1,
+      threadCount: 1,
       recentActivityAt: 1_763_619_300,
     },
   },
@@ -162,6 +174,7 @@ async function createElement(): Promise<JantCollectionsManager> {
   ) as JantCollectionsManager;
   el.labels = labels;
   el.items = items;
+  el.navigationCollectionIds = [];
   document.body.appendChild(el);
   await el.updateComplete;
   return el;
@@ -175,6 +188,7 @@ async function createElementWithItems(
   ) as JantCollectionsManager;
   el.labels = labels;
   el.items = customItems;
+  el.navigationCollectionIds = [];
   document.body.appendChild(el);
   await el.updateComplete;
   return el;
@@ -199,15 +213,24 @@ async function createElementWithManagerRoot(): Promise<JantCollectionsManager> {
   ) as JantCollectionsManager;
   el.labels = labels;
   el.items = items;
+  el.navigationCollectionIds = [];
   root.appendChild(el);
   document.body.appendChild(root);
   await el.updateComplete;
   return el;
 }
 
+async function flushAsyncWork() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe("JantCollectionsManager", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
+    globalThis.sessionStorage.clear();
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
     sortableCreateMock.mockClear();
     sortableDestroyMock.mockClear();
   });
@@ -305,7 +328,15 @@ describe("JantCollectionsManager", () => {
     );
     expect(firstRow?.textContent).toContain("Reading");
     expect(firstRow?.textContent).toContain("Notes from books");
-    expect(firstRow?.textContent).toContain("4 entries");
+    expect(firstRow?.textContent).toContain("4 threads");
+  });
+
+  it("keeps every Collection action trigger in the keyboard tab order", async () => {
+    const el = await createElement();
+
+    expect(
+      el.querySelectorAll(".collection-directory-item-menu > button"),
+    ).toHaveLength(2);
   });
 
   it("keeps focus on the URL field while typing in the new link form", async () => {
@@ -341,5 +372,123 @@ describe("JantCollectionsManager", () => {
     expect(linkRow?.textContent).not.toContain(
       "/archive?format=quote&visibility=public&view=list",
     );
+  });
+
+  it("shows a one-time post-create notice in the Collections content", async () => {
+    queueCollectionCreatedNotice("collection-1");
+    const el = await createElement();
+
+    const notice = el.querySelector<HTMLElement>(".collection-created-notice");
+    expect(notice?.textContent).toContain("Collection created.");
+    expect(notice?.textContent).not.toContain("Reading");
+    expect(notice?.textContent).toContain("Add to Navigation");
+
+    const dismissButton = notice?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Not now"]',
+    );
+    dismissButton?.click();
+    await el.updateComplete;
+
+    expect(el.querySelector(".collection-created-notice")).toBeNull();
+  });
+
+  it("adds a Collection to navigation from its item menu", async () => {
+    const el = await createElement();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "nav-1" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const { showToastWithAction } = await import("../../toast.js");
+
+    el._showItemMenuId = items[0]?.id ?? null;
+    await el.updateComplete;
+
+    const addButton = Array.from(
+      el.querySelectorAll<HTMLButtonElement>(".collections-page-menu-item"),
+    ).find((button) => button.textContent?.includes("Add to Navigation"));
+    expect(addButton).toBeDefined();
+
+    addButton?.click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/nav-items", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-Jant-Site-Header": "include",
+      },
+      body: JSON.stringify({
+        type: "collection",
+        collectionId: "collection-1",
+        placement: "header",
+      }),
+    });
+    expect(el.navigationCollectionIds).toContain("collection-1");
+    expect(showToastWithAction).toHaveBeenCalledWith(
+      "Collection added to navigation.",
+      {
+        label: "Edit Navigation",
+        href: "/settings/navigation",
+      },
+    );
+
+    el._showItemMenuId = items[0]?.id ?? null;
+    await el.updateComplete;
+    const editNavigationLink = Array.from(
+      el.querySelectorAll<HTMLAnchorElement>(".collections-page-menu-item"),
+    ).find((link) => link.textContent?.includes("Edit Navigation"));
+    expect(editNavigationLink?.getAttribute("href")).toBe(
+      "/settings/navigation",
+    );
+  });
+
+  it("adds the newly created Collection from the inline notice", async () => {
+    queueCollectionCreatedNotice("collection-1");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "nav-1" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const { showToastWithAction } = await import("../../toast.js");
+    const el = await createElement();
+    const notice = el.querySelector<HTMLElement>(".collection-created-notice");
+    const addButton = Array.from(
+      notice?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find((button) => button.textContent?.includes("Add to Navigation"));
+
+    expect(addButton).toBeDefined();
+    addButton?.click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/nav-items",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          type: "collection",
+          collectionId: "collection-1",
+          placement: "header",
+        }),
+      }),
+    );
+    expect(el.navigationCollectionIds).toContain("collection-1");
+    const updatedNotice = el.querySelector<HTMLElement>(
+      ".collection-created-notice",
+    );
+    expect(updatedNotice?.textContent).toContain(
+      "Collection added to navigation.",
+    );
+    expect(
+      updatedNotice
+        ?.querySelector<HTMLAnchorElement>("a")
+        ?.getAttribute("href"),
+    ).toBe("/settings/navigation");
+    expect(showToastWithAction).not.toHaveBeenCalled();
   });
 });

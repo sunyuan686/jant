@@ -21,6 +21,21 @@ function renderSettingsRootContent(
 }
 
 describe("SettingsRootContent", () => {
+  it("places Config Editor last in Advanced and preserves the site path prefix", () => {
+    const html = renderSettingsRootContent({ sitePathPrefix: "/notes" });
+
+    const codeInjection = html.indexOf("/notes/settings/code-injection");
+    const apiTokens = html.indexOf("/notes/settings/api-tokens");
+    const configEditor = html.indexOf("/notes/settings/config");
+    const accountSection = html.indexOf(">Account<");
+
+    expect(codeInjection).toBeGreaterThan(-1);
+    expect(apiTokens).toBeGreaterThan(codeInjection);
+    expect(configEditor).toBeGreaterThan(apiTokens);
+    expect(accountSection).toBeGreaterThan(configEditor);
+    expect(html).toContain("Config Editor");
+  });
+
   it("omits Manage Hosting when no hosted site settings URL is configured", () => {
     const html = renderSettingsRootContent({});
 

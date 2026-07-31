@@ -16,15 +16,20 @@ function createContext(
     themeMode?: "auto" | "light" | "dark";
     themeId?: string;
     defaultThemeId?: string;
+    siteLanguage?: string;
+    cjkSerifFont?: string;
+    rssFeedsEnabled?: boolean;
   },
 ) {
   const values = {
     appConfig: {
       mainRssFeed,
+      rssFeedsEnabled: overrides?.rssFeedsEnabled ?? true,
       sitePathPrefix: overrides?.sitePathPrefix ?? "",
       siteUrl: overrides?.siteUrl ?? "https://example.com",
       siteAvatarUrl: overrides?.siteAvatarUrl,
-      siteLanguage: "en",
+      siteLanguage: overrides?.siteLanguage ?? "en",
+      cjkSerifFont: overrides?.cjkSerifFont ?? "off",
       noindex: false,
       customCSS: "",
       themeMode: overrides?.themeMode ?? "auto",
@@ -301,6 +306,20 @@ describe("BaseLayout", () => {
     expect(html).not.toContain('href="/latest/feed"');
   });
 
+  it("omits feed autodiscovery when feed publishing is disabled", async () => {
+    const { BaseLayout } = await loadBaseLayout();
+    const html = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured", { rssFeedsEnabled: false }),
+        children: "Test",
+      }),
+    );
+
+    expect(html).not.toContain('type="application/atom+xml"');
+    expect(html).not.toContain('href="/feed"');
+  });
+
   it("uses the public asset base path from appConfig in production", async () => {
     const { BaseLayout } = await loadBaseLayout();
     const html = renderToString(
@@ -318,6 +337,50 @@ describe("BaseLayout", () => {
     expect(html).toContain(`src="/blog/_assets/client.js"`);
     expect(html).toContain(`href="/blog/_assets/client.css"`);
     expect(html).toContain('data-asset-base-path="/blog/_assets"');
+  });
+
+  it("loads the content language font profile when the CJK fallback is off", async () => {
+    const { BaseLayout } = await loadBaseLayout();
+    const html = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured", {
+          siteLanguage: "zh-Hant",
+          cjkSerifFont: "off",
+        }),
+        children: "Test",
+      }),
+    );
+
+    expect(html).toContain("client-cjk-tc.css");
+    expect(html).not.toContain("client-cjk.css");
+  });
+
+  it("uses the manual CJK fallback only for an unadapted content language", async () => {
+    const { BaseLayout } = await loadBaseLayout();
+    const fallbackHtml = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured", {
+          siteLanguage: "en",
+          cjkSerifFont: "zh-Hans",
+        }),
+        children: "Test",
+      }),
+    );
+    const contentLanguageHtml = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured", {
+          siteLanguage: "zh-Hant",
+          cjkSerifFont: "zh-Hans",
+        }),
+        children: "Test",
+      }),
+    );
+
+    expect(fallbackHtml).toContain("client-cjk.css");
+    expect(contentLanguageHtml).toContain("client-cjk-tc.css");
   });
 
   it("exposes the active theme id on the root html element", async () => {

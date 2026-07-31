@@ -47,6 +47,7 @@ export interface AttachedTextItem {
 
 export interface DraftItem {
   id: string;
+  slug: string;
   format: ComposeFormat;
   title: string | null;
   bodyText: string | null;
@@ -181,6 +182,8 @@ export interface ComposeLabels {
   discardChangesConfirm: string;
   drafts: string;
   draftsEmpty: string;
+  previewDraft: string;
+  draftActions: string;
   deleteDraft: string;
   draftDeleted: string;
   publishFailedDraft: string;
@@ -252,6 +255,7 @@ export interface ComposeFullscreenOpenDetail {
   selection?: ComposeEditorSelection | null;
   labels?: ComposeLabels;
   replyContext?: ComposeFullscreenReplyContext | null;
+  editorIndex?: number;
 }
 
 export interface ComposeFullscreenCloseDetail {
@@ -260,6 +264,8 @@ export interface ComposeFullscreenCloseDetail {
   showTitle: boolean;
   selection?: ComposeEditorSelection | null;
   replyExpanded: boolean;
+  intent?: "publish";
+  editorIndex?: number;
 }
 
 export type ComposeVisibility = "public" | "latest_hidden" | "private";
@@ -295,6 +301,8 @@ export interface ComposeSubmitDetail {
   collectionIds: string[];
   attachments: ComposeSubmitAttachment[];
   editPostId?: string;
+  /** Identifies an existing server draft loaded through the drafts workflow. */
+  draftSourceId?: string;
   replyToId?: string;
   quietReply?: boolean;
   replyThreadRootId?: string;

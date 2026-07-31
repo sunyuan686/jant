@@ -26,13 +26,22 @@ import {
   MAX_SITE_DESCRIPTION_LENGTH,
   MAX_SITE_FOOTER_LENGTH,
   TEXT_ATTACHMENT_CONTENT_FORMATS,
+  CONFIG_FIELDS,
+  type ConfigEditorDefinition,
   type ConfigKey,
 } from "../types.js";
+import { isCjkSerifFont } from "../i18n/detect.js";
+import {
+  isLocale,
+  isValidContentLanguage,
+  normalizeContentLanguage,
+} from "../i18n/locales.js";
 import { ValidationError } from "./errors.js";
 import { createTypeIdSchema, ID_PREFIX } from "./ids.js";
 import { normalizeSlug } from "./slug-format.js";
 import { isReservedPath } from "./constants.js";
 import { sanitizeUrl, normalizePath } from "./url.js";
+import { isSupportedTimeZone, normalizeTimeZone } from "./timezones.js";
 
 // =============================================================================
 // Shared Transforms
@@ -557,6 +566,12 @@ export const CreateNavItemSchema = z.discriminatedUnion("type", [
     label: sanitizeText(100).pipe(z.string().min(1)).optional(),
     placement: z.enum(["header", "more"]).optional(),
   }),
+  z.object({
+    type: z.literal("page"),
+    postId: PostIdSchema,
+    label: sanitizeText(100).pipe(z.string().min(1)).optional(),
+    placement: z.enum(["header", "more"]).optional(),
+  }),
 ]);
 
 /**
@@ -684,12 +699,129 @@ const EDITABLE_SETTING_VALUE_SCHEMAS: Partial<
   SITE_FOOTER: SiteFooterSettingSchema,
 };
 
+/**
+ * Normalize a raw string according to a Config Editor control definition.
+ *
+ * @param definition - Typed editor metadata from the config registry
+ * @param value - Raw string received at the HTTP/service boundary
+ * @returns Canonical string suitable for the settings key-value store
+ * @example
+ * ```ts
+ * normalizeConfigEditorDefinitionValue({ type: "boolean" }, "true");
+ * // "true"
+ * ```
+ */
+export function normalizeConfigEditorDefinitionValue(
+  definition: ConfigEditorDefinition,
+  value: string,
+): string {
+  switch (definition.type) {
+    case "boolean": {
+      const normalized = value.trim().toLowerCase();
+      if (normalized !== "true" && normalized !== "false") {
+        throw new ValidationError("Choose true or false.");
+      }
+      return normalized;
+    }
+    case "string": {
+      const normalized = value.trim();
+      if (
+        definition.maxLength !== undefined &&
+        normalized.length > definition.maxLength
+      ) {
+        throw new ValidationError(
+          `Keep this value at ${definition.maxLength} characters or fewer.`,
+        );
+      }
+      return normalized;
+    }
+    case "number": {
+      const normalized = value.trim();
+      const parsed = Number(normalized);
+      if (!normalized || !Number.isFinite(parsed)) {
+        throw new ValidationError("Enter a valid number.");
+      }
+      if (definition.min !== undefined && parsed < definition.min) {
+        throw new ValidationError(
+          `Enter a number greater than or equal to ${definition.min}.`,
+        );
+      }
+      if (definition.max !== undefined && parsed > definition.max) {
+        throw new ValidationError(
+          `Enter a number less than or equal to ${definition.max}.`,
+        );
+      }
+      if (definition.step !== undefined && definition.step > 0) {
+        const steps = parsed / definition.step;
+        const tolerance = Number.EPSILON * Math.max(1, Math.abs(steps)) * 4;
+        if (Math.abs(steps - Math.round(steps)) > tolerance) {
+          throw new ValidationError(
+            `Enter a number in steps of ${definition.step}.`,
+          );
+        }
+      }
+      return String(parsed);
+    }
+    case "enum": {
+      if (definition.options && !definition.options.includes(value)) {
+        throw new ValidationError("Choose one of the available options.");
+      }
+      return value;
+    }
+  }
+}
+
 export function normalizeEditableSettingValue(
   key: ConfigKey,
   value: string,
 ): string {
+  const field = CONFIG_FIELDS[key];
+  if (!("editor" in field)) {
+    return value;
+  }
+
   const schema = EDITABLE_SETTING_VALUE_SCHEMAS[key];
-  return schema ? parseValidated(schema, value) : value;
+  let normalized = schema
+    ? parseValidated(schema, value)
+    : normalizeConfigEditorDefinitionValue(field.editor, value);
+
+  switch (key) {
+    case "SITE_NAME":
+      if (!normalized) {
+        throw new ValidationError(
+          "Site name can't be empty. Enter a name or reset this setting.",
+        );
+      }
+      break;
+    case "SITE_LANGUAGE":
+      if (!isValidContentLanguage(normalized)) {
+        throw new ValidationError(
+          "Enter a valid BCP 47 language tag, such as en, fi, or zh-Hans.",
+        );
+      }
+      normalized = normalizeContentLanguage(normalized);
+      break;
+    case "DASHBOARD_LANGUAGE":
+      if (normalized && !isLocale(normalized)) {
+        throw new ValidationError(
+          "Choose a dashboard language Jant is translated into.",
+        );
+      }
+      break;
+    case "CJK_SERIF_FONT":
+      if (!isCjkSerifFont(normalized)) {
+        throw new ValidationError("Choose an available CJK font fallback.");
+      }
+      break;
+    case "TIME_ZONE":
+      if (!isSupportedTimeZone(normalized)) {
+        throw new ValidationError("Choose a valid time zone.");
+      }
+      normalized = normalizeTimeZone(normalized);
+      break;
+  }
+
+  return normalized;
 }
 
 /**

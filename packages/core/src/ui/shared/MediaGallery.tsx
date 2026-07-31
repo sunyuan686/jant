@@ -208,6 +208,7 @@ export const MediaGallery: FC<MediaGalleryProps> = ({
       return cat === "image" || cat === "video";
     })
     .map((a) => ({
+      id: a.id,
       url: a.url,
       alt: a.altText || "",
       width: a.width,

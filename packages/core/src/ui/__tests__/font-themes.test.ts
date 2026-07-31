@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   BUILTIN_FONT_THEMES,
+  DEFAULT_FONT_CJK_SANS_FALLBACK,
   DEFAULT_FONT_CJK_SERIF_FALLBACK,
-  getCjkSerifCssVariables,
+  getCjkFontCssVariables,
   getFontThemeCssVariables,
+  resolveCjkFontProfile,
 } from "../font-themes.js";
 
 describe("BUILTIN_FONT_THEMES", () => {
@@ -90,52 +92,62 @@ describe("BUILTIN_FONT_THEMES", () => {
     expect(variables["--type-label-weight"]).toBe("var(--fw-semibold)");
   });
 
-  it("routes zh-Hans to the simplified CJK serif fallback first", () => {
-    const variables = getCjkSerifCssVariables("zh-Hans");
-    const stack = variables["--font-cjk-serif-fallback"];
+  it("routes zh-Hans content to simplified serif and sans fallbacks", () => {
+    const variables = getCjkFontCssVariables("zh-Hans", "off");
+    const serif = variables["--font-cjk-serif-fallback"];
+    const sans = variables["--font-cjk-sans-fallback"];
 
-    expect(stack).toContain('"Songti SC"');
-    expect(stack).toContain('"Noto Serif SC"');
-    expect(stack.indexOf('"Songti SC"')).toBeLessThan(
-      stack.indexOf('"Noto Serif SC"'),
+    expect(serif).toContain('"Songti SC"');
+    expect(serif).toContain('"Noto Serif SC"');
+    expect(sans.indexOf('"PingFang SC"')).toBeLessThan(
+      sans.indexOf('"PingFang TC"'),
     );
   });
 
-  it("routes zh-Hant to the traditional CJK serif fallback first", () => {
-    const variables = getCjkSerifCssVariables("zh-Hant");
-    const stack = variables["--font-cjk-serif-fallback"];
+  it("routes zh-Hant content to traditional serif and sans fallbacks", () => {
+    const variables = getCjkFontCssVariables("zh-Hant", "off");
+    const serif = variables["--font-cjk-serif-fallback"];
+    const sans = variables["--font-cjk-sans-fallback"];
 
-    expect(stack).toContain('"Songti TC"');
-    expect(stack).toContain('"Noto Serif TC"');
-    expect(stack.indexOf('"Songti TC"')).toBeLessThan(
-      stack.indexOf('"Noto Serif TC"'),
+    expect(serif).toContain('"Songti TC"');
+    expect(serif).toContain('"Noto Serif TC"');
+    expect(sans.indexOf('"PingFang TC"')).toBeLessThan(
+      sans.indexOf('"PingFang SC"'),
     );
   });
 
-  it("routes ja to the Japanese CJK serif fallback", () => {
-    const variables = getCjkSerifCssVariables("ja");
-    const stack = variables["--font-cjk-serif-fallback"];
+  it("routes Japanese content to the Japanese font profile", () => {
+    const variables = getCjkFontCssVariables("ja", "off");
 
-    expect(stack).toContain('"Noto Serif JP"');
+    expect(variables["--font-cjk-serif-fallback"]).toContain('"Noto Serif JP"');
+    expect(variables["--font-cjk-sans-fallback"]).toContain('"Noto Sans JP"');
   });
 
-  it("routes ko to the Korean CJK serif fallback", () => {
-    const variables = getCjkSerifCssVariables("ko");
-    const stack = variables["--font-cjk-serif-fallback"];
+  it("routes Korean content to the Korean font profile", () => {
+    const variables = getCjkFontCssVariables("ko", "off");
 
-    expect(stack).toContain('"Noto Serif KR"');
+    expect(variables["--font-cjk-serif-fallback"]).toContain('"Noto Serif KR"');
+    expect(variables["--font-cjk-sans-fallback"]).toContain('"Noto Sans KR"');
   });
 
-  it("does not inject a runtime override when CJK is off", () => {
-    expect(getCjkSerifCssVariables("off")).toEqual({});
+  it("uses the explicit CJK fallback for an unadapted content language", () => {
+    expect(resolveCjkFontProfile("en", "zh-Hans")).toBe("zh-Hans");
   });
 
-  it("does not inject a runtime override for unrecognized values", () => {
-    expect(getCjkSerifCssVariables("en")).toEqual({});
+  it("lets an adapted content language override the manual fallback", () => {
+    expect(resolveCjkFontProfile("zh-Hant", "zh-Hans")).toBe("zh-Hant");
   });
 
-  it("keeps a default CJK serif fallback for the base tokens", () => {
-    expect(DEFAULT_FONT_CJK_SERIF_FALLBACK).toContain('"Songti SC"');
-    expect(DEFAULT_FONT_CJK_SERIF_FALLBACK).toContain('"Noto Serif SC"');
+  it("keeps the default profile neutral", () => {
+    expect(getCjkFontCssVariables("en", "off")).toEqual({});
+    expect(DEFAULT_FONT_CJK_SERIF_FALLBACK).toBe('"Jant Language Fallback"');
+    expect(DEFAULT_FONT_CJK_SANS_FALLBACK).toBe('"Jant Language Fallback"');
+  });
+
+  it("puts language slots into every serif and sans theme stack", () => {
+    for (const theme of BUILTIN_FONT_THEMES) {
+      const combined = `${theme.headingFontFamily} ${theme.bodyFontFamily}`;
+      expect(combined).toMatch(/var\(--font-cjk-(?:serif|sans)-fallback\)/);
+    }
   });
 });

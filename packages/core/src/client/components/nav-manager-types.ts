@@ -3,16 +3,25 @@
  */
 
 import type { SystemNavKey } from "../../types/constants.js";
+import type { CollectionFormLabels } from "./collection-types.js";
 
 export interface NavManagerItem {
   id: string;
-  type: "link" | "system" | "collection";
+  type: "link" | "system" | "collection" | "page";
   systemKey?: SystemNavKey;
   collectionId?: string;
+  postId?: string;
   label: string;
   displayLabel?: string;
   url: string;
   placement?: "header" | "more";
+}
+
+export interface NavManagerPage {
+  id: string;
+  title: string;
+  slug: string;
+  updatedAt: number;
 }
 
 export interface SystemNavConfig {
@@ -36,8 +45,9 @@ export interface NavManagerSuggestedLink {
   url: string;
   targetType: "page" | "collection" | "archive";
   targetLabel: string;
-  navItemType: "link" | "collection";
+  navItemType: "link" | "collection" | "page";
   collectionId?: string;
+  postId?: string;
 }
 
 export interface NavManagerLabels {
@@ -45,6 +55,7 @@ export interface NavManagerLabels {
   navigationItems: string;
   emptyState: string;
   link: string;
+  page: string;
   system: string;
   toggleEdit: string;
   label: string;
@@ -53,6 +64,7 @@ export interface NavManagerLabels {
   delete: string;
   remove: string;
   confirmDeleteLink: string;
+  confirmDeletePage: string;
   orderSaved: string;
   labelRequired: string;
   saveFailed: string;
@@ -68,12 +80,49 @@ export interface NavManagerLabels {
   suggestedLinksDescription: string;
   addSuggestedLink: string;
   suggestedLinkAdded: string;
+  addPageToNavigation: string;
+  addPageDescription: string;
+  addPage: string;
+  searchPages: string;
+  recentPages: string;
+  searchingPages: string;
+  noMatchingPages: string;
+  noPages: string;
+  pageSearchFailed: string;
+  createNewPage: string;
+  createPage: string;
+  createPageDescription: string;
+  pageTitle: string;
+  pageAddress: string;
+  pageVisibilityHint: string;
+  titleRequired: string;
+  slugInvalid: string;
+  slugReserved: string;
+  slugTooLong: string;
+  slugUnavailable: string;
+  checkingAddress: string;
+  creatingPage: string;
+  createPageFailed: string;
+  pageCreated: string;
+  pageCreatedDescription: string;
+  addToNavigation: string;
+  editPage: string;
+  pageAdded: string;
+  back: string;
   collection: string;
   addCollection: string;
   addCollectionToNavigation: string;
   addCollectionDescription: string;
   allCollectionsAdded: string;
   noCollections: string;
+  createNewCollection: string;
+  createCollection: string;
+  creatingCollection: string;
+  createCollectionFailed: string;
+  collectionCreatedDescription: string;
+  editCollection: string;
+  collectionAdded: string;
+  collectionFormLabels: CollectionFormLabels;
   confirmDeleteCollection: string;
   headerSection: string;
   moreSection: string;

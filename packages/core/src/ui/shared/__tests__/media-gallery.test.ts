@@ -104,6 +104,7 @@ describe("MediaGallery", () => {
 
     expect(html).toContain("data-feed-short-video");
     expect(html).toContain('data-video-src="/media/clip.mp4"');
+    expect(html).toContain("&quot;id&quot;:&quot;media-3&quot;");
     expect(html).toContain("data-feed-video-mute-toggle");
     expect(html).not.toContain("media-video-play-overlay");
     expect(html).not.toContain("media-short-video-progress");

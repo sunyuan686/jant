@@ -15,19 +15,56 @@ vi.mock("sortablejs", () => ({
   },
 }));
 
+vi.mock("../../lazy-slugify.js", () => ({
+  slugify: (text: string) =>
+    Promise.resolve(
+      text
+        .toLowerCase()
+        .trim()
+        .replace(/[^\w\s-]/g, "")
+        .replace(/[\s_-]+/g, "-")
+        .replace(/^-+|-+$/g, ""),
+    ),
+}));
+
 import type {
   NavManagerItem,
   NavManagerLabels,
   NavManagerSuggestedLink,
 } from "../nav-manager-types.js";
+import type { CollectionFormLabels } from "../collection-types.js";
 import "../jant-nav-manager.js";
 import type { JantNavManager } from "../jant-nav-manager.js";
+
+const collectionFormLabels: CollectionFormLabels = {
+  titleLabel: "Title",
+  titlePlaceholder: "My Collection",
+  slugLabel: "Collection link",
+  slugHelp: "This is the last part of the collection link.",
+  slugInvalidHelp: "Use lowercase letters, numbers, and hyphens only.",
+  slugReservedHelp: "This link is reserved. Choose something else.",
+  slugTooLongHelp: "Keep this link under 200 characters.",
+  editSlugLabel: "Edit link",
+  resetSlugLabel: "Reset link",
+  quickHint: "More options are available after you create it.",
+  quickSubmitLabel: "Create Collection",
+  createdLabel: "Collection created.",
+  descriptionLabel: "Description",
+  descriptionPlaceholder: "What's this collection about?",
+  sortOrderLabel: "Sort Order",
+  sortNewest: "Newest first",
+  sortOldest: "Oldest first",
+  sortRatingDesc: "Highest rated",
+  submitLabel: "Save",
+  cancelLabel: "Cancel",
+};
 
 const labels: NavManagerLabels = {
   preview: "Preview",
   navigationItems: "Navigation items",
   emptyState: "Add a link to get started.",
   link: "Link",
+  page: "Page",
   system: "System",
   toggleEdit: "Toggle edit",
   label: "Label",
@@ -36,6 +73,8 @@ const labels: NavManagerLabels = {
   delete: "Delete",
   remove: "Remove",
   confirmDeleteLink: "Delete this navigation link?",
+  confirmDeletePage:
+    "Remove this page from navigation? The page itself won't be deleted.",
   orderSaved: "Navigation order updated.",
   labelRequired: "Add a label.",
   saveFailed: "Save failed.",
@@ -51,6 +90,36 @@ const labels: NavManagerLabels = {
   suggestedLinksDescription: "Add common destinations.",
   addSuggestedLink: "Add",
   suggestedLinkAdded: "Link added to navigation.",
+  addPageToNavigation: "Add page to navigation",
+  addPageDescription:
+    "Choose a titled note that isn't already in navigation, or create a new page.",
+  addPage: "Add Page",
+  searchPages: "Search pages",
+  recentPages: "Recently updated",
+  searchingPages: "Searching pages…",
+  noMatchingPages: "No matching pages available to add.",
+  noPages: "No pages available.",
+  pageSearchFailed: "Couldn't load pages.",
+  createNewPage: "Create new page",
+  createPage: "Create Page",
+  createPageDescription: "Create a public page that won't appear in Latest.",
+  pageTitle: "Title",
+  pageAddress: "Page address",
+  pageVisibilityHint: "The page is public but stays out of Latest.",
+  titleRequired: "Enter a page title.",
+  slugInvalid: "Use lowercase letters, numbers, and hyphens.",
+  slugReserved: "That address is reserved.",
+  slugTooLong: "Keep the page address under 200 characters.",
+  slugUnavailable: "That address is already in use.",
+  checkingAddress: "Checking address…",
+  creatingPage: "Creating page…",
+  createPageFailed: "Couldn't create the page.",
+  pageCreated: "Page created.",
+  pageCreatedDescription: "Add it to navigation or open the editor.",
+  addToNavigation: "Add to Navigation",
+  editPage: "Edit Page",
+  pageAdded: "Page added to navigation.",
+  back: "Back",
   headerSection: "Header",
   moreSection: "More",
   moreEmptyHint: "Move links here to hide them under More.",
@@ -62,8 +131,16 @@ const labels: NavManagerLabels = {
   addCollectionDescription:
     "Pin a collection to your navigation bar. An asterisk (*) appears next to collections updated in the last 48 hours.",
   allCollectionsAdded: "All collections are already in your navigation.",
-  noCollections:
-    "No collections yet. Create one first, then add it to your navigation.",
+  noCollections: "No collections yet. Create one here to add it to navigation.",
+  createNewCollection: "Create new collection",
+  createCollection: "Create Collection",
+  creatingCollection: "Creating collection…",
+  createCollectionFailed: "Couldn't create the collection.",
+  collectionCreatedDescription:
+    "Add it to navigation now or open the editor to add details.",
+  editCollection: "Edit Collection",
+  collectionAdded: "Collection added to navigation.",
+  collectionFormLabels,
   confirmDeleteCollection:
     "Remove this collection from navigation? The collection itself won't be deleted.",
 };
@@ -152,6 +229,20 @@ function requireElement<T>(value: T | null, message: string): T {
   return value;
 }
 
+function findButton(
+  root: {
+    querySelectorAll<E extends globalThis.Element = globalThis.Element>(
+      selectors: string,
+    ): globalThis.NodeListOf<E>;
+  },
+  text: string,
+): HTMLButtonElement {
+  const button = Array.from(
+    root.querySelectorAll<HTMLButtonElement>("button"),
+  ).find((candidate) => candidate.textContent?.trim().includes(text));
+  return requireElement(button ?? null, `expected button containing ${text}`);
+}
+
 function getListIds(list: HTMLElement): string[] {
   return Array.from(list.querySelectorAll<HTMLElement>("[data-nav-id]")).map(
     (item) => item.dataset.navId ?? "",
@@ -219,6 +310,180 @@ describe("JantNavManager", () => {
         json: async () => ({ ...items[1] }),
       }),
     );
+  });
+
+  it("shows collection actions before custom link actions", async () => {
+    const el = await createElement();
+    const headings = Array.from(el.querySelectorAll("section > h2")).map(
+      (heading) => heading.textContent?.trim(),
+    );
+
+    expect(headings.indexOf(labels.addCollectionToNavigation)).toBeLessThan(
+      headings.indexOf(labels.addCustomLinkToNavigation),
+    );
+  });
+
+  it("offers quick collection creation at the bottom of the picker", async () => {
+    const el = await createElement();
+    el.collections = [
+      { id: "col-reading", title: "Reading", slug: "reading", group: null },
+    ];
+    await el.updateComplete;
+
+    findButton(el, "Add Collection").click();
+    await el.updateComplete;
+    const picker = requireElement(
+      el.querySelector<HTMLElement>(".collection-picker"),
+      "expected collection picker",
+    );
+    picker.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await el.updateComplete;
+    expect(el.querySelector(".collection-picker")).toBeNull();
+
+    findButton(el, "Add Collection").click();
+    await el.updateComplete;
+    const createCollectionButton = findButton(
+      requireElement(
+        el.querySelector<HTMLElement>(".collection-picker"),
+        "expected reopened collection picker",
+      ),
+      "Create new collection",
+    );
+    expect(
+      createCollectionButton.querySelectorAll('[aria-hidden="true"]'),
+    ).toHaveLength(1);
+    expect(
+      createCollectionButton.querySelector('[aria-hidden="true"]')?.textContent,
+    ).toBe("+");
+    createCollectionButton.click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    const dialog = requireElement(
+      el.querySelector<HTMLDialogElement>("#nav-collection-dialog"),
+      "expected collection dialog",
+    );
+    expect(dialog.open).toBe(true);
+
+    dialog.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await el.updateComplete;
+    expect(el.querySelector("#nav-collection-dialog")).toBeNull();
+  });
+
+  it("quick-creates a collection and adds it to navigation", async () => {
+    const el = await createElement();
+    const fetchMock = vi
+      .fn()
+      .mockImplementation((input: string, init?: globalThis.RequestInit) => {
+        if (input === "/api/collections" && init?.method === "POST") {
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            json: async () => ({
+              id: "col-books",
+              title: "Books",
+              slug: "books",
+            }),
+          });
+        }
+        if (input === "/api/nav-items" && init?.method === "POST") {
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            json: async () => ({
+              id: "nav-books",
+              type: "collection",
+              collectionId: "col-books",
+              label: "Books",
+              url: "/books",
+              placement: "header",
+            }),
+          });
+        }
+        throw new Error(`Unexpected fetch: ${input}`);
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    findButton(el, "Create Collection").click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    const dialog = requireElement(
+      el.querySelector<HTMLDialogElement>("#nav-collection-dialog"),
+      "expected collection dialog",
+    );
+    const titleInput = requireElement(
+      dialog.querySelector<HTMLInputElement>("[data-collection-title-input]"),
+      "expected collection title input",
+    );
+    titleInput.value = "Books";
+    titleInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    const createButton = requireElement(
+      dialog.querySelector<HTMLButtonElement>("footer .btn"),
+      "expected create collection button",
+    );
+    createButton.click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/collections",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ title: "Books", slug: "books" }),
+      }),
+    );
+    const editLink = requireElement(
+      el.querySelector<HTMLAnchorElement>(
+        'a[href="/collections/books/edit?returnTo=%2Fsettings%2Fnavigation"]',
+      ),
+      "expected collection edit link",
+    );
+    expect(editLink.target).toBe("_blank");
+    expect(editLink.rel).toContain("noopener");
+    expect(el.collections).toContainEqual({
+      id: "col-books",
+      title: "Books",
+      slug: "books",
+      group: null,
+    });
+
+    findButton(dialog, "Add to Navigation").click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/nav-items",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          type: "collection",
+          collectionId: "col-books",
+          placement: "header",
+        }),
+      }),
+    );
+    expect(el.querySelector("#nav-collection-dialog")).toBeNull();
+    expect(
+      getListIds(
+        requireElement(el.querySelector("#nav-items-header"), "header list"),
+      ),
+    ).toEqual(["nav-1", "nav-2", "nav-books"]);
   });
 
   it("reconciles a cross-list drag after Sortable mutates the DOM", async () => {
@@ -319,6 +584,31 @@ describe("JantNavManager", () => {
 
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(popover.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("hides a saved RSS item from the preview without removing its editor", async () => {
+    const el = await createElement();
+    el.items = [
+      ...items,
+      {
+        id: "nav-rss",
+        type: "system",
+        systemKey: "rss",
+        label: "Feed",
+        displayLabel: "Feed",
+        url: "/feed",
+        placement: "header",
+      },
+    ];
+    el.rssFeedsEnabled = false;
+    await el.updateComplete;
+
+    expect(getPreviewHeaderLabels(el)).not.toContain("Feed");
+    expect(el.querySelector('[data-nav-id="nav-rss"]')).not.toBeNull();
+
+    el.rssFeedsEnabled = true;
+    await el.updateComplete;
+    expect(getPreviewHeaderLabels(el)).toContain("Feed");
   });
 
   it("adds a suggested collection link through the nav items API", async () => {
@@ -483,5 +773,251 @@ describe("JantNavManager", () => {
     await flushAsyncWork();
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("searches for an existing page and adds it by post ID", async () => {
+    const el = await createElement();
+    const page = {
+      id: "pst_about",
+      title: "About me",
+      slug: "about-me",
+      updatedAt: 123,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockImplementation((input: string, init?: globalThis.RequestInit) => {
+        if (input.startsWith("/api/nav-items/pages?")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ pages: [page] }),
+          });
+        }
+        if (input === "/api/nav-items" && init?.method === "POST") {
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            json: async () => ({
+              id: "nav-page",
+              type: "page",
+              postId: page.id,
+              label: page.title,
+              url: `/${page.slug}`,
+              placement: "header",
+            }),
+          });
+        }
+        throw new Error(`Unexpected fetch: ${input}`);
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    findButton(el, "Add Page").click();
+    await flushAsyncWork();
+    await el.updateComplete;
+    findButton(el, "About me").click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/nav-items",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          type: "page",
+          postId: page.id,
+          placement: "header",
+        }),
+      }),
+    );
+    expect(
+      getListIds(
+        requireElement(el.querySelector("#nav-items-header"), "header list"),
+      ),
+    ).toEqual(["nav-1", "nav-2", "nav-page"]);
+    expect(el.querySelector("#nav-page-dialog")).toBeNull();
+  });
+
+  it("keeps page-list keyboard shortcuts scoped to the search field", async () => {
+    const el = await createElement();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        pages: [
+          {
+            id: "pst_about",
+            title: "About me",
+            slug: "about-me",
+            updatedAt: 123,
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    findButton(el, "Add Page").click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    const createButton = findButton(el, "Create new page");
+    createButton.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushAsyncWork();
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([, init]) =>
+          (init as globalThis.RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(false);
+
+    createButton.click();
+    await el.updateComplete;
+    expect(el.querySelector("#nav-new-page-title")).not.toBeNull();
+  });
+
+  it("quick-creates a hidden-from-Latest page and offers edit or add", async () => {
+    vi.useFakeTimers();
+    try {
+      const el = await createElement();
+      const fetchMock = vi
+        .fn()
+        .mockImplementation((input: string, init?: globalThis.RequestInit) => {
+          if (input.startsWith("/api/nav-items/pages?")) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ pages: [] }),
+            });
+          }
+          if (input.startsWith("/api/posts/slug?mode=suggest")) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ slug: "about-me" }),
+            });
+          }
+          if (input === "/api/posts" && init?.method === "POST") {
+            return Promise.resolve({
+              ok: true,
+              status: 201,
+              json: async () => ({
+                id: "pst_created",
+                title: "About me",
+                slug: "about-me",
+              }),
+            });
+          }
+          if (input === "/api/nav-items" && init?.method === "POST") {
+            return Promise.resolve({
+              ok: true,
+              status: 201,
+              json: async () => ({
+                id: "nav-created",
+                type: "page",
+                postId: "pst_created",
+                label: "About me",
+                url: "/about-me",
+                placement: "header",
+              }),
+            });
+          }
+          throw new Error(`Unexpected fetch: ${input}`);
+        });
+      vi.stubGlobal("fetch", fetchMock);
+
+      findButton(el, "Add Page").click();
+      await flushAsyncWork();
+      await el.updateComplete;
+      findButton(el, "Create new page").click();
+      await el.updateComplete;
+
+      const titleInput = requireElement(
+        el.querySelector<HTMLInputElement>("#nav-new-page-title"),
+        "title input",
+      );
+      titleInput.value = "About me";
+      titleInput.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(250);
+      await flushAsyncWork();
+      await el.updateComplete;
+      expect(
+        requireElement(
+          el.querySelector<HTMLInputElement>("#nav-new-page-slug"),
+          "slug input",
+        ).value,
+      ).toBe("about-me");
+
+      findButton(el, "Create Page").click();
+      await flushAsyncWork();
+      await el.updateComplete;
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/posts",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            format: "note",
+            title: "About me",
+            slug: "about-me",
+            status: "published",
+            visibility: "latest_hidden",
+          }),
+        }),
+      );
+      expect(
+        el.querySelector<HTMLAnchorElement>('a[href="/about-me?edit=1"]')?.rel,
+      ).toContain("noopener");
+
+      findButton(el, "Add to Navigation").click();
+      await flushAsyncWork();
+      await el.updateComplete;
+      expect(el.querySelector("#nav-page-dialog")).toBeNull();
+      expect(
+        getListIds(
+          requireElement(el.querySelector("#nav-items-header"), "header list"),
+        ),
+      ).toEqual(["nav-1", "nav-2", "nav-created"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders page items with label and page editing", async () => {
+    const el = await createElement();
+    el.items = [
+      {
+        id: "nav-page",
+        type: "page",
+        postId: "pst_page",
+        label: "About",
+        url: "/about",
+        placement: "header",
+      },
+    ];
+    await el.updateComplete;
+
+    requireElement(
+      el.querySelector<HTMLElement>(".nav-item-info"),
+      "page row",
+    ).click();
+    await el.updateComplete;
+
+    expect(el.querySelector(".badge-secondary")?.textContent).toContain("Page");
+    expect(el.querySelectorAll(".nav-item-edit input")).toHaveLength(1);
+    expect(
+      el.querySelector(".nav-item-edit input")?.getAttribute("maxlength"),
+    ).toBe("100");
+    const editPageLink = requireElement(
+      el.querySelector<HTMLAnchorElement>('a[href="/about?edit=1"]'),
+      "edit page link",
+    );
+    expect(editPageLink.target).toBe("_blank");
+    expect(editPageLink.rel).toContain("noopener");
   });
 });

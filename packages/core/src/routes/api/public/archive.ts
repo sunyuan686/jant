@@ -5,10 +5,13 @@ import type { AppVariables } from "../../../types/app-context.js";
 import { MEDIA_KINDS } from "../../../types.js";
 import { FormatSchema, parseValidated } from "../../../lib/schemas.js";
 import { toPublicPost } from "./posts.js";
+import { requirePublicApiEnabled } from "../../../middleware/public-content-access.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
 export const publicArchiveApiRoutes = new Hono<Env>();
+
+publicArchiveApiRoutes.use("*", requirePublicApiEnabled());
 
 const MediaKindSchema = z.enum(MEDIA_KINDS);
 const MEDIA_KIND_LIST = MEDIA_KINDS.join(", ");
@@ -108,6 +111,7 @@ publicArchiveApiRoutes.get("/", async (c) => {
     hasMedia: mediaPresence ?? hasMedia,
     hasTitle: title ?? hasTitle,
     hasReplies: replies,
+    ignorePinnedSort: true,
   });
 
   const postIds = posts.map((post) => post.id);

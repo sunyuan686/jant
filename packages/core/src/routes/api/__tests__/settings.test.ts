@@ -38,6 +38,10 @@ describe("Settings API Routes", () => {
       expect(body.settings.SITE_NAME).toBe("Jant");
       expect(body.settings.SITE_DESCRIPTION).toBe("");
       expect(body.settings.SITE_LANGUAGE).toBe("en");
+      expect(body.settings.PAGE_SIZE).toBe("50");
+      expect(body.settings.SEARCH_PAGE_SIZE).toBe("50");
+      expect(body.settings.ARCHIVE_PAGE_SIZE).toBe("50");
+      expect(body.settings.RSS_PUBLISH_DELAY_SECONDS).toBe("0");
     });
 
     it("returns stored settings overriding defaults", async () => {
@@ -246,6 +250,94 @@ describe("Settings API Routes", () => {
       expect(res.status).toBe(400);
     });
 
+    it("rejects invalid boolean and enum values", async () => {
+      const { app } = createTestApp({ authenticated: true });
+      app.route("/api/settings", settingsApiRoutes);
+
+      const booleanResponse = await app.request("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ SHOW_JANT_BRANDING_ON_HOME: "yes" }),
+      });
+      expect(booleanResponse.status).toBe(400);
+      expect((await booleanResponse.json()).error).toContain("true or false");
+
+      const enumResponse = await app.request("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ MAIN_RSS_FEED: "popular" }),
+      });
+      expect(enumResponse.status).toBe(400);
+      expect((await enumResponse.json()).error).toContain("available options");
+    });
+
+    it("validates and canonicalizes bounded integer settings", async () => {
+      const { app } = createTestApp({ authenticated: true });
+      app.route("/api/settings", settingsApiRoutes);
+
+      const validResponse = await app.request("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          PAGE_SIZE: "80",
+          SUMMARY_MAX_PARAGRAPHS: "20",
+          SUMMARY_MAX_CHARS: "1200",
+          RSS_FEED_LIMIT: "150",
+          RSS_PUBLISH_DELAY_SECONDS: "0",
+        }),
+      });
+      expect(validResponse.status).toBe(200);
+      await expect(validResponse.json()).resolves.toMatchObject({
+        settings: {
+          PAGE_SIZE: "80",
+          SEARCH_PAGE_SIZE: "80",
+          ARCHIVE_PAGE_SIZE: "80",
+          SUMMARY_MAX_PARAGRAPHS: "20",
+          SUMMARY_MAX_CHARS: "1200",
+          RSS_FEED_LIMIT: "150",
+          RSS_PUBLISH_DELAY_SECONDS: "0",
+        },
+      });
+
+      for (const [key, value] of [
+        ["PAGE_SIZE", "101"],
+        ["SEARCH_PAGE_SIZE", "1.5"],
+        ["SUMMARY_MAX_PARAGRAPHS", "51"],
+        ["SUMMARY_MAX_CHARS", "1501"],
+        ["RSS_FEED_LIMIT", "201"],
+        ["RSS_PUBLISH_DELAY_SECONDS", "7201"],
+      ]) {
+        const response = await app.request("/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [key]: value }),
+        });
+        expect(response.status).toBe(400);
+      }
+    });
+
+    it("validates and canonicalizes content language tags", async () => {
+      const { app } = createTestApp({ authenticated: true });
+      app.route("/api/settings", settingsApiRoutes);
+
+      const validResponse = await app.request("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ SITE_LANGUAGE: "zh-hans" }),
+      });
+      expect(validResponse.status).toBe(200);
+      expect((await validResponse.json()).settings.SITE_LANGUAGE).toBe(
+        "zh-Hans",
+      );
+
+      const invalidResponse = await app.request("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ SITE_LANGUAGE: "not_a_language" }),
+      });
+      expect(invalidResponse.status).toBe(400);
+    });
+
     it("rejects NOINDEX updates in demo mode", async () => {
       const { app } = createTestApp({ authenticated: true, demoMode: true });
       app.route("/api/settings", settingsApiRoutes);
@@ -279,6 +371,131 @@ describe("Settings API Routes", () => {
       expect(body.settings.SITE_NAME).toBe("Demo Blog");
       expect(body.settings.NOINDEX).toBe("true");
       expect(body.rejectedKeys).toContain("NOINDEX");
+    });
+  });
+
+  describe("DELETE /api/settings/:key", () => {
+    it("returns 401 when not authenticated", async () => {
+      const { app } = createTestApp({ authenticated: false });
+      app.route("/api/settings", settingsApiRoutes);
+
+      const res = await app.request("/api/settings/SITE_NAME", {
+        method: "DELETE",
+      });
+
+      expect(res.status).toBe(401);
+    });
+
+    it("removes an override and returns the fallback value", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/settings", settingsApiRoutes);
+      await services.settings.set("SITE_NAME", "Custom name");
+
+      const res = await app.request("/api/settings/SITE_NAME", {
+        method: "DELETE",
+      });
+
+      expect(res.status).toBe(200);
+      expect(await services.settings.get("SITE_NAME")).toBeNull();
+      const body = await res.json();
+      expect(body.settings.SITE_NAME).toBe("Jant");
+      expect(body.setting).toMatchObject({
+        key: "SITE_NAME",
+        value: "Jant",
+        modified: false,
+      });
+    });
+
+    it("resets search page size to the current page-size setting", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/settings", settingsApiRoutes);
+      await services.settings.set("PAGE_SIZE", "80");
+      await services.settings.set("SEARCH_PAGE_SIZE", "25");
+
+      const res = await app.request("/api/settings/SEARCH_PAGE_SIZE", {
+        method: "DELETE",
+      });
+
+      expect(res.status).toBe(200);
+      expect(await services.settings.get("SEARCH_PAGE_SIZE")).toBeNull();
+      const body = await res.json();
+      expect(body.settings.SEARCH_PAGE_SIZE).toBe("80");
+      expect(body.setting).toMatchObject({
+        key: "SEARCH_PAGE_SIZE",
+        value: "80",
+        fallbackValue: "80",
+        modified: false,
+      });
+    });
+
+    it("removes a safe linked scalar override and returns its fallback", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/settings", settingsApiRoutes);
+      await services.settings.set("THEME", "paper");
+
+      const res = await app.request("/api/settings/THEME", {
+        method: "DELETE",
+      });
+
+      expect(res.status).toBe(200);
+      expect(await services.settings.get("THEME")).toBeNull();
+      const body = await res.json();
+      expect(body.settings.THEME).toBeUndefined();
+      expect(body.setting).toMatchObject({
+        key: "THEME",
+        mode: "link",
+        value: "tufte",
+        modified: false,
+        resettable: true,
+      });
+    });
+
+    it("resets an API-editable textarea setting through its linked editor state", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/settings", settingsApiRoutes);
+      await services.settings.set("SITE_DESCRIPTION", "A longer introduction");
+
+      const res = await app.request("/api/settings/SITE_DESCRIPTION", {
+        method: "DELETE",
+      });
+
+      expect(res.status).toBe(200);
+      expect(await services.settings.get("SITE_DESCRIPTION")).toBeNull();
+      const body = await res.json();
+      expect(body.settings.SITE_DESCRIPTION).toBe("");
+      expect(body.setting).toMatchObject({
+        key: "SITE_DESCRIPTION",
+        mode: "link",
+        value: "false",
+        modified: false,
+        resettable: true,
+        settingsPath: "/settings/general",
+      });
+    });
+
+    it("rejects unsafe, specialized, and demo-locked keys", async () => {
+      const standard = createTestApp({ authenticated: true });
+      standard.app.route("/api/settings", settingsApiRoutes);
+
+      for (const key of [
+        "AUTH_SECRET",
+        "GITHUB_SYNC_TOKEN",
+        "CUSTOM_CSS",
+        "SITE_AVATAR",
+      ]) {
+        const res = await standard.app.request(`/api/settings/${key}`, {
+          method: "DELETE",
+        });
+        expect(res.status).toBe(400);
+        expect((await res.json()).details.rejectedKeys).toContain(key);
+      }
+
+      const demo = createTestApp({ authenticated: true, demoMode: true });
+      demo.app.route("/api/settings", settingsApiRoutes);
+      const demoResponse = await demo.app.request("/api/settings/NOINDEX", {
+        method: "DELETE",
+      });
+      expect(demoResponse.status).toBe(400);
     });
   });
 

@@ -21,10 +21,13 @@ import {
   resolveCollectionSortOrder,
   supportsCollectionRatingSort,
 } from "../../../lib/collection-sort.js";
+import { requirePublicApiEnabled } from "../../../middleware/public-content-access.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
 export const publicPostsApiRoutes = new Hono<Env>();
+
+publicPostsApiRoutes.use("*", requirePublicApiEnabled());
 
 const ListPublicPostsQuerySchema = z.object({
   format: FormatSchema.optional(),
@@ -97,7 +100,7 @@ function isPublicDetailVisible(post: Post | null): post is Post {
 export function toPublicPost(
   post: Post,
   mediaList: Media[],
-  postCollections: Collection[],
+  threadCollections: Collection[],
   appConfig: AppVariables["appConfig"],
   options?: { content?: "markdown" },
 ): PublicPostResponse {
@@ -159,7 +162,7 @@ export function toPublicPost(
         sitePathPrefix,
       ),
     ),
-    collections: postCollections.map((collection) => ({
+    collections: threadCollections.map((collection) => ({
       id: collection.id,
       slug: collection.slug,
       title: collection.title,
@@ -226,16 +229,19 @@ publicPostsApiRoutes.get("/", async (c) => {
       ? "newest"
       : primaryCollection.sortOrder;
 
-    const ratedPostCount = await c.var.services.posts.countUpTo(
-      {
+    const ratedThreadCount =
+      await c.var.services.posts.countCollectionThreadRootsUpToForCollections(
         collectionIds,
-        status: "published",
-        excludePrivate: true,
-        hasRating: true,
-      },
-      2,
-    );
-    const showRatingSort = supportsCollectionRatingSort(ratedPostCount);
+        {
+          status: "published",
+          excludePrivate: true,
+          excludeLatestHidden: true,
+          rootFormat: format,
+          hasRating: true,
+        },
+        2,
+      );
+    const showRatingSort = supportsCollectionRatingSort(ratedThreadCount);
     const defaultSort = resolveCollectionSortOrder(
       undefined,
       requestedDefaultSort,
@@ -244,17 +250,28 @@ publicPostsApiRoutes.get("/", async (c) => {
     sortOrder = resolveCollectionSortOrder(sort, defaultSort, showRatingSort);
   }
 
-  const posts = await c.var.services.posts.list({
-    format,
-    collectionIds,
-    sortOrder,
-    status: "published",
-    cursor: cursor ?? undefined,
-    limit,
-    excludePrivate: true,
-    excludeLatestHidden: true,
-    excludeReplies: true,
-  });
+  const posts = collectionIds
+    ? await c.var.services.posts.listCollectionThreadRootsForCollections(
+        collectionIds,
+        {
+          status: "published",
+          excludePrivate: true,
+          excludeLatestHidden: true,
+          rootFormat: format,
+          sortOrder,
+          cursor: cursor ?? undefined,
+          limit,
+        },
+      )
+    : await c.var.services.posts.list({
+        format,
+        status: "published",
+        cursor: cursor ?? undefined,
+        limit,
+        excludePrivate: true,
+        excludeLatestHidden: true,
+        excludeReplies: true,
+      });
 
   const postIds = posts.map((post) => post.id);
   const [mediaMap, collectionsMap] = await Promise.all([
@@ -289,13 +306,13 @@ publicPostsApiRoutes.get("/:slug", async (c) => {
     throw new NotFoundError("Post");
   }
 
-  const [mediaList, postCollections] = await Promise.all([
+  const [mediaList, threadCollections] = await Promise.all([
     c.var.services.media.getByPostId(post.id),
     c.var.services.collections.getCollectionsByPostId(post.id),
   ]);
 
   return c.json(
-    toPublicPost(post, mediaList, postCollections, c.var.appConfig, {
+    toPublicPost(post, mediaList, threadCollections, c.var.appConfig, {
       content,
     }),
   );

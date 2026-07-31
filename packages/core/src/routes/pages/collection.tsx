@@ -19,9 +19,13 @@ import {
 } from "../../lib/collection-sort.js";
 import { assembleCollectionTimeline } from "../../lib/timeline.js";
 import { defaultFeedRenderer } from "../../lib/feed.js";
+import {
+  getFeedEntryUpdatedAt,
+  getRssPublishedBefore,
+  RSS_FEED_CACHE_CONTROL,
+} from "../../lib/feed-policy.js";
 import { toPlainText as markdownToPlainText } from "../../lib/markdown.js";
 import { buildMediaMap } from "../../lib/media-helpers.js";
-import { toISOString } from "../../lib/time.js";
 import { createMediaContext, toPostViews } from "../../lib/view.js";
 import { toAbsoluteSiteUrl, toPublicPath } from "../../lib/url.js";
 import {
@@ -147,16 +151,17 @@ export async function renderCollectionPage(
   );
   const isAggregate = selection.collections.length > 1;
 
-  const ratedPostCount = await c.var.services.posts.countUpTo(
-    {
+  const ratedThreadCount =
+    await c.var.services.posts.countCollectionThreadRootsUpToForCollections(
       collectionIds,
-      status: "published",
-      excludePrivate: !navData.isAuthenticated,
-      hasRating: true,
-    },
-    2,
-  );
-  const showRatingSort = supportsCollectionRatingSort(ratedPostCount);
+      {
+        status: "published",
+        excludePrivate: !navData.isAuthenticated,
+        hasRating: true,
+      },
+      2,
+    );
+  const showRatingSort = supportsCollectionRatingSort(ratedThreadCount);
   const requestedDefaultSort = isAggregate
     ? "newest"
     : primaryCollection.sortOrder;
@@ -219,7 +224,17 @@ export async function renderCollectionPage(
         defaultSort={defaultSort}
         showRatingSort={showRatingSort}
         isAuthenticated={navData.isAuthenticated}
+        isInNavigation={navData.links.some(
+          (item) =>
+            item.type === "collection" &&
+            item.collectionId === primaryCollection.id,
+        )}
         sitePathPrefix={navData.sitePathPrefix}
+        feedHref={
+          c.var.appConfig.rssFeedsEnabled
+            ? `${canonicalPagePath}/feed`
+            : undefined
+        }
       />
     ),
   });
@@ -254,6 +269,9 @@ export async function renderCollectionFeed(
   const siteUrl = appConfig.siteUrl;
   const siteLanguage = appConfig.siteLanguage;
   const feedLimit = appConfig.rssFeedLimit;
+  const publishedBefore = getRssPublishedBefore(
+    appConfig.rssPublishDelaySeconds,
+  );
   const primaryCollection = selection.collections[0];
   if (!primaryCollection) return null;
 
@@ -264,6 +282,7 @@ export async function renderCollectionFeed(
         status: "published",
         excludePrivate: true,
         ignoreCollectionPinnedSort: true,
+        publishedBefore,
         limit: feedLimit,
       },
     );
@@ -274,7 +293,7 @@ export async function renderCollectionFeed(
 
   const postIds = posts.map((post) => post.id);
   const [threadMap, rawMediaMap, aliasesMap] = await Promise.all([
-    c.var.services.posts.getPublishedThreads(rootIds),
+    c.var.services.posts.getPublishedThreads(rootIds, { publishedBefore }),
     c.var.services.media.getByPostIds(postIds),
     c.var.services.paths.getPostAliases(postIds),
   ]);
@@ -345,15 +364,9 @@ export async function renderCollectionFeed(
           )
         : undefined;
 
-    // feedUpdatedAt = max(lastActivityAt, collectedAt)
-    const lastActivity = toISOString(post.lastActivityAt);
-    const collectedIso = collectedAt ? toISOString(collectedAt) : null;
-    const feedUpdatedAt =
-      collectedIso && collectedIso > lastActivity ? collectedIso : lastActivity;
-
     return {
       ...postView,
-      feedUpdatedAt,
+      feedUpdatedAt: getFeedEntryUpdatedAt(post, thread, [collectedAt]),
       threadReplies: replies,
     };
   });
@@ -382,7 +395,7 @@ export async function renderCollectionFeed(
   return new Response(xml, {
     headers: {
       "Content-Type": "application/atom+xml; charset=utf-8",
-      "Cache-Control": "public, max-age=180",
+      "Cache-Control": RSS_FEED_CACHE_CONTROL,
     },
   });
 }

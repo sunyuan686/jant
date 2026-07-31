@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../jant-media-lightbox.js";
 import type { JantMediaLightbox } from "../jant-media-lightbox.js";
 import { shouldUseScrollableLightboxImage } from "../jant-media-lightbox.js";
+import {
+  MEDIA_VIDEO_PLAYBACK_INTENT_EVENT,
+  setMediaVideoPlaybackPaused,
+  type MediaVideoPlaybackIntentDetail,
+} from "../../media-lightbox-events.js";
 
 function installDialogShim() {
   Object.defineProperty(HTMLDialogElement.prototype, "open", {
@@ -278,10 +283,126 @@ describe("JantMediaLightbox", () => {
     const muteButton = el.querySelector<HTMLButtonElement>(
       ".media-lightbox-short-mute",
     );
+    const playbackButton = el.querySelector<HTMLButtonElement>(
+      ".media-lightbox-short-playback",
+    );
 
     expect(video?.hasAttribute("controls")).toBe(false);
     expect(progress).not.toBeNull();
     expect(muteButton).not.toBeNull();
+    expect(playbackButton?.getAttribute("aria-label")).toBe("Pause video");
+  });
+
+  it("publishes explicit pause and play intent for the matching feed video", async () => {
+    const el = await createElement();
+    const intents: MediaVideoPlaybackIntentDetail[] = [];
+    const handleIntent = (event: Event) => {
+      intents.push(
+        (event as CustomEvent<MediaVideoPlaybackIntentDetail>).detail,
+      );
+    };
+    document.addEventListener(MEDIA_VIDEO_PLAYBACK_INTENT_EVENT, handleIntent);
+
+    el.open(
+      [
+        {
+          id: "media-clip",
+          url: "https://example.com/clip.mp4",
+          alt: "",
+          mimeType: "video/mp4",
+          durationSeconds: 12,
+          size: 2_000_000,
+        },
+      ],
+      0,
+    );
+    await flush(el);
+
+    const video = el.querySelector<HTMLVideoElement>(".media-lightbox-video");
+    if (!video) throw new Error("expected short video");
+
+    let paused = false;
+    Object.defineProperty(video, "paused", {
+      configurable: true,
+      get: () => paused,
+    });
+    Object.defineProperty(video, "pause", {
+      configurable: true,
+      value: vi.fn(() => {
+        paused = true;
+        video.dispatchEvent(new Event("pause"));
+      }),
+    });
+    Object.defineProperty(video, "play", {
+      configurable: true,
+      value: vi.fn(() => {
+        paused = false;
+        video.dispatchEvent(new Event("play"));
+        return Promise.resolve();
+      }),
+    });
+
+    video.click();
+    await flush(el);
+
+    expect(video.pause).toHaveBeenCalledOnce();
+    expect(intents).toEqual([{ mediaId: "media-clip", paused: true }]);
+    expect(
+      el
+        .querySelector(".media-lightbox-short-playback")
+        ?.getAttribute("aria-label"),
+    ).toBe("Play video");
+
+    el.querySelector<HTMLButtonElement>(
+      ".media-lightbox-short-playback",
+    )?.click();
+    await flush(el);
+
+    expect(video.play).toHaveBeenCalledOnce();
+    expect(intents).toEqual([
+      { mediaId: "media-clip", paused: true },
+      { mediaId: "media-clip", paused: false },
+    ]);
+    expect(
+      el
+        .querySelector(".media-lightbox-short-playback")
+        ?.getAttribute("aria-label"),
+    ).toBe("Pause video");
+
+    document.removeEventListener(
+      MEDIA_VIDEO_PLAYBACK_INTENT_EVENT,
+      handleIntent,
+    );
+  });
+
+  it("reopens explicitly paused media without autoplaying it", async () => {
+    const el = await createElement();
+    setMediaVideoPlaybackPaused("media-paused", true);
+
+    el.open(
+      [
+        {
+          id: "media-paused",
+          url: "https://example.com/clip.mp4",
+          alt: "",
+          mimeType: "video/mp4",
+          durationSeconds: 12,
+          size: 2_000_000,
+        },
+      ],
+      0,
+    );
+    await flush(el);
+
+    const video = el.querySelector<HTMLVideoElement>(".media-lightbox-video");
+    expect(video?.hasAttribute("autoplay")).toBe(false);
+    expect(
+      el
+        .querySelector(".media-lightbox-short-playback")
+        ?.getAttribute("aria-label"),
+    ).toBe("Play video");
+
+    setMediaVideoPlaybackPaused("media-paused", false);
   });
 
   it("scrubs the video on arrow keys instead of switching items", async () => {

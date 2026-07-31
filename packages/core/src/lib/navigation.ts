@@ -53,10 +53,17 @@ export async function getNavigationData(
 ): Promise<NavigationData> {
   // Callers that already fetched nav items can pass them in to avoid a
   // redundant DB round-trip.
-  const items =
+  const savedItems =
     options?.preloadedItems ?? (await c.var.services.navItems.list());
   const currentPath = c.var.publicPath;
   const appConfig = c.var.appConfig;
+  // Keep the saved RSS item untouched so its placement and custom label come
+  // back when feeds are re-enabled. Only the rendered projection is filtered.
+  const items = appConfig.rssFeedsEnabled
+    ? savedItems
+    : savedItems.filter(
+        (item: NavItem) => item.type !== "system" || item.systemKey !== "rss",
+      );
 
   const siteName = appConfig.siteName;
   const siteFooter = appConfig.siteFooter;
@@ -68,7 +75,9 @@ export async function getNavigationData(
   // Plain text for meta tags / RSS; HTML for homepage display
   const siteDescription = rawDescription ? toPlainText(rawDescription) : "";
   const siteDescriptionHtml = rawDescription
-    ? renderMarkdown(rawDescription)
+    ? renderMarkdown(rawDescription, {
+        namespace: `${c.var.currentSite.id}-description`,
+      })
     : undefined;
 
   // Avatar URL and display flag come from appConfig
@@ -76,7 +85,11 @@ export async function getNavigationData(
   const showHeaderAvatar = appConfig.showHeaderAvatar;
 
   // Render footer markdown
-  const siteFooterHtml = siteFooter ? renderMarkdown(siteFooter) : undefined;
+  const siteFooterHtml = siteFooter
+    ? renderMarkdown(siteFooter, {
+        namespace: `${c.var.currentSite.id}-footer`,
+      })
+    : undefined;
 
   // Auth state is populated once per request by `attachSession` middleware.
   const isAuthenticated = c.var.isAuthenticated;

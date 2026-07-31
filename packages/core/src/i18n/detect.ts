@@ -43,6 +43,11 @@ function mapTagToLocale(tag: string): Locale | undefined {
   const normalized = tag.trim().toLowerCase();
   if (!normalized) return undefined;
 
+  const cjkProfile = getCjkFontFromLanguageTag(normalized);
+  if (cjkProfile === "zh-Hans" || cjkProfile === "zh-Hant") {
+    return cjkProfile;
+  }
+
   const primary = normalized.split("-")[0];
   if (isLocale(primary)) return primary;
 
@@ -90,7 +95,7 @@ export function detectLocaleFromHeader(header: string | undefined): Locale {
   return baseLocale;
 }
 
-/** Valid CJK serif font locale values */
+/** Valid CJK font profile values */
 export const CJK_SERIF_FONT_VALUES = [
   "off",
   "zh-Hans",
@@ -111,12 +116,16 @@ export function isCjkSerifFont(value: unknown): value is CjkSerifFont {
 }
 
 /**
- * Map a BCP 47 language tag to a CJK serif font value.
+ * Map a BCP 47 language tag to a CJK font profile.
  *
  * @param tag - BCP 47 language tag (e.g. "zh-CN", "ja")
- * @returns CJK serif font value, or `undefined` if not a CJK language
+ * @returns CJK font profile, or `undefined` if not a CJK language
+ * @example
+ * getCjkFontFromLanguageTag("zh-TW") // "zh-Hant"
  */
-function mapTagToCjkFont(tag: string): CjkSerifFont | undefined {
+export function getCjkFontFromLanguageTag(
+  tag: string,
+): Exclude<CjkSerifFont, "off"> | undefined {
   const normalized = tag.trim().toLowerCase();
   if (!normalized) return undefined;
 
@@ -177,7 +186,7 @@ export function detectCjkFontFromHeader(
   entries.sort((a, b) => b.q - a.q);
 
   for (const { tag } of entries) {
-    const font = mapTagToCjkFont(tag);
+    const font = getCjkFontFromLanguageTag(tag);
     if (font) return font;
   }
 

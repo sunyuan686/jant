@@ -81,13 +81,11 @@ const SYSTEM_NAV_TITLES: Partial<Record<SystemNavKey, MessageDescriptor>> = {
 
 const SYSTEM_NAV_DESCRIPTIONS: Record<SystemNavKey, MessageDescriptor> = {
   latest: msg({
-    message:
-      "Link to your latest posts. If it comes before Featured, the homepage opens here.",
+    message: "Link to your latest posts. Your homepage shows this feed.",
     comment: "@context: Description for the latest system navigation toggle",
   }),
   featured: msg({
-    message:
-      "Link to your featured posts. If it comes before Latest, the homepage opens here.",
+    message: "Link to posts you've marked as featured.",
     comment: "@context: Description for the featured system navigation toggle",
   }),
   rss: msg({

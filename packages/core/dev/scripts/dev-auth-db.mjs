@@ -2,40 +2,26 @@ import { randomBytes, scryptSync } from "node:crypto";
 import { generateKeyBetween } from "fractional-indexing";
 import { typeidUnboxed } from "typeid-js";
 import { runLocalWrangler } from "../../bin/lib/wrangler-cli.js";
+import {
+  DEFAULT_NAVIGATION_PROFILE,
+  SYSTEM_NAV_KEYS,
+} from "../../src/types/constants.ts";
 
 export const DEV_EMAIL = "debug@jant.test";
 export const DEFAULT_DEV_PASSWORD = "jant-dev-debug-login";
 export const DEFAULT_SITE_NAME = "Jant";
 export const DEFAULT_SITE_LANGUAGE = "en";
 
-const DEFAULT_SYSTEM_NAV_ITEMS = [
-  { systemKey: "latest", label: "Latest", url: "/latest", placement: "header" },
-  {
-    systemKey: "featured",
-    label: "Featured",
-    url: "/featured",
-    placement: "header",
-  },
-  {
-    systemKey: "collections",
-    label: "Collections",
-    url: "/collections",
-    placement: "header",
-  },
-  {
-    systemKey: "archive",
-    label: "Archive",
-    url: "/archive",
-    placement: "header",
-  },
-  { systemKey: "rss", label: "RSS", url: "/feed", placement: "more" },
-  {
-    systemKey: "settings",
-    label: "Settings",
-    url: "/settings",
-    placement: "more",
-  },
-];
+export const DEFAULT_NAVIGATION_SEED_ITEMS = Object.freeze(
+  DEFAULT_NAVIGATION_PROFILE.systemKeys.map((systemKey) =>
+    Object.freeze({
+      systemKey,
+      label: "",
+      url: SYSTEM_NAV_KEYS[systemKey].url,
+      placement: SYSTEM_NAV_KEYS[systemKey].defaultPlacement,
+    }),
+  ),
+);
 
 const PASSWORD_HASH_PREFIX = "custom-scrypt";
 const PASSWORD_HASH_N = 16_384;
@@ -203,7 +189,7 @@ function buildDefaultNavInsertStatements(flag, siteId, timestamp) {
   const statements = [];
   let seededNavigation = false;
 
-  for (const item of DEFAULT_SYSTEM_NAV_ITEMS) {
+  for (const item of DEFAULT_NAVIGATION_SEED_ITEMS) {
     if (existingKeys.has(item.systemKey)) continue;
 
     const position = generateKeyBetween(lastPosition, null);
@@ -347,9 +333,12 @@ export async function ensureManagedSetup({
     createdCredentialUser = true;
   }
 
-  const { statements: navStatements, seededNavigation } =
-    buildDefaultNavInsertStatements(flag, siteId, timestamp);
-  statements.push(...navStatements);
+  let seededNavigation = false;
+  if (completedOnboarding) {
+    const navSeed = buildDefaultNavInsertStatements(flag, siteId, timestamp);
+    statements.push(...navSeed.statements);
+    seededNavigation = navSeed.seededNavigation;
+  }
 
   if (ownerUserId) {
     statements.push(

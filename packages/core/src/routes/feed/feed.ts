@@ -27,9 +27,13 @@ import type {
 } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { defaultFeedRenderer } from "../../lib/feed.js";
+import {
+  getFeedEntryUpdatedAt,
+  getRssPublishedBefore,
+  RSS_FEED_CACHE_CONTROL,
+} from "../../lib/feed-policy.js";
 import { buildMediaMap } from "../../lib/media-helpers.js";
 import { getI18n } from "../../i18n/index.js";
-import { toISOString } from "../../lib/time.js";
 import { FORMATS } from "../../types/constants.js";
 
 import { createMediaContext, toPostViews } from "../../lib/view.js";
@@ -118,6 +122,7 @@ function collectReplyIds(threadMap: Map<string, Post[]>): string[] {
 async function buildLatestFeedData(
   c: Context<Env>,
   feedLimit: number,
+  publishedBefore: number,
   format?: Format,
 ): Promise<{ posts: Post[]; postViews: FeedPostView[] }> {
   const posts = await c.var.services.posts.list({
@@ -127,6 +132,7 @@ async function buildLatestFeedData(
     excludePrivate: true,
     format,
     ignorePinnedSort: true,
+    publishedBefore,
     limit: feedLimit,
   });
 
@@ -135,7 +141,7 @@ async function buildLatestFeedData(
 
   const mediaCtx = createMediaContext(c.var.appConfig);
   const [threadMap, mediaMap, aliasesMap] = await Promise.all([
-    c.var.services.posts.getPublishedThreads(rootIds),
+    c.var.services.posts.getPublishedThreads(rootIds, { publishedBefore }),
     loadMediaMap(c, postIds, mediaCtx),
     c.var.services.paths.getPostAliases(postIds),
   ]);
@@ -162,9 +168,10 @@ async function buildLatestFeedData(
     aliasMap,
   ).map((postView, index) => {
     const post = posts[index] as (typeof posts)[number];
+    const thread = threadMap.get(post.id);
     return {
       ...postView,
-      feedUpdatedAt: toISOString(post.lastActivityAt),
+      feedUpdatedAt: getFeedEntryUpdatedAt(post, thread),
       threadReplies: buildThreadReplies(
         post.id,
         threadMap,
@@ -187,10 +194,12 @@ async function buildLatestFeedData(
 async function buildFeaturedFeedData(
   c: Context<Env>,
   feedLimit: number,
+  publishedBefore: number,
 ): Promise<{ posts: Post[]; postViews: FeedPostView[] }> {
   const rootIds = await c.var.services.posts.listFeaturedThreadRootIds({
     status: "published",
     excludePrivate: true,
+    publishedBefore,
     limit: feedLimit,
   });
 
@@ -198,7 +207,9 @@ async function buildFeaturedFeedData(
     return { posts: [], postViews: [] };
   }
 
-  const threadMap = await c.var.services.posts.getPublishedThreads(rootIds);
+  const threadMap = await c.var.services.posts.getPublishedThreads(rootIds, {
+    publishedBefore,
+  });
 
   // Extract root posts in the same order as rootIds
   const posts: Post[] = [];
@@ -241,16 +252,11 @@ async function buildFeaturedFeedData(
     aliasMap,
   ).map((postView, index) => {
     const post = posts[index] as (typeof posts)[number];
-
-    // feedUpdatedAt = max(lastActivityAt, featuredAt)
-    const lastActivity = toISOString(post.lastActivityAt);
-    const featuredIso = post.featuredAt ? toISOString(post.featuredAt) : null;
-    const feedUpdatedAt =
-      featuredIso && featuredIso > lastActivity ? featuredIso : lastActivity;
+    const thread = threadMap.get(post.id);
 
     return {
       ...postView,
-      feedUpdatedAt,
+      feedUpdatedAt: getFeedEntryUpdatedAt(post, thread),
       threadReplies: buildThreadReplies(post.id, threadMap, mediaMap, mediaCtx),
     };
   });
@@ -280,12 +286,15 @@ export async function buildFeedData(
   const siteUrl = appConfig.siteUrl;
   const siteLanguage = appConfig.siteLanguage;
   const feedLimit = appConfig.rssFeedLimit;
+  const publishedBefore = getRssPublishedBefore(
+    appConfig.rssPublishDelaySeconds,
+  );
   const kind = opts.kind;
 
   const { postViews } =
     kind === "featured"
-      ? await buildFeaturedFeedData(c, feedLimit)
-      : await buildLatestFeedData(c, feedLimit, opts.format);
+      ? await buildFeaturedFeedData(c, feedLimit, publishedBefore)
+      : await buildLatestFeedData(c, feedLimit, publishedBefore, opts.format);
 
   return {
     siteName,
@@ -333,7 +342,7 @@ export function renderFeed(xml: string) {
   return new Response(xml, {
     headers: {
       "Content-Type": "application/atom+xml; charset=utf-8",
-      "Cache-Control": "public, max-age=180",
+      "Cache-Control": RSS_FEED_CACHE_CONTROL,
     },
   });
 }

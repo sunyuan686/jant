@@ -23,6 +23,7 @@ import { toPublicPath } from "./url.js";
 
 export { JANT_APP_ICON_CORNER_RADIUS, JANT_LOGO_PATH_DATA, JANT_LOGO_VIEW_BOX };
 
+export const JANT_HOME_URL = "https://jant.me";
 export const JANT_REPO_URL = "https://github.com/jant-me/jant";
 export const HOME_BRANDING_PREFIX = "Build with";
 export const HOME_BRANDING_LINK_LABEL = "Jant";

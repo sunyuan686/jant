@@ -15,26 +15,29 @@ For static export and round-trip import, also see [Export and Import](export-and
 
 ## API Surface
 
-| Area                    | Base path                              | Auth                 |
-| ----------------------- | -------------------------------------- | -------------------- |
-| Public posts            | `/api/public/posts`                    | Public               |
-| Public archive          | `/api/public/archive`                  | Public               |
-| Posts                   | `/api/posts`                           | API token or session |
-| Uploads (recommended)   | `/api/uploads`                         | API token or session |
-| Uploads (legacy)        | `/api/upload`, `/api/upload/multipart` | API token or session |
-| Text attachment content | `/api/attachments`                     | API token or session |
-| MCP                     | `/api/mcp`                             | API token or session |
-| Collections             | `/api/collections`                     | Mixed                |
-| Navigation items        | `/api/nav-items`                       | Mixed                |
-| Custom URLs             | `/api/custom-urls`                     | API token or session |
-| Settings                | `/api/settings`                        | API token or session |
-| Search                  | `/api/search`                          | Public               |
-| Export                  | `/api/export`                          | API token or session |
-| Internal admin          | `/api/internal/*`                      | Internal admin token |
+| Area                    | Base path               | Auth                    |
+| ----------------------- | ----------------------- | ----------------------- |
+| Public posts            | `/api/public/posts`     | Public when enabled     |
+| Public archive          | `/api/public/archive`   | Public when enabled     |
+| Posts                   | `/api/posts`            | API token or session    |
+| Upload sessions         | `/api/uploads`          | API token or session    |
+| One-shot upload         | `/api/upload`           | API token or session    |
+| Legacy multipart relay  | `/api/upload/multipart` | API token or session    |
+| Text attachment content | `/api/attachments`      | API token or session    |
+| MCP                     | `/api/mcp`              | API token or session    |
+| Collections             | `/api/collections`      | Mixed                   |
+| Navigation items        | `/api/nav-items`        | Mixed                   |
+| Custom URLs             | `/api/custom-urls`      | API token or session    |
+| Settings                | `/api/settings`         | API token or session    |
+| Search                  | `/api/search`           | Public or authenticated |
+| Export                  | `/api/export`           | API token or session    |
+| Internal admin          | `/api/internal/*`       | Internal admin token    |
 
 Auth labels in this document:
 
 - `Public`: no auth required
+- `Public when enabled`: public by default; returns `404` to every caller when `PUBLIC_API_ENABLED=false`
+- `Public or authenticated`: public by default; requires a session or token when `PUBLIC_API_ENABLED=false`
 - `Session or token`: browser session cookie or `Authorization: Bearer <token>`
 - `Internal admin token`: `Authorization: Bearer <INTERNAL_ADMIN_TOKEN>`
 
@@ -95,7 +98,7 @@ Auth resolution for both surfaces:
 
 - pass `Authorization: Bearer jnt_...` (issued under Settings → API Tokens), or
 - on local hosts, send the same value with `DEV_API_TOKEN` from `.dev.vars`.
-- a small set of read endpoints — `GET /api/collections`, `GET /api/collections/:slug`, `GET /api/search` — work without a token.
+- a small set of read endpoints — public posts/archive, Collections, navigation items, and search — work without a token while `PUBLIC_API_ENABLED=true`.
 
 ### MCP
 
@@ -118,7 +121,7 @@ Current tool groups:
 - posts: `jant_posts_list`, `jant_posts_get`, `jant_posts_get_content`, `jant_posts_create`, `jant_posts_update`, `jant_posts_delete`
 - media: `jant_media_list`, `jant_media_get`, `jant_media_upload`, `jant_media_update_alt`, `jant_media_delete`
 - attachments: `jant_attachments_get_content`
-- collections: `jant_collections_list`, `jant_collections_get`, `jant_collections_create`, `jant_collections_update`, `jant_collections_delete`, `jant_collections_add_post`, `jant_collections_remove_post`
+- collections: `jant_collections_list`, `jant_collections_get`, `jant_collections_create`, `jant_collections_update`, `jant_collections_delete`, `jant_collections_add_thread`, `jant_collections_remove_thread`
 - settings: `jant_settings_get`, `jant_settings_update`
 - search: `jant_search_posts`
 
@@ -301,11 +304,11 @@ Post responses include these fields:
 | `createdAt`      | integer                                  | Unix seconds                                              |
 | `updatedAt`      | integer                                  | Unix seconds                                              |
 | `attachments`    | array                                    | Ordered media/text attachment objects                     |
-| `collectionIds`  | `col_*` string[]                         | Only included by `GET /api/posts/:id`                     |
+| `collectionIds`  | `col_*` string[]                         | Shared Thread Collections; only in `GET /api/posts/:id`   |
 
 ### Post response shape
 
-The post list and detail endpoints return the same core fields. `GET /api/posts/:id` additionally includes `collectionIds`.
+The post list and detail endpoints return the same core fields. `GET /api/posts/:id` additionally includes the shared Thread-level `collectionIds`; Root and Child responses return the same set.
 
 Example:
 
@@ -349,6 +352,8 @@ Notes:
 Base path: `/api/public/posts`
 
 These endpoints expose the public reading view, not the editing view used in Settings.
+When `PUBLIC_API_ENABLED=false`, these dedicated public endpoints return `404`
+to every caller. Authenticated clients can use `/api/posts` instead.
 
 Public post responses include these fields:
 
@@ -597,7 +602,7 @@ Invalid slug candidates return `400`, including reserved slugs and slugs with in
 
 Auth: `Session or token`
 
-This returns the full post plus `collectionIds` and ordered `attachments`.
+This returns the full post plus shared Thread-level `collectionIds` and ordered `attachments`.
 
 Example:
 
@@ -664,7 +669,7 @@ Fields:
 | `sourceUrl`     | absolute URL                             | no                   | `null`         | Quote attribution URL; not allowed for non-quote                          |
 | `quoteText`     | string                                   | required for `quote` | —              | Not allowed for `note` or `link`                                          |
 | `rating`        | integer                                  | no                   | `null`         | `1` to `5`; send `0` to clear on update                                   |
-| `collectionIds` | `col_*` string[]                         | no                   | `[]`           | Collection TypeIDs; max `20`                                              |
+| `collectionIds` | `col_*` string[]                         | no                   | `[]`           | Shared Thread Collection TypeIDs; max `20`                                |
 | `replyToId`     | `pst_*` string                           | no                   | `null`         | Make this post a thread reply                                             |
 | `publishedAt`   | integer                                  | no                   | current time   | Unix seconds; only valid when `status` is `published`                     |
 | `attachments`   | attachment[]                             | no                   | `[]`           | Ordered attachments, max `20`                                             |
@@ -680,6 +685,7 @@ Important rules:
 - Replies cannot be pinned.
 - Replies inherit thread visibility.
 - Replies inherit the root status unless you explicitly create the reply as `draft`.
+- Set `collectionIds` while creating a Thread root. Reply creation rejects non-empty Collection input; use the Thread Collection endpoints afterward, which accept either a Root or Child Post ID.
 
 Path behavior:
 
@@ -813,6 +819,7 @@ Notes:
 - `path` is not supported on update. Use `slug` for canonical URL changes and `custom-urls` for extra aliases.
 - For quote posts, keep using `sourceName` and `sourceUrl`.
 - Thread replies reject direct `visibility` and `pinned` changes.
+- Sending `collectionIds` from either a Root or Child update replaces the shared Thread Collection set.
 - Draft updates cannot set `publishedAt`.
 - To clear a rating, send `0`.
 
@@ -840,15 +847,15 @@ All upload endpoints require auth.
 
 Jant currently exposes three upload APIs:
 
-1. `/api/uploads`: recommended session-based upload API for new clients
-2. `/api/upload`: legacy single-request upload API
+1. `/api/upload`: one-shot upload, preferred for ordinary scripts and migrations
+2. `/api/uploads`: session-based upload, preferred for large files, unreliable connections, and application clients that need resumable transport
 3. `/api/upload/multipart`: legacy explicit multipart relay API
 
 File size is limited by `UPLOAD_MAX_FILE_SIZE_MB` and defaults to `1024 MB`.
 
 Jant accepts a broad set of image, video, audio, document, text, archive, font, design, and code MIME types. Unsupported types return `400`.
 
-### Recommended upload flow
+### Session-based upload flow
 
 Base path: `/api/uploads`
 
@@ -1126,11 +1133,11 @@ Response:
 { "success": true }
 ```
 
-### Legacy one-shot upload
+### One-shot upload
 
 Base path: `/api/upload`
 
-Use this only if you want the older multipart form upload behavior in a single request. New clients should prefer `/api/uploads`.
+Use this when a script or one-time migration benefits from sending one file in a single multipart request. Use `/api/uploads` when files are large or the connection is unreliable.
 
 #### Upload a file
 
@@ -1291,22 +1298,23 @@ Response:
 
 Base path: `/api/collections`
 
-Collections group posts by topic. A post can belong to multiple collections.
+Collections group complete Threads by topic. A Thread can belong to multiple
+Collections, and its root and children always share the same memberships.
 
 Collection responses include these fields:
 
-| Field              | Type                                  | Notes                          |
-| ------------------ | ------------------------------------- | ------------------------------ |
-| `id`               | `col_*` string                        | Collection ID                  |
-| `siteId`           | string                                | Owning site                    |
-| `slug`             | string                                | Canonical collection slug      |
-| `title`            | string                                | Display title                  |
-| `description`      | string \| `null`                      | Optional description           |
-| `sortOrder`        | `newest` \| `oldest` \| `rating_desc` | Per-collection post sort order |
-| `createdAt`        | integer                               | Unix seconds                   |
-| `updatedAt`        | integer                               | Unix seconds                   |
-| `postCount`        | integer                               | Only present in list responses |
-| `recentActivityAt` | integer                               | Only present in list responses |
+| Field              | Type                                  | Notes                            |
+| ------------------ | ------------------------------------- | -------------------------------- |
+| `id`               | `col_*` string                        | Collection ID                    |
+| `siteId`           | string                                | Owning site                      |
+| `slug`             | string                                | Canonical collection slug        |
+| `title`            | string                                | Display title                    |
+| `description`      | string \| `null`                      | Optional description             |
+| `sortOrder`        | `newest` \| `oldest` \| `rating_desc` | Per-collection Thread sort order |
+| `createdAt`        | integer                               | Unix seconds                     |
+| `updatedAt`        | integer                               | Unix seconds                     |
+| `threadCount`      | integer                               | Only present in list responses   |
+| `recentActivityAt` | integer                               | Only present in list responses   |
 
 Directory item responses include these fields:
 
@@ -1354,7 +1362,7 @@ Default response:
       "sortOrder": "newest",
       "createdAt": 1706000000,
       "updatedAt": 1706000000,
-      "postCount": 12,
+      "threadCount": 12,
       "recentActivityAt": 1706100000
     }
   ],
@@ -1424,7 +1432,7 @@ Fields:
 | `slug`        | string                                | yes      | —        | Canonical collection slug, max `200`, lowercase letters/numbers/hyphens only |
 | `title`       | string                                | yes      | —        | Display title, max `120`                                                     |
 | `description` | string                                | no       | `null`   | Optional description, max `500`                                              |
-| `sortOrder`   | `newest` \| `oldest` \| `rating_desc` | no       | `newest` | Per-collection post sort order                                               |
+| `sortOrder`   | `newest` \| `oldest` \| `rating_desc` | no       | `newest` | Per-Collection Thread sort order                                             |
 
 Notes:
 
@@ -1599,23 +1607,26 @@ Response:
 { "success": true }
 ```
 
-### Add a post to a collection
+### Add a Thread to a collection
 
-`POST /api/collections/:id/posts`
+`POST /api/collections/:id/threads`
 
 Auth: `Session or token`
 
 Request body:
 
 ```json
-{ "postId": "pst_01jpyx3m7gw4w3h7m4bknq0v1d" }
+{ "threadId": "pst_01jpyx3m7gw4w3h7m4bknq0v1d" }
 ```
 
 Fields:
 
-| Field    | Type           | Required | Default | Notes   |
-| -------- | -------------- | -------- | ------- | ------- |
-| `postId` | `pst_*` string | yes      | —       | Post ID |
+| Field      | Type           | Required | Default | Notes                        |
+| ---------- | -------------- | -------- | ------- | ---------------------------- |
+| `threadId` | `pst_*` string | yes      | —       | Thread root or child Post ID |
+
+The ID is normalized to the Thread root. The root and every child share one
+Collection membership set.
 
 Response:
 
@@ -1623,15 +1634,31 @@ Response:
 { "success": true }
 ```
 
-### Remove a post from a collection
+### Remove a Thread from a collection
 
-`DELETE /api/collections/:id/posts/:postId`
+`DELETE /api/collections/:id/threads/:threadId`
 
 Auth: `Session or token`
 
-Removes the post-to-collection association. It does not delete the post or the collection.
+Removes the whole Thread from the Collection. It does not delete the Thread or
+the Collection.
 
 Response:
+
+```json
+{ "success": true }
+```
+
+### Pin or unpin a Thread in a collection
+
+`PUT /api/collections/:id/threads/:threadId/pin`
+
+`DELETE /api/collections/:id/threads/:threadId/pin`
+
+Auth: `Session or token`
+
+Both endpoints accept a Thread root or child Post ID and operate on the shared
+Thread membership. Response:
 
 ```json
 { "success": true }
@@ -1953,24 +1980,37 @@ All settings endpoints require auth.
 
 All values are strings because they map directly to stored config values.
 
-| Key                          | Meaning                 | Example value       |
-| ---------------------------- | ----------------------- | ------------------- |
-| `SITE_NAME`                  | Site title              | `"My Blog"`         |
-| `SITE_DESCRIPTION`           | Site description        | `"Notes and links"` |
-| `SITE_LANGUAGE`              | Language code           | `"en"`              |
-| `MAIN_RSS_FEED`              | Canonical feed kind     | `"featured"`        |
-| `TIME_ZONE`                  | IANA timezone           | `"Asia/Shanghai"`   |
-| `SITE_FOOTER`                | Footer HTML/text        | `"<p>Footer</p>"`   |
-| `SHOW_JANT_BRANDING_ON_HOME` | Branding toggle         | `"true"`            |
-| `NOINDEX`                    | Search-engine exclusion | `"true"`            |
+| Key                          | Meaning                    | Example value       |
+| ---------------------------- | -------------------------- | ------------------- |
+| `SITE_NAME`                  | Site title                 | `"My Blog"`         |
+| `SITE_DESCRIPTION`           | Site description           | `"Notes and links"` |
+| `SITE_LANGUAGE`              | BCP 47 content language    | `"en"`              |
+| `DASHBOARD_LANGUAGE`         | Dashboard catalog language | `"zh-Hans"`         |
+| `CJK_SERIF_FONT`             | CJK serif fallback         | `"off"`             |
+| `MAIN_RSS_FEED`              | Canonical feed kind        | `"featured"`        |
+| `PAGE_SIZE`                  | Default page size          | `"50"`              |
+| `SEARCH_PAGE_SIZE`           | Search page size           | `"50"`              |
+| `ARCHIVE_PAGE_SIZE`          | Archive page size          | `"50"`              |
+| `SUMMARY_MAX_PARAGRAPHS`     | Summary paragraph limit    | `"5"`               |
+| `SUMMARY_MAX_CHARS`          | Summary character limit    | `"500"`             |
+| `RSS_FEED_LIMIT`             | RSS item limit             | `"50"`              |
+| `RSS_PUBLISH_DELAY_SECONDS`  | Feed publication delay     | `"300"`             |
+| `TIME_ZONE`                  | IANA timezone              | `"Asia/Shanghai"`   |
+| `SITE_FOOTER`                | Footer HTML/text           | `"<p>Footer</p>"`   |
+| `SHOW_JANT_BRANDING_ON_HOME` | Branding toggle            | `"true"`            |
+| `NOINDEX`                    | Search-engine exclusion    | `"true"`            |
+| `PUBLIC_API_ENABLED`         | Anonymous JSON reads       | `"true"`            |
+| `RSS_FEEDS_ENABLED`          | Atom feed publishing       | `"true"`            |
 
 Notes:
 
-- Editable keys are derived from the config registry; env-only and internal keys are excluded.
+- Editable keys use an explicit allowlist in the config registry; env-only,
+  secret, and internal keys are excluded by default.
 - Boolean and numeric settings are still strings in the API.
 - Send strings in `PUT /api/settings`, not JSON booleans or numbers.
 - `TIME_ZONE` is normalized to canonical IANA names when possible.
-- `GET /api/settings` fills in defaults for editable keys that are not stored yet.
+- `GET /api/settings` returns the effective environment or built-in fallback
+  for editable keys that are not stored yet.
 - In demo mode, `NOINDEX` is always returned as `"true"`.
 
 ### Get editable settings
@@ -1988,10 +2028,19 @@ Response:
     "SITE_DESCRIPTION": "Thoughts, links, and quotes — one post at a time",
     "SITE_LANGUAGE": "en",
     "MAIN_RSS_FEED": "featured",
+    "PAGE_SIZE": "50",
+    "SEARCH_PAGE_SIZE": "50",
+    "ARCHIVE_PAGE_SIZE": "50",
+    "SUMMARY_MAX_PARAGRAPHS": "5",
+    "SUMMARY_MAX_CHARS": "500",
+    "RSS_FEED_LIMIT": "50",
+    "RSS_PUBLISH_DELAY_SECONDS": "300",
     "TIME_ZONE": "UTC",
     "SITE_FOOTER": "",
-    "SHOW_JANT_BRANDING_ON_HOME": "",
-    "NOINDEX": ""
+    "SHOW_JANT_BRANDING_ON_HOME": "false",
+    "NOINDEX": "false",
+    "PUBLIC_API_ENABLED": "true",
+    "RSS_FEEDS_ENABLED": "true"
   }
 }
 ```
@@ -2020,9 +2069,18 @@ Request rules:
 
 - The body must be a JSON object whose values are strings.
 - `SITE_NAME` is trimmed and limited to `120` characters.
-- `SITE_DESCRIPTION` is trimmed and limited to `300` characters.
+- `SITE_DESCRIPTION` is trimmed and limited to `1000` characters.
 - `SITE_FOOTER` is trimmed and limited to `5000` characters.
+- Boolean settings accept only `"true"` or `"false"`.
+- Enum settings accept only the options listed above.
+- `SITE_LANGUAGE` accepts and canonicalizes valid BCP 47 language tags.
 - `TIME_ZONE` accepts canonical IANA names and normalizes legacy aliases such as `"Beijing"` to `"Asia/Shanghai"`.
+- `PAGE_SIZE`, `SEARCH_PAGE_SIZE`, and `ARCHIVE_PAGE_SIZE` accept integers from `1` to `100`.
+- `SUMMARY_MAX_PARAGRAPHS` accepts integers from `1` to `50`.
+- `SUMMARY_MAX_CHARS` accepts integers from `1` to `1500`.
+- `RSS_FEED_LIMIT` accepts integers from `1` to `200`.
+- `RSS_PUBLISH_DELAY_SECONDS` accepts integers from `0` to `7200`; `0` disables the delay.
+- Resetting `SEARCH_PAGE_SIZE` or `ARCHIVE_PAGE_SIZE` makes it inherit the effective `PAGE_SIZE` value.
 
 Behavior:
 
@@ -2055,6 +2113,41 @@ Rejected keys are returned:
 - in top-level `rejectedKeys` on successful partial updates
 
 In demo mode, `NOINDEX` updates are rejected and the returned value stays `"true"`.
+
+### Reset a Config Editor setting
+
+`DELETE /api/settings/:key`
+
+Auth: `Session or token`
+
+Removes the database override for one resettable Config Editor setting. This
+includes directly editable values and the safe scalar linked settings `THEME`,
+`FONT_THEME`, `THEME_MODE`, and `SHOW_HEADER_AVATAR`.
+
+The successful response contains the same directly editable `settings` object
+as `GET /api/settings` plus a safe `setting` field with the reset key's resolved
+Config Editor state:
+
+```json
+{
+  "settings": { "SITE_NAME": "Jant" },
+  "setting": {
+    "key": "SITE_NAME",
+    "mode": "link",
+    "type": "string",
+    "value": "Jant",
+    "fallbackValue": "Jant",
+    "modified": false,
+    "locked": false,
+    "settingsPath": "/settings/general",
+    "display": "value",
+    "resettable": true
+  }
+}
+```
+
+Environment-only, secret, unknown, specialized content/file keys, and
+demo-locked keys return `400` without changing stored settings.
 
 ### Mark compose shortcut discovery as seen
 
@@ -2212,7 +2305,7 @@ Archive contents:
 Notes:
 
 - Each thread root is a Hugo branch bundle; its replies live as nested leaf bundles rendered inline by the thread template.
-- Collection membership is exported as a top-level `collections` front-matter array on each post, with per-entry `collected_at` / `position` / `pinned_at`.
+- Collection membership is exported once per Thread as a top-level `collections` front-matter array on the root bundle, with per-entry `collected_at` / `position` / `pinned_at`. Reply bundles do not repeat it.
 - Navigation items, theme CSS, custom CSS, favicon, and Apple touch icon are included in the scaffold when available.
 - Exported post bodies become Markdown. Media references point back to the original Jant media URLs; the ZIP does not bundle original media binaries.
 
@@ -2599,7 +2692,7 @@ Notes:
 
 ### Feeds
 
-All feed endpoints are public and return cached XML with `Cache-Control: public, max-age=180`.
+Feed endpoints are public and return cached XML with `Cache-Control: public, max-age=60` while `RSS_FEEDS_ENABLED=true`. When disabled, canonical and legacy feed URLs return `404`; previously cached responses may remain available for up to 60 seconds.
 
 Feed notes:
 
@@ -2614,6 +2707,7 @@ Feed notes:
 - `GET /feed/all` and `GET /feed/all/atom.xml` are legacy aliases that redirect to `/latest/feed` with `308`, preserving the query string.
 - `GET /:slug/feed` returns an RSS feed for a single collection.
 - `GET /collections/:slug/feed` returns an RSS feed for a collection selection and redirects normalized selections to the canonical path with `301`.
+- Disabling feeds also removes HTML autodiscovery, Archive and Collection feed buttons, and the built-in RSS navigation item. Saved navigation configuration is retained for later re-enabling.
 
 ### Sitemap and robots
 

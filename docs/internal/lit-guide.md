@@ -40,7 +40,8 @@ Every component that registers side resources must clean them up in `disconnecte
 
 - Custom element tag names must use `jant-xxx` format.
 - Custom events must use `jant:xxx` format.
-- Component files live in `src/ui/components/`.
+- Client-side component files live in `src/client/components/`; server-rendered
+  wrappers live with their owning feature under `src/ui/`.
 
 ### 5) Light DOM + SSR Fallback
 

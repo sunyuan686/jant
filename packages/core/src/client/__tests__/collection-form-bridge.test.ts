@@ -6,6 +6,10 @@ vi.mock("../toast.js", () => ({
   showToast: vi.fn(),
 }));
 
+vi.mock("../collection-created-notice.js", () => ({
+  queueCollectionCreatedNotice: vi.fn(),
+}));
+
 import "../collection-form-bridge.js";
 
 type CollectionFormHarness = HTMLElement & {
@@ -50,6 +54,7 @@ async function flushAsyncWork() {
 describe("collection form bridge", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
+    vi.clearAllMocks();
     vi.restoreAllMocks();
     window.location.href = "http://localhost/collections/new";
   });
@@ -57,7 +62,7 @@ describe("collection form bridge", () => {
   it("redirects new collections back to the configured return URL", async () => {
     const formEl = createPageForm("/collections");
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ slug: "books" }), {
+      new Response(JSON.stringify({ id: "col_books", slug: "books" }), {
         status: 201,
         headers: { "Content-Type": "application/json" },
       }),
@@ -79,6 +84,9 @@ describe("collection form bridge", () => {
 
     await flushAsyncWork();
 
+    const { queueCollectionCreatedNotice } =
+      await import("../collection-created-notice.js");
+
     expect(fetchSpy).toHaveBeenCalledWith("/api/collections", {
       method: "POST",
       headers: {
@@ -91,6 +99,7 @@ describe("collection form bridge", () => {
       }),
     });
     expect(window.location.pathname).toBe("/collections");
+    expect(queueCollectionCreatedNotice).toHaveBeenCalledWith("col_books");
   });
 
   it("redirects edited collections back to the collections page when launched from the list", async () => {

@@ -132,7 +132,7 @@ export interface Collection {
 }
 
 export interface CollectionDirectoryCollection extends Collection {
-  postCount: number;
+  threadCount: number;
   recentActivityAt: number;
 }
 
@@ -166,9 +166,9 @@ export interface CollectionsDirectoryData {
   directoryItems: CollectionDirectoryEntry[];
 }
 
-export interface PostCollection {
+export interface ThreadCollection {
   siteId: string;
-  postId: string;
+  threadId: string;
   collectionId: string;
 }
 
@@ -178,6 +178,7 @@ export interface NavItem {
   type: NavItemType;
   systemKey?: SystemNavKey;
   collectionId?: string;
+  postId?: string;
   label: string;
   url: string;
   placement: NavItemPlacement;

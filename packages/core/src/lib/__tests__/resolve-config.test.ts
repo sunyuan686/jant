@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveConfig } from "../resolve-config.js";
+import { resolveConfig, resolveSummaryConfig } from "../resolve-config.js";
 import type { Bindings } from "../../types/bindings.js";
 
 function makeEnv(overrides: Partial<Bindings> = {}): Bindings {
@@ -28,11 +28,14 @@ describe("resolveConfig", () => {
     expect(config.timeZone).toBe("UTC");
     expect(config.showJantBrandingOnHome).toBe(false);
     expect(config.noindex).toBe(false);
+    expect(config.publicApiEnabled).toBe(true);
+    expect(config.rssFeedsEnabled).toBe(true);
     expect(config.demoMode).toBe(false);
     expect(config.pageSize).toBe(50);
     expect(config.searchPageSize).toBe(50);
     expect(config.archivePageSize).toBe(50);
     expect(config.rssFeedLimit).toBe(50);
+    expect(config.rssPublishDelaySeconds).toBe(300);
   });
 
   it("DB settings override ENV and defaults", () => {
@@ -47,6 +50,16 @@ describe("resolveConfig", () => {
     const config = resolveConfig(makeEnv({ SITE_NAME: "FromEnv" }), {});
 
     expect(config.siteName).toBe("FromEnv");
+  });
+
+  it("lets an explicit empty DB value override an environment fallback", () => {
+    const config = resolveConfig(
+      makeEnv({ SITE_DESCRIPTION: "From environment" }),
+      { SITE_DESCRIPTION: "" },
+    );
+
+    expect(config.siteDescription).toBe("");
+    expect(config.siteDescriptionExplicit).toBe(false);
   });
 
   it("resolves mainRssFeed from DB, env, and defaults", () => {
@@ -196,11 +209,15 @@ describe("resolveConfig", () => {
   it("resolves boolean fields correctly", () => {
     const config = resolveConfig(makeEnv(), {
       NOINDEX: "true",
+      PUBLIC_API_ENABLED: "false",
+      RSS_FEEDS_ENABLED: "false",
       SHOW_HEADER_AVATAR: "true",
       SHOW_JANT_BRANDING_ON_HOME: "true",
     });
 
     expect(config.noindex).toBe(true);
+    expect(config.publicApiEnabled).toBe(false);
+    expect(config.rssFeedsEnabled).toBe(false);
     expect(config.showHeaderAvatar).toBe(true);
     expect(config.showJantBrandingOnHome).toBe(true);
   });
@@ -232,6 +249,7 @@ describe("resolveConfig", () => {
         SEARCH_PAGE_SIZE: 7,
         ARCHIVE_PAGE_SIZE: "9",
         RSS_FEED_LIMIT: 25,
+        RSS_PUBLISH_DELAY_SECONDS: "600",
       }),
       {},
     );
@@ -239,6 +257,13 @@ describe("resolveConfig", () => {
     expect(config1.searchPageSize).toBe(7);
     expect(config1.archivePageSize).toBe(9);
     expect(config1.rssFeedLimit).toBe(25);
+    expect(config1.rssPublishDelaySeconds).toBe(600);
+
+    const configWithNoDelay = resolveConfig(
+      makeEnv({ RSS_PUBLISH_DELAY_SECONDS: 0 }),
+      {},
+    );
+    expect(configWithNoDelay.rssPublishDelaySeconds).toBe(0);
 
     const config2 = resolveConfig(
       makeEnv({
@@ -246,6 +271,7 @@ describe("resolveConfig", () => {
         SEARCH_PAGE_SIZE: 0,
         ARCHIVE_PAGE_SIZE: false,
         RSS_FEED_LIMIT: "invalid",
+        RSS_PUBLISH_DELAY_SECONDS: "-1",
       }),
       {},
     );
@@ -253,6 +279,92 @@ describe("resolveConfig", () => {
     expect(config2.searchPageSize).toBe(50);
     expect(config2.archivePageSize).toBe(50);
     expect(config2.rssFeedLimit).toBe(50);
+    expect(config2.rssPublishDelaySeconds).toBe(300);
+
+    const configWithBlankDelay = resolveConfig(
+      makeEnv({ RSS_PUBLISH_DELAY_SECONDS: "   " }),
+      {},
+    );
+    expect(configWithBlankDelay.rssPublishDelaySeconds).toBe(300);
+  });
+
+  it("resolves runtime numeric settings from DB before environment values", () => {
+    const config = resolveConfig(
+      makeEnv({
+        PAGE_SIZE: "20",
+        SEARCH_PAGE_SIZE: "25",
+        ARCHIVE_PAGE_SIZE: "30",
+        SUMMARY_MAX_PARAGRAPHS: "6",
+        SUMMARY_MAX_CHARS: "600",
+        RSS_FEED_LIMIT: "60",
+        RSS_PUBLISH_DELAY_SECONDS: "600",
+      }),
+      {
+        PAGE_SIZE: "80",
+        SUMMARY_MAX_PARAGRAPHS: "12",
+        SUMMARY_MAX_CHARS: "1200",
+        RSS_FEED_LIMIT: "120",
+        RSS_PUBLISH_DELAY_SECONDS: "0",
+      },
+    );
+
+    expect(config.pageSize).toBe(80);
+    expect(config.searchPageSize).toBe(25);
+    expect(config.archivePageSize).toBe(30);
+    expect(config.summaryMaxParagraphs).toBe(12);
+    expect(config.summaryMaxChars).toBe(1200);
+    expect(config.rssFeedLimit).toBe(120);
+    expect(config.rssPublishDelaySeconds).toBe(0);
+  });
+
+  it("inherits runtime page size and rejects out-of-range numeric values", () => {
+    const config = resolveConfig(
+      makeEnv({
+        PAGE_SIZE: "101",
+        SEARCH_PAGE_SIZE: "0",
+        ARCHIVE_PAGE_SIZE: "1.5",
+        SUMMARY_MAX_PARAGRAPHS: "51",
+        SUMMARY_MAX_CHARS: "1501",
+        RSS_FEED_LIMIT: "201",
+        RSS_PUBLISH_DELAY_SECONDS: "7201",
+      }),
+      { PAGE_SIZE: "75" },
+    );
+
+    expect(config.pageSize).toBe(75);
+    expect(config.searchPageSize).toBe(75);
+    expect(config.archivePageSize).toBe(75);
+    expect(config.summaryMaxParagraphs).toBe(5);
+    expect(config.summaryMaxChars).toBe(500);
+    expect(config.rssFeedLimit).toBe(50);
+    expect(config.rssPublishDelaySeconds).toBe(300);
+  });
+
+  it("resolves summary limits without the full app config", () => {
+    expect(
+      resolveSummaryConfig(
+        makeEnv({
+          SUMMARY_MAX_PARAGRAPHS: "3",
+          SUMMARY_MAX_CHARS: 240,
+        }),
+      ),
+    ).toEqual({ maxParagraphs: 3, maxChars: 240 });
+
+    expect(
+      resolveSummaryConfig(
+        makeEnv({
+          SUMMARY_MAX_PARAGRAPHS: 0,
+          SUMMARY_MAX_CHARS: "invalid",
+        }),
+      ),
+    ).toEqual({ maxParagraphs: 5, maxChars: 500 });
+
+    expect(
+      resolveSummaryConfig(makeEnv({ SUMMARY_MAX_CHARS: "240" }), {
+        SUMMARY_MAX_PARAGRAPHS: "8",
+        SUMMARY_MAX_CHARS: "900",
+      }),
+    ).toEqual({ maxParagraphs: 8, maxChars: 900 });
   });
 
   it("resolves fallbacks without DB values", () => {

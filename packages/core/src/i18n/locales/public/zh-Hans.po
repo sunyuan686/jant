@@ -188,6 +188,16 @@ msgstr ""
 msgid "Add row below"
 msgstr ""
 
+#. @context: Action that adds a Collection to site navigation
+#: src/ui/shared/collection-management-labels.ts
+msgid "Add to Navigation"
+msgstr ""
+
+#. @context: Loading label while adding a Collection to site navigation
+#: src/ui/shared/collection-management-labels.ts
+msgid "Adding…"
+msgstr ""
+
 #. @context: Archive filter - collection dropdown default
 #: src/ui/pages/ArchivePage.tsx
 msgid "All collections"
@@ -421,7 +431,12 @@ msgstr ""
 msgid "Collection"
 msgstr ""
 
-#. @context: Toast shown after creating a collection
+#. @context: Confirmation after adding a Collection to site navigation
+#: src/ui/shared/collection-management-labels.ts
+msgid "Collection added to navigation."
+msgstr ""
+
+#. @context: Confirmation shown after creating a collection
 #: src/ui/shared/collection-management-labels.ts
 msgid "Collection created."
 msgstr ""
@@ -505,6 +520,11 @@ msgstr ""
 #. @context: Controls section heading on sample page
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "Controls"
+msgstr ""
+
+#. @context: Error after a Collection could not be added to site navigation
+#: src/ui/shared/collection-management-labels.ts
+msgid "Couldn't add this collection to navigation. Try again."
 msgstr ""
 
 #. @context: Error toast when account creation fails
@@ -622,7 +642,7 @@ msgstr ""
 
 #. @context: Confirm dialog for deleting a collection
 #: src/ui/shared/collection-management-labels.ts
-msgid "Delete this collection permanently? Posts inside won't be removed."
+msgid "Delete this collection permanently? Threads inside won't be removed."
 msgstr ""
 
 #. @context: Hint shown on signin page when demo credentials are pre-filled
@@ -736,9 +756,21 @@ msgstr ""
 msgid "Download the official Jant logo, icons, and preview files."
 msgstr ""
 
+#. @context: Accessible label for a draft item's more-actions button
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Draft actions"
+msgstr ""
+
 #. @context: Toast after draft deletion
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Draft deleted."
+msgstr ""
+
+#. @context: Browser title prefix for a draft preview page
+#. @context: Status label above a draft preview page
+#: src/routes/pages/page.tsx
+#: src/ui/shared/DraftPreviewBar.tsx
+msgid "Draft preview"
 msgstr ""
 
 #. @context: Toast shown when a local draft is restored on compose open
@@ -781,9 +813,19 @@ msgstr ""
 msgid "Edit custom link"
 msgstr ""
 
+#. @context: Action in the draft preview status bar that opens the editor
+#: src/ui/shared/DraftPreviewBar.tsx
+msgid "Edit draft"
+msgstr ""
+
 #. @context: Button to manually edit the collection link
 #: src/ui/shared/collection-management-labels.ts
 msgid "Edit link"
+msgstr ""
+
+#. @context: Action that opens Navigation settings for a Collection already in navigation
+#: src/ui/shared/collection-management-labels.ts
+msgid "Edit Navigation"
 msgstr ""
 
 #. @context: Compose dialog header title in edit mode
@@ -821,20 +863,6 @@ msgstr ""
 #. @context: Compose URL field error message
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Enter a valid URL starting with http://, https://, or mailto:."
-msgstr ""
-
-#. @context: Plural entry count label
-#. @context: Plural entry count label
-#: src/ui/shared/CollectionDirectory.tsx
-#: src/ui/shared/CollectionsManager.tsx
-msgid "entries"
-msgstr ""
-
-#. @context: Singular entry count label
-#. @context: Singular entry count label
-#: src/ui/shared/CollectionDirectory.tsx
-#: src/ui/shared/CollectionsManager.tsx
-msgid "entry"
 msgstr ""
 
 #. @context: Usage label for the brand pack card
@@ -1173,6 +1201,11 @@ msgstr ""
 msgid "Link removed."
 msgstr ""
 
+#. @context: Description for the featured system navigation toggle
+#: src/ui/shared/navigation-labels.ts
+msgid "Link to posts you've marked as featured."
+msgstr ""
+
 #. @context: Description for the archive system navigation toggle
 #: src/ui/shared/navigation-labels.ts
 msgid "Link to the post archive"
@@ -1183,14 +1216,9 @@ msgstr ""
 msgid "Link to your collections page"
 msgstr ""
 
-#. @context: Description for the featured system navigation toggle
-#: src/ui/shared/navigation-labels.ts
-msgid "Link to your featured posts. If it comes before Latest, the homepage opens here."
-msgstr ""
-
 #. @context: Description for the latest system navigation toggle
 #: src/ui/shared/navigation-labels.ts
-msgid "Link to your latest posts. If it comes before Featured, the homepage opens here."
+msgid "Link to your latest posts. Your homepage shows this feed."
 msgstr ""
 
 #. @context: Toast after saving a custom collections link
@@ -1370,7 +1398,7 @@ msgstr ""
 #: src/ui/pages/CollectionsPage.tsx
 #: src/ui/shared/CollectionDirectory.tsx
 #: src/ui/shared/CollectionsManager.tsx
-msgid "No collections yet. Start one to organize posts by topic."
+msgid "No collections yet. Start one to organize threads by topic."
 msgstr ""
 
 #. @context: Drafts panel empty state
@@ -1391,6 +1419,11 @@ msgstr ""
 #. @context: Archive empty state with filters applied
 #: src/ui/pages/ArchivePage.tsx
 msgid "No threads match these filters. Try adjusting your selection or clear all filters."
+msgstr ""
+
+#. @context: Action to dismiss the post-create Collection navigation prompt
+#: src/ui/shared/CollectionsManager.tsx
+msgid "Not now"
 msgstr ""
 
 #. @context: Compose format tab
@@ -1416,7 +1449,7 @@ msgstr ""
 
 #. @context: Empty state message on an aggregate collection page
 #: src/ui/pages/CollectionPage.tsx
-msgid "Nothing here yet. Add posts to one of these collections to fill this view."
+msgid "Nothing here yet. Add threads to one of these collections to fill this view."
 msgstr ""
 
 #. @context: Empty state message on featured page
@@ -1526,7 +1559,9 @@ msgstr ""
 msgid "Press N to write"
 msgstr ""
 
+#. @context: Draft item action that opens its rendered preview
 #. @context: Ghost button label on sample page
+#: src/ui/compose/ComposeDialog.tsx
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "Preview"
 msgstr ""
@@ -2112,7 +2147,7 @@ msgstr ""
 
 #. @context: Empty state message
 #: src/ui/pages/CollectionPage.tsx
-msgid "This collection is empty. Add posts from the editor."
+msgid "This collection is empty. Add threads from the editor."
 msgstr ""
 
 #. @context: Collection link help text
@@ -2146,6 +2181,11 @@ msgstr ""
 msgid "This link is reserved. Choose something else."
 msgstr ""
 
+#. @context: Explanation in the draft preview status bar
+#: src/ui/shared/DraftPreviewBar.tsx
+msgid "This post isn’t published."
+msgstr ""
+
 #. @context: Sample link post body prefix on the theme sample page
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "This reference is useful because it treats links and citations as part of the reading rhythm. Keep that in mind while tuning the"
@@ -2175,10 +2215,14 @@ msgstr ""
 
 #. @context: Archive month header count unit for a single thread
 #. @context: Archive page summary unit for a single matching thread
+#. @context: Singular thread count label
+#. @context: Singular thread count label
 #. @context: Singular thread count label on collection detail page
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/CollectionPage.tsx
+#: src/ui/shared/CollectionDirectory.tsx
+#: src/ui/shared/CollectionsManager.tsx
 msgid "thread"
 msgstr ""
 
@@ -2195,11 +2239,15 @@ msgstr ""
 #. @context: Archive feed title segment for hasReplies=1 filter
 #. @context: Archive month header count unit for multiple threads
 #. @context: Archive page summary unit for multiple matching threads
+#. @context: Plural thread count label
+#. @context: Plural thread count label
 #. @context: Plural thread count label on collection detail page
 #: src/routes/pages/archive.tsx
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/CollectionPage.tsx
+#: src/ui/shared/CollectionDirectory.tsx
+#: src/ui/shared/CollectionsManager.tsx
 msgid "threads"
 msgstr ""
 

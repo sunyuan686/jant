@@ -1,3 +1,3 @@
-/* Optional Simplified Chinese font pack, loaded only for zh-Hans sites. */
+/* Simplified Chinese serif profile, loaded when the resolved font profile is zh-Hans. */
 
 @import "./styles/fonts/noto-serif-sc/noto-serif-sc.css";

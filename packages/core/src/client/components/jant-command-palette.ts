@@ -11,7 +11,9 @@
 import { LitElement, html, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { unsafeSVG } from "lit/directives/unsafe-svg.js";
+import { NAVIGATION_SETTINGS_PATH } from "../../lib/settings-paths.js";
 import { openNewCompose } from "../compose-launch.js";
+import { publicPath } from "../runtime-paths.js";
 import { getBestFieldSearchRank, normalizeSearch } from "../search-rank.js";
 
 // ---------------------------------------------------------------------------
@@ -22,6 +24,7 @@ interface PaletteItem {
   title: string;
   path: string;
   type: "post" | "collection" | "system";
+  status?: "draft" | "published";
 }
 
 interface CommandItem {
@@ -122,7 +125,7 @@ const SYSTEM_PAGES: PaletteItem[] = [
   { title: "Collections", path: "/collections", type: "system" },
   { title: "Settings", path: "/settings", type: "system" },
   { title: "General", path: "/settings/general", type: "system" },
-  { title: "Navigation", path: "/settings/navigation", type: "system" },
+  { title: "Navigation", path: NAVIGATION_SETTINGS_PATH, type: "system" },
   {
     title: "Appearance",
     path: "/settings/appearance/color-theme",
@@ -350,7 +353,7 @@ export class JantCommandPalette extends LitElement {
     const q = normalizeSearch(this._query);
     const navItems: DisplayItem[] = this.#navigateItems.map((item) => ({
       label: item.title,
-      secondary: item.path,
+      secondary: item.status === "draft" ? `Draft · ${item.path}` : item.path,
       icon: ICONS[item.type],
     }));
 
@@ -377,7 +380,7 @@ export class JantCommandPalette extends LitElement {
   #executeSearch(query: string) {
     saveHistory(SEARCH_HISTORY_KEY, query);
     this.close();
-    window.location.href = `/search?q=${encodeURIComponent(query)}`;
+    window.location.href = publicPath(`/search?q=${encodeURIComponent(query)}`);
   }
 
   #executeItem(index: number) {
@@ -406,7 +409,7 @@ export class JantCommandPalette extends LitElement {
       if (displayItem?.pathTarget) {
         saveHistory(NAV_HISTORY_KEY, displayItem.pathTarget);
         this.close();
-        window.location.href = displayItem.pathTarget;
+        window.location.href = publicPath(displayItem.pathTarget);
         return;
       }
 
@@ -428,11 +431,15 @@ export class JantCommandPalette extends LitElement {
       saveHistory(NAV_HISTORY_KEY, item.path);
       this.close();
       if (item.type === "system") {
-        window.location.href = item.path;
+        window.location.href = publicPath(item.path);
       } else if (item.type === "collection") {
-        window.location.href = `/collections/${item.path}`;
+        window.location.href = publicPath(`/collections/${item.path}`);
       } else {
-        window.location.href = `/${item.path}`;
+        window.location.href = publicPath(
+          item.status === "draft"
+            ? `/preview/${item.path}?edit=1`
+            : `/${item.path}`,
+        );
       }
     }
   }

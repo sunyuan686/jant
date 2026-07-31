@@ -19,6 +19,18 @@ routes -> viewmodels -> ui
 - UI/components must not import services, DB modules, or route modules.
 - Feature modules must not import shared types from `src/app.tsx` or other app composition roots.
 
+## Versioned Product Defaults
+
+- Built-in navigation metadata and append-only default profiles live in
+  `packages/core/src/types/constants.ts`. Production, hosted, and dev/demo
+  bootstrap paths must derive their seed rows from that shared source.
+- Materialize the current navigation profile only while provisioning a site or
+  recovering incomplete onboarding. After onboarding completes, navigation is
+  user-owned state: default changes must not silently remove, re-add, update, or
+  reorder persisted items.
+- Keep older profile versions unchanged. Add a new version and advance
+  `DEFAULT_NAVIGATION_PROFILE_VERSION` when the new-site template changes.
+
 ## Error Handling
 
 ### Service Error Taxonomy

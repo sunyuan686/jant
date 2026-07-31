@@ -13,6 +13,381 @@ mark {
   padding: 0 2px;
 }
 
+/* Config Editor — a quiet utility list, not a stack of nested cards. */
+@layer components {
+  .config-editor-page {
+    display: flex;
+    flex-direction: column;
+    width: min(54rem, 100%);
+    gap: clamp(1rem, 2vw, 1.25rem);
+    padding-bottom: 1rem;
+  }
+
+  jant-config-editor {
+    display: block;
+    min-width: 0;
+  }
+
+  .config-editor-toolbar,
+  .config-editor-search {
+    min-width: 0;
+  }
+
+  .config-editor-search {
+    position: relative;
+  }
+
+  .config-editor-search > svg {
+    position: absolute;
+    z-index: 1;
+    top: 50%;
+    left: 0.78rem;
+    transform: translateY(-50%);
+    color: var(--color-muted-foreground);
+    pointer-events: none;
+  }
+
+  .config-editor-search .config-editor-search-input {
+    width: 100%;
+    min-height: 2.65rem;
+    padding-left: 2.35rem;
+    border-radius: var(--radius);
+    font-family: var(--font-ui);
+  }
+
+  .config-editor-fallback .config-editor-search-input {
+    padding-left: 0.8rem;
+  }
+
+  .config-editor-toolbar-meta {
+    display: flex;
+    min-height: 1.85rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0.35rem 0.1rem 0.25rem;
+  }
+
+  .config-editor-count {
+    margin: 0;
+    color: var(--color-muted-foreground);
+    font-family: var(--font-ui);
+    font-size: var(--type-2xs);
+    line-height: 1.35;
+  }
+
+  .config-editor-modified-filter {
+    display: inline-flex;
+    min-height: 1.85rem;
+    align-items: center;
+    gap: 0.42rem;
+    color: var(--color-muted-foreground);
+    font-family: var(--font-ui);
+    font-size: var(--type-2xs);
+    cursor: pointer;
+    touch-action: manipulation;
+    white-space: nowrap;
+  }
+
+  .config-editor-modified-filter:hover,
+  .config-editor-modified-filter:focus-within {
+    color: var(--color-foreground);
+  }
+
+  .config-editor-modified-filter:focus-within {
+    outline: 2px solid color-mix(in srgb, var(--site-accent) 26%, transparent);
+    outline-offset: 2px;
+  }
+
+  .config-editor-list {
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+    list-style: none;
+  }
+
+  .config-editor-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(16rem, 18rem);
+    align-items: center;
+    gap: clamp(1.25rem, 3vw, 2.25rem);
+    min-width: 0;
+    padding: 0.88rem 0.1rem;
+    border-bottom: 1px solid
+      color-mix(in srgb, var(--color-border) 78%, transparent);
+  }
+
+  .config-editor-row:last-child {
+    border-bottom: 0;
+  }
+
+  .config-editor-row[aria-busy="true"] {
+    background: color-mix(in srgb, var(--site-accent) 2.5%, transparent);
+  }
+
+  .config-editor-copy,
+  .config-editor-value-column,
+  .config-editor-control-row {
+    min-width: 0;
+  }
+
+  .config-editor-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .config-editor-heading > label {
+    cursor: pointer;
+  }
+
+  .config-editor-key {
+    overflow-wrap: anywhere;
+    color: var(--color-foreground);
+    font-family: var(--font-mono);
+    font-size: var(--type-xs);
+    font-weight: var(--fw-medium);
+    line-height: 1.35;
+  }
+
+  .config-editor-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    color: var(--color-muted-foreground);
+    font-family: var(--font-ui);
+    font-size: var(--type-2xs);
+    line-height: 1.3;
+  }
+
+  .config-editor-state::before {
+    width: 0.28rem;
+    height: 0.28rem;
+    flex: none;
+    border-radius: 999px;
+    background: currentColor;
+    content: "";
+  }
+
+  .config-editor-modified {
+    color: color-mix(in srgb, var(--site-accent) 72%, var(--color-foreground));
+  }
+
+  .config-editor-locked::before {
+    border-radius: 0.05rem;
+  }
+
+  .config-editor-description {
+    margin: 0.28rem 0 0;
+    color: var(--color-muted-foreground);
+    font-family: var(--font-ui);
+    font-size: var(--type-xs);
+    line-height: 1.42;
+    text-wrap: pretty;
+  }
+
+  .config-editor-value-column {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.28rem;
+  }
+
+  .config-editor-control-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 2rem;
+    align-items: center;
+    gap: 0.7rem;
+  }
+
+  .config-editor-control-row-select {
+    grid-template-columns: minmax(0, 1fr) 2rem;
+  }
+
+  .config-editor-control-row-number {
+    grid-template-columns: minmax(0, 8rem) 2rem;
+    justify-content: start;
+  }
+
+  .config-editor-control-row > input[role="switch"] {
+    justify-self: end;
+  }
+
+  .config-editor-control-row .config-editor-select,
+  .config-editor-value-input {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: var(--type-xs);
+  }
+
+  .config-editor-control-row .config-editor-select {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .config-editor-status {
+    align-self: flex-end;
+    color: var(--color-muted-foreground);
+    font-family: var(--font-ui);
+    font-size: var(--type-2xs);
+    line-height: 1.35;
+  }
+
+  .config-editor-status-saved {
+    color: color-mix(in srgb, var(--site-accent) 68%, var(--color-foreground));
+  }
+
+  .config-editor-status-error {
+    max-width: 100%;
+    color: var(--color-destructive);
+    text-align: right;
+    text-wrap: pretty;
+  }
+
+  .config-editor-reset {
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--color-muted-foreground);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .config-editor-reset:hover,
+  .config-editor-reset:focus-visible {
+    background: var(--color-muted);
+    color: var(--color-foreground);
+  }
+
+  .config-editor-reset:focus-visible,
+  .config-editor-open-control:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--site-accent) 28%, transparent);
+    outline-offset: 3px;
+  }
+
+  .config-editor-reset:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .config-editor-open-control {
+    display: flex;
+    min-width: 0;
+    min-height: 2.35rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    padding: 0.35rem 0.1rem;
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .config-editor-linked-value {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--site-text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--type-xs);
+    line-height: 1.4;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .config-editor-open-action {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 0.3rem;
+    color: var(--color-muted-foreground);
+    font-family: var(--font-ui);
+    font-size: var(--type-2xs);
+    line-height: 1.35;
+    white-space: nowrap;
+  }
+
+  .config-editor-open-control:hover .config-editor-linked-value,
+  .config-editor-open-control:hover .config-editor-open-action,
+  .config-editor-open-control:focus-visible .config-editor-linked-value,
+  .config-editor-open-control:focus-visible .config-editor-open-action {
+    color: var(--color-foreground);
+  }
+
+  .config-editor-fallback-value {
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    padding-block: 0.35rem;
+    color: var(--site-text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--type-xs);
+    line-height: 1.4;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .config-editor-empty {
+    display: grid;
+    min-height: 9rem;
+    place-items: center;
+    padding: 2rem;
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-muted-foreground);
+    font-family: var(--font-ui);
+    font-size: var(--type-sm);
+    line-height: 1.45;
+    text-align: center;
+  }
+
+  .config-editor-empty p {
+    max-width: 28rem;
+    margin: 0;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .config-editor-row .config-editor-reset {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .config-editor-row:hover .config-editor-reset,
+    .config-editor-row:focus-within .config-editor-reset {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .config-editor-row {
+      grid-template-columns: minmax(0, 1fr);
+      align-items: stretch;
+      gap: 0.62rem;
+      padding-block: 0.85rem;
+    }
+
+    .config-editor-control-row > input[role="switch"] {
+      justify-self: start;
+    }
+
+    .config-editor-fallback-value {
+      text-align: left;
+    }
+  }
+}
+
 .search-snippet {
   font-family: var(--font-body);
   font-size: var(--type-base);
@@ -1222,6 +1597,171 @@ svg[stroke-width].icon-fine {
 
   .collection-picker-title {
     @apply truncate flex-1;
+  }
+
+  .collection-picker-footer {
+    @apply sticky mt-1 border-t px-1 pb-1 pt-1;
+    bottom: -0.375rem;
+    background-color: var(--color-popover);
+  }
+
+  .collection-picker-create {
+    @apply flex w-full cursor-pointer items-center gap-1 rounded-md border-0 bg-transparent px-2 py-1.5 text-left text-sm font-normal;
+    color: var(--color-muted-foreground);
+    transition:
+      background-color 0.1s,
+      color 0.1s;
+
+    &:hover,
+    &:focus-visible {
+      background-color: var(--color-accent);
+      color: var(--color-foreground);
+      outline: none;
+    }
+  }
+
+  /* Page picker — a focused search/create flow inside Navigation settings */
+  .nav-page-dialog > .nav-page-dialog-panel {
+    width: min(34rem, calc(100% - 2rem));
+    gap: 1.25rem;
+  }
+
+  .nav-page-picker-section {
+    min-height: 16rem;
+  }
+
+  .nav-page-search-wrap {
+    @apply relative;
+
+    > svg {
+      @apply pointer-events-none absolute left-3 top-1/2 -translate-y-1/2;
+      color: var(--color-muted-foreground);
+    }
+  }
+
+  .nav-page-search-wrap .nav-page-search-input.nav-page-search-input {
+    padding-inline-start: 2.5rem;
+  }
+
+  .nav-page-results-label {
+    @apply mb-1.5 mt-4 text-xs font-medium;
+    color: var(--color-muted-foreground);
+  }
+
+  .nav-page-results {
+    @apply -mx-2 flex flex-col gap-1 overflow-y-auto px-2;
+    max-height: min(18rem, 42vh);
+  }
+
+  .nav-page-result {
+    @apply flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border-0 bg-transparent px-3 py-2.5 text-left;
+    color: var(--color-foreground);
+    transition:
+      background-color 0.12s,
+      color 0.12s;
+
+    &:hover:not(:disabled),
+    &:focus-visible,
+    &.nav-page-result-selected {
+      background-color: var(--color-accent);
+      outline: none;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    > svg {
+      @apply shrink-0;
+      color: var(--color-muted-foreground);
+    }
+  }
+
+  .nav-page-result-copy {
+    @apply flex min-w-0 flex-col gap-0.5;
+  }
+
+  .nav-page-result-title {
+    @apply truncate text-sm font-medium;
+  }
+
+  .nav-page-result-path {
+    @apply truncate text-xs;
+    color: var(--color-muted-foreground);
+  }
+
+  .nav-page-status {
+    @apply flex min-h-44 items-center justify-center px-6 text-center text-sm;
+    color: var(--color-muted-foreground);
+  }
+
+  .nav-page-dialog-footer.nav-page-dialog-footer {
+    @apply sm:justify-between;
+  }
+
+  .nav-page-create-link {
+    @apply gap-2;
+  }
+
+  .nav-page-spinner {
+    @apply size-4 shrink-0 animate-spin rounded-full border-2;
+    border-color: var(--color-border);
+    border-top-color: var(--color-foreground);
+  }
+
+  .nav-page-slug-field {
+    @apply flex items-center overflow-hidden rounded-md border;
+    background-color: var(--color-background);
+    border-color: var(--color-input);
+
+    &:focus-within {
+      border-color: var(--color-ring);
+      box-shadow: 0 0 0 1px var(--color-ring);
+    }
+  }
+
+  .nav-page-slug-prefix {
+    @apply shrink-0 pl-3 text-sm;
+    color: var(--color-muted-foreground);
+  }
+
+  .nav-page-slug-input.nav-page-slug-input {
+    @apply min-w-0 flex-1 border-0 pl-0 shadow-none outline-none;
+
+    &:focus {
+      box-shadow: none;
+    }
+  }
+
+  .nav-page-visibility-note {
+    @apply flex items-start gap-2 rounded-lg px-3 py-2.5 text-sm;
+    color: var(--color-muted-foreground);
+    background-color: var(--color-muted);
+
+    > svg {
+      @apply mt-0.5 shrink-0;
+    }
+  }
+
+  .nav-collection-dialog > .nav-collection-dialog-panel {
+    width: min(32rem, calc(100% - 2rem));
+    gap: 1.25rem;
+  }
+
+  .nav-create-success-header {
+    @apply items-center text-center;
+  }
+
+  .nav-create-success-icon {
+    @apply mb-1 flex size-10 items-center justify-center rounded-full;
+    color: var(--color-primary);
+    background-color: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  }
+
+  .nav-create-success-card {
+    @apply flex flex-col gap-1 rounded-lg border px-4 py-3;
+    background-color: var(--color-muted);
   }
 }
 

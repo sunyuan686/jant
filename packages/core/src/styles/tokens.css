@@ -8,14 +8,12 @@
 
 :root {
   /* Typography — Font families */
-  --font-cjk-serif-fallback:
-    "Songti SC", STSong, SimSun, "Songti TC", PMingLiU, MingLiU,
-    "Noto Serif SC", "Noto Serif CJK SC", "Noto Serif TC", "Noto Serif CJK TC";
+  --font-cjk-serif-fallback: "Jant Language Fallback";
+  --font-cjk-sans-fallback: "Jant Language Fallback";
   --font-body:
     system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Helvetica, Arial, "PingFang TC", "PingFang SC",
-    "Hiragino Sans CNS", "Hiragino Sans GB", "Microsoft JhengHei",
-    "Microsoft YaHei", "Noto Sans CJK TC", "Noto Sans CJK SC", sans-serif;
+    "Helvetica Neue", Helvetica, Arial, var(--font-cjk-sans-fallback),
+    sans-serif;
   --font-heading:
     "New York Small", "New York", "Iowan Old Style", Charter,
     "Bitstream Charter", "Source Serif 4", Cambria, "Sitka Text", Georgia,
@@ -29,9 +27,8 @@
     "Iowan Old Style", Charter, Georgia, "Times New Roman", Times, serif;
   --font-ui:
     system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Helvetica, Arial, "PingFang TC", "PingFang SC",
-    "Hiragino Sans CNS", "Hiragino Sans GB", "Microsoft JhengHei",
-    "Microsoft YaHei", "Noto Sans CJK TC", "Noto Sans CJK SC", sans-serif;
+    "Helvetica Neue", Helvetica, Arial, var(--font-cjk-sans-fallback),
+    sans-serif;
   --font-mono:
     ui-monospace, Menlo, Monaco, Consolas, "Cascadia Code", "Courier New",
     monospace;
@@ -96,6 +93,7 @@
 
   /* Semantic aliases */
   --type-body-size: var(--type-content-body);
+  --type-footnote-ref: calc(var(--type-body-size) * 0.75);
   --type-code: calc(var(--type-body-size) * 0.94);
   --type-code-block: calc(var(--type-body-size) * 0.9);
   --type-body-tracking: 0;
@@ -128,6 +126,7 @@
   --layout-body-max-width: 1088px;
   --layout-content-width: 55%;
   --layout-sidenote-width: 50%;
+  --layout-sidenote-gap: 10%;
   --layout-sidenote-margin: -60%;
   --site-padding: 1.5rem;
   --content-gap: 1rem;
@@ -233,6 +232,12 @@
     in srgb,
     var(--site-text-secondary) 88%,
     var(--site-text-primary)
+  );
+  --site-footnote-text: var(--site-reading-caption);
+  --site-footnote-marker: color-mix(
+    in oklch,
+    var(--site-text-secondary) 88%,
+    var(--site-page-bg)
   );
   --site-content-link: inherit;
   --site-content-link-hover: var(--site-text-primary);

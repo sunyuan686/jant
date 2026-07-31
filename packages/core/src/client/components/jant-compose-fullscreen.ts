@@ -46,6 +46,7 @@ export class JantComposeFullscreen extends LitElement {
   private _editor: Editor | null = null;
   private _content: JSONContent | null = null;
   private _selection: ComposeEditorSelection | null = null;
+  private _editorIndex = 0;
   private _fileInput: HTMLInputElement | null = null;
   #inlineImageUploadPromises = new Set<Promise<void>>();
 
@@ -131,6 +132,7 @@ export class JantComposeFullscreen extends LitElement {
     this._showTitle = e.detail.showTitle || e.detail.title.trim().length > 0;
     this._replyContext = e.detail.replyContext ?? null;
     this._replyExpanded = e.detail.replyContext?.expanded ?? false;
+    this._editorIndex = e.detail.editorIndex ?? 0;
     this._open = true;
     this.updateComplete.then(() => {
       const dialog = this.querySelector<HTMLDialogElement>(
@@ -191,9 +193,18 @@ export class JantComposeFullscreen extends LitElement {
   };
 
   private _onDocumentKeydown = (e: globalThis.KeyboardEvent) => {
-    if (!this._open || e.key !== "Escape") return;
-    // Let IME consume Escape during composition (e.g. CJK candidate dismiss).
+    if (!this._open) return;
+    // Let IME consume keys during composition (e.g. CJK candidate selection).
     if (e.isComposing || e.keyCode === 229) return;
+
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      e.stopPropagation();
+      this._publish();
+      return;
+    }
+
+    if (e.key !== "Escape") return;
     if (this._hasActiveEscapeOverlay()) return;
 
     e.preventDefault();
@@ -212,7 +223,7 @@ export class JantComposeFullscreen extends LitElement {
     ).some((el) => getComputedStyle(el).display !== "none");
   }
 
-  private _finishClose() {
+  private _finishClose(intent?: "publish") {
     const json = this._editor?.getJSON() ?? this._content;
     const selection = this._editor
       ? {
@@ -240,6 +251,8 @@ export class JantComposeFullscreen extends LitElement {
           showTitle: this._showTitle || this._title.trim().length > 0,
           selection,
           replyExpanded: this._replyExpanded,
+          intent,
+          editorIndex: this._editorIndex,
         },
       }),
     );
@@ -248,6 +261,11 @@ export class JantComposeFullscreen extends LitElement {
   private _close() {
     if (!this._open) return;
     this._finishClose();
+  }
+
+  private _publish() {
+    if (!this._open) return;
+    this._finishClose("publish");
   }
 
   private _revealTitle() {

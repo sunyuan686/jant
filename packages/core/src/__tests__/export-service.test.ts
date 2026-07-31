@@ -26,7 +26,7 @@ interface FixtureOptions {
   posts: Post[];
   collections?: Collection[];
   collectionsByPost?: Map<string, Collection[]>;
-  collectionEntriesByPost?: Map<
+  collectionEntriesByThread?: Map<
     string,
     {
       collectionId: string;
@@ -47,7 +47,7 @@ function buildServices(opts: FixtureOptions): ServicesArg {
     posts,
     collections = [],
     collectionsByPost = new Map(),
-    collectionEntriesByPost = new Map(),
+    collectionEntriesByThread = new Map(),
     mediaByPost = new Map(),
     slugMap = new Map(posts.map((p) => [p.id, p.slug])),
     aliasMap = new Map(),
@@ -75,14 +75,14 @@ function buildServices(opts: FixtureOptions): ServicesArg {
             type: "collection" as const,
             collection: {
               ...collection,
-              postCount: 0,
+              threadCount: 0,
               recentActivityAt: collection.updatedAt,
             },
           })),
         directoryItems: [],
       }),
       getCollectionsByPostIds: async () => collectionsByPost,
-      getCollectionEntriesByPostIds: async () => collectionEntriesByPost,
+      getCollectionEntriesByThreadIds: async () => collectionEntriesByThread,
     },
     media: {
       getByPostIds: async () => mediaByPost,
@@ -123,7 +123,7 @@ describe("createExportService (Hugo)", () => {
     // Starts with YAML delimiter
     expect(text.startsWith("---\n")).toBe(true);
 
-    // Stable key order: id, title, date, slug, type, featured_at, pinned_at
+    // Stable key order: Post fields, Featured projection, then pin metadata.
     const headerLines = text
       .split("\n")
       .slice(1, text.split("\n").indexOf("---", 1))
@@ -139,6 +139,8 @@ describe("createExportService (Hugo)", () => {
       "visibility",
       "summary_text",
       "featured_at",
+      "featured_post_ids",
+      "featured_sort_at",
       "pinned_at",
     ];
     let cursor = -1;
@@ -155,6 +157,10 @@ describe("createExportService (Hugo)", () => {
     expect(frontMatter.format).toBe("note");
     expect(frontMatter.featured_at).toBe(
       new Date(1773100000 * 1000).toISOString(),
+    );
+    expect(frontMatter.featured_post_ids).toEqual(["post-root"]);
+    expect(frontMatter.featured_sort_at).toBe(
+      new Date((root.publishedAt ?? root.createdAt) * 1000).toISOString(),
     );
     expect(frontMatter.pinned_at).toBe(
       new Date(1773200000 * 1000).toISOString(),
@@ -202,6 +208,47 @@ describe("createExportService (Hugo)", () => {
     expect(replyFm.aliases).toBeUndefined();
     expect(replyFm.type).toBe("post");
     expect(replyFm.id).toBe("post-reply");
+  });
+
+  it("projects Child Featured selection and publication order onto the Root bundle", async () => {
+    const root = makePost({
+      id: "post-root",
+      slug: "thread-root",
+      threadId: "post-root",
+      publishedAt: 1000,
+      createdAt: 1000,
+    });
+    const featuredReply = makePost({
+      id: "post-featured-reply",
+      slug: "featured-reply",
+      replyToId: root.id,
+      threadId: root.id,
+      featuredAt: 9000,
+      publishedAt: 3000,
+      createdAt: 3000,
+    });
+    const finalReply = makePost({
+      id: "post-final-reply",
+      slug: "final-reply",
+      replyToId: featuredReply.id,
+      threadId: root.id,
+      publishedAt: 4000,
+      createdAt: 4000,
+    });
+
+    const service = createExportService(
+      buildServices({ posts: [root, featuredReply, finalReply] }),
+      makeSiteConfig(),
+    );
+    const files = filesToMap(await service.generateHugoFiles());
+    const rootText = files.get("content/thread-root/_index.md") as string;
+    const { frontMatter } = await parseFrontMatter(rootText);
+
+    expect(frontMatter.featured_at).toBeUndefined();
+    expect(frontMatter.featured_post_ids).toEqual([featuredReply.id]);
+    expect(frontMatter.featured_sort_at).toBe(
+      new Date(3000 * 1000).toISOString(),
+    );
   });
 
   it("merges historical root aliases + reply slugs onto the root", async () => {
@@ -354,6 +401,56 @@ describe("createExportService (Hugo)", () => {
     }
   });
 
+  it("disables all Hugo feed outputs and hides only system RSS navigation", async () => {
+    const collection = makeCollection({ id: "col-1", slug: "ideas" });
+    const service = createExportService(
+      buildServices({ posts: [], collections: [collection] }),
+      makeSiteConfig({
+        publicApiEnabled: false,
+        rssFeedsEnabled: false,
+        navItems: [
+          {
+            type: "system",
+            systemKey: "rss",
+            label: "System feed",
+            url: "/feed",
+            position: 0,
+            placement: "header",
+          },
+          {
+            type: "link",
+            systemKey: null,
+            label: "Custom feed",
+            url: "/feed",
+            position: 1,
+            placement: "header",
+          },
+        ],
+      }),
+    );
+    const files = filesToMap(await service.generateHugoFiles());
+    const toml = files.get("hugo.toml") as string;
+    const data = files.get("data/jant.toml") as string;
+
+    expect(toml).toMatch(/\[outputs\][\s\S]*home = \[\s*"html"\s*\]/);
+    expect(toml).toContain("public_api_enabled = false");
+    expect(toml).toContain("rss_feeds_enabled = false");
+    expect(data).toContain("public_api_enabled = false");
+    expect(data).toContain("rss_feeds_enabled = false");
+    expect(data).not.toContain('label = "System feed"');
+    expect(data).toContain('label = "Custom feed"');
+
+    for (const path of [
+      "content/featured/_index.md",
+      "content/archive/_index.md",
+      "content/ideas/_index.md",
+    ]) {
+      const raw = files.get(path) as string;
+      const { frontMatter } = await parseFrontMatter(raw);
+      expect(frontMatter.outputs).toEqual(["html"]);
+    }
+  });
+
   it("resolves the nav RSS link to /featured/index.xml when mainRssFeed=featured", async () => {
     const service = createExportService(
       buildServices({ posts: [] }),
@@ -445,7 +542,7 @@ describe("createExportService (Hugo)", () => {
             type: "collection" as const,
             collection: {
               ...collection,
-              postCount: 0,
+              threadCount: 0,
               recentActivityAt: collection.updatedAt,
             },
           },
@@ -510,6 +607,7 @@ describe("createExportService (Hugo)", () => {
       "themes/jant/layouts/partials/pagination.html",
       "themes/jant/layouts/partials/post-card.html",
       "themes/jant/layouts/partials/reply.html",
+      "themes/jant/layouts/partials/featured-thread.html",
       "themes/jant/layouts/partials/feed-post-content.xml",
     ];
     for (const path of expectedLayouts) {
@@ -520,6 +618,31 @@ describe("createExportService (Hugo)", () => {
     expect(files.has("themes/jant/static/tokens.css")).toBe(true);
     expect(files.has("themes/jant/static/theme.css")).toBe(true);
     expect(files.has("themes/jant/static/custom.css")).toBe(true);
+
+    const collectionList = files.get(
+      "themes/jant/layouts/_default/list.html",
+    ) as string;
+    expect(collectionList).toContain(
+      'class="thread thread-full{{ if $hasReplies }} thread-has-replies{{ end }}"',
+    );
+  });
+
+  it("renders semantic, namespaced footnotes in exported site HTML fields", async () => {
+    const service = createExportService(
+      buildServices({ posts: [] }),
+      makeSiteConfig({
+        siteFooter: "Footer[^1]\n\n[^1]: Export definition",
+      }),
+    );
+    const files = filesToMap(await service.generateHugoFiles());
+    const { parse } = await import("smol-toml");
+    const data = parse(files.get("data/jant.toml") as string);
+    const footerHtml = data.site_footer_html as string;
+
+    expect(footerHtml).toContain('role="doc-noteref"');
+    expect(footerHtml).toContain('role="doc-endnotes"');
+    expect(footerHtml).toContain("fn-3gu8g1hux2k2m-1");
+    expect(footerHtml).not.toContain("site-footer");
   });
 
   it("writes a .gitignore covering Hugo build artifacts", async () => {
@@ -550,9 +673,15 @@ describe("createExportService (Hugo)", () => {
     expect(Object.keys(decoded)).toContain("hugo.toml");
   });
 
-  it("round-trips collection memberships on each post's front matter", async () => {
+  it("writes Thread collection memberships only on root front matter", async () => {
     const collection = makeCollection({ id: "col-1", slug: "ideas" });
     const root = makePost({ id: "post-root", slug: "entry-a" });
+    const reply = makePost({
+      id: "post-reply",
+      slug: "entry-a-reply",
+      replyToId: "post-root",
+      threadId: "post-root",
+    });
     const entries = new Map<
       string,
       {
@@ -572,9 +701,9 @@ describe("createExportService (Hugo)", () => {
     ]);
     const service = createExportService(
       buildServices({
-        posts: [root],
+        posts: [root, reply],
         collections: [collection],
-        collectionEntriesByPost: entries,
+        collectionEntriesByThread: entries,
       }),
       makeSiteConfig(),
     );
@@ -591,6 +720,10 @@ describe("createExportService (Hugo)", () => {
         pinned_at: new Date(1773050000 * 1000).toISOString(),
       },
     ]);
+    const { frontMatter: replyFrontMatter } = await parseFrontMatter(
+      files.get("content/entry-a/entry-a-reply/index.md") as string,
+    );
+    expect(replyFrontMatter.collections).toBeUndefined();
   });
 
   it("emits media[] front matter for each attachment on a post", async () => {

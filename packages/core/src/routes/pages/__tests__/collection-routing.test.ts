@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "../../../__tests__/helpers/app.js";
 import { collectionRoutes } from "../collection.js";
 import { collectionsPageRoutes } from "../collections.js";
 import { pageRoutes } from "../page.js";
 
-function createCollectionRoutingTestApp() {
-  const testApp = createTestApp();
+function createCollectionRoutingTestApp(rssPublishDelaySeconds = 0) {
+  const testApp = createTestApp({ rssPublishDelaySeconds });
   const { app } = testApp;
 
   app.use("*", async (c, next) => {
@@ -20,6 +20,10 @@ function createCollectionRoutingTestApp() {
 
   return testApp;
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 async function createCollectionWithPost(
   services: ReturnType<typeof createTestApp>["services"],
@@ -42,7 +46,7 @@ async function createCollectionWithPost(
     bodyMarkdown: bodyMarkdown ?? postTitle,
     status: "published",
   });
-  await services.collections.addPost(collection.id, post.id);
+  await services.collections.addThread(collection.id, post.id);
   return { collection, post };
 }
 
@@ -50,10 +54,16 @@ describe("Collection Routing", () => {
   it("renders a single collection at its root path", async () => {
     const { app, services } = createCollectionRoutingTestApp();
 
-    await createCollectionWithPost(services, {
+    const { post } = await createCollectionWithPost(services, {
       slug: "reading",
       title: "Reading",
       postTitle: "Book log",
+    });
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "Thread follow-up",
+      status: "published",
+      replyToId: post.id,
     });
 
     const res = await app.request("/reading");
@@ -64,6 +74,23 @@ describe("Collection Routing", () => {
     const html = await res.text();
     expect(html).toContain("Reading");
     expect(html).toContain("Book log");
+    expect(html).toContain("Thread follow-up");
+  });
+
+  it("hides the collection feed button when feeds are disabled", async () => {
+    const { app, services } = createCollectionRoutingTestApp();
+    await services.settings.set("RSS_FEEDS_ENABLED", "false");
+    await createCollectionWithPost(services, {
+      slug: "reading",
+      title: "Reading",
+      postTitle: "Book log",
+    });
+
+    const response = await app.request("/reading");
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).not.toContain('class="feed-link"');
   });
 
   it("redirects namespaced single-collection paths to the root canonical URL", async () => {
@@ -137,6 +164,37 @@ describe("Collection Routing", () => {
     const xml = await aggregateRes.text();
     expect(xml).toContain("Book log");
     expect(xml).toContain("Film log");
+  });
+
+  it("applies the RSS publication delay to Collection feeds", async () => {
+    const currentTime = 2_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(currentTime * 1000);
+    const { app, services } = createCollectionRoutingTestApp(300);
+    const collection = await services.collections.create({
+      slug: "reading",
+      title: "Reading",
+    });
+    const eligible = await services.posts.create({
+      format: "note",
+      title: "Eligible Book Log",
+      bodyMarkdown: "Old enough for RSS",
+      status: "published",
+      publishedAt: currentTime - 300,
+    });
+    const recent = await services.posts.create({
+      format: "note",
+      title: "Recent Book Log",
+      bodyMarkdown: "Still inside the edit window",
+      status: "published",
+      publishedAt: currentTime,
+    });
+    await services.collections.addThread(collection.id, eligible.id);
+    await services.collections.addThread(collection.id, recent.id);
+
+    const xml = await (await app.request("/reading/feed")).text();
+
+    expect(xml).toContain("Eligible Book Log");
+    expect(xml).not.toContain("Recent Book Log");
   });
 
   it("redirects canonical collection pages and feeds to collection aliases", async () => {
