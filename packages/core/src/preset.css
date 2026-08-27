@@ -55,6 +55,9 @@ html {
  * text when a serif font theme is active (Tufte, Bookish, etc.).
  */
 @layer components {
+  /* Every BaseCoat button variant, not only the default size: a
+     `btn-sm-outline` is as much a UI control as a `btn-outline`, and one left
+     off this list silently picks up the theme's content font instead. */
   .btn,
   .btn-primary,
   .btn-secondary,
@@ -62,6 +65,41 @@ html {
   .btn-ghost,
   .btn-link,
   .btn-destructive,
+  .btn-sm,
+  .btn-sm-primary,
+  .btn-sm-secondary,
+  .btn-sm-outline,
+  .btn-sm-ghost,
+  .btn-sm-link,
+  .btn-sm-destructive,
+  .btn-lg,
+  .btn-lg-primary,
+  .btn-lg-secondary,
+  .btn-lg-outline,
+  .btn-lg-ghost,
+  .btn-lg-link,
+  .btn-lg-destructive,
+  .btn-icon,
+  .btn-icon-primary,
+  .btn-icon-secondary,
+  .btn-icon-outline,
+  .btn-icon-ghost,
+  .btn-icon-link,
+  .btn-icon-destructive,
+  .btn-sm-icon,
+  .btn-sm-icon-primary,
+  .btn-sm-icon-secondary,
+  .btn-sm-icon-outline,
+  .btn-sm-icon-ghost,
+  .btn-sm-icon-link,
+  .btn-sm-icon-destructive,
+  .btn-lg-icon,
+  .btn-lg-icon-primary,
+  .btn-lg-icon-secondary,
+  .btn-lg-icon-outline,
+  .btn-lg-icon-ghost,
+  .btn-lg-icon-link,
+  .btn-lg-icon-destructive,
   .badge,
   .badge-primary,
   .badge-secondary,
@@ -191,6 +229,12 @@ html {
   font-size: var(--type-body-size);
   line-height: var(--type-body-leading);
   letter-spacing: var(--type-body-tracking);
+  /* Authored text can contain a run with no break opportunity — a long URL, an
+     ID, a word typed without spaces. Such a run does not wrap on its own and
+     spills past the content column across the page. `break-word` splits it only
+     when it cannot fit a line by itself, so ordinary text keeps its natural
+     line breaks and intrinsic sizing is unaffected. */
+  overflow-wrap: break-word;
 
   :where(h1, h2, h3, h4, h5, h6) {
     font-family: var(--font-heading);
@@ -527,6 +571,30 @@ html {
     var(--site-divider) 82%,
     transparent
   );
+}
+
+/*
+ * Author text outside `.prose`
+ *
+ * Titles, quote bodies, and their attributions render authored text without
+ * the prose wrapper, so they need the same last-resort break. Without it a
+ * single unbroken run overflows the fixed-width content column below.
+ */
+.post-detail-title,
+.post-detail-quote,
+.feed-note-title,
+.feed-link-title,
+.feed-quote-content {
+  overflow-wrap: break-word;
+}
+
+/* Attribution and domain lay their parts out with flex, so each part is a flex
+   item that refuses to shrink below its min-content width. `break-word` leaves
+   min-content at the longest word and the item still overflows; `anywhere` also
+   shrinks min-content, which is what lets the row wrap. */
+.feed-quote-attribution,
+.feed-link-domain {
+  overflow-wrap: anywhere;
 }
 
 /*

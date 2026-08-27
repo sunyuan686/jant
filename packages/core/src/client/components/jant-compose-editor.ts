@@ -26,6 +26,7 @@ import type {
   ComposeFormat,
   ComposeLabels,
   ComposeAttachment,
+  ComposeRowStatus,
   AttachedTextItem,
   ComposeEditorSelection,
   ComposeFullscreenOpenDetail,
@@ -97,43 +98,44 @@ const COMPOSE_TOOLBAR_ICONS = {
     />
     <path
       d="m9 1.95 2.08 4.21 4.65.67-3.36 3.29.8 4.63L9 12.55l-4.17 2.2.8-4.63-3.36-3.29 4.65-.67z"
-      stroke-width="1.6"
     />
   `,
+  /* The one filled glyph in the row, so its bars are cut to the weight the
+     stroked icons read at — a 2.05 bar beside a 1.42 stroke looks bold. */
   title: `
     <rect
       x="3.35"
-      y="3.2"
+      y="3.37"
       width="11.3"
-      height="2.05"
+      height="1.72"
+      rx="0.6"
+      fill="currentColor"
+      stroke="none"
+    />
+    <rect
+      x="7.99"
+      y="4.6"
+      width="2.02"
+      height="9.45"
       rx="0.68"
       fill="currentColor"
       stroke="none"
     />
     <rect
-      x="7.8"
-      y="4.6"
-      width="2.4"
-      height="9.45"
-      rx="0.78"
-      fill="currentColor"
-      stroke="none"
-    />
-    <rect
       x="6.75"
-      y="13.15"
+      y="13.32"
       width="4.5"
-      height="1.12"
-      rx="0.56"
+      height="0.95"
+      rx="0.48"
       fill="currentColor"
       stroke="none"
     />
   `,
   fullscreen: `
-    <path d="M5.85 3H3v2.85" stroke-width="1.48" />
-    <path d="M12.15 3H15v2.85" stroke-width="1.48" />
-    <path d="M3 12.15V15h2.85" stroke-width="1.48" />
-    <path d="M15 12.15V15h-2.85" stroke-width="1.48" />
+    <path d="M5.85 3H3v2.85" />
+    <path d="M12.15 3H15v2.85" />
+    <path d="M3 12.15V15h2.85" />
+    <path d="M15 12.15V15h-2.85" />
   `,
 } as const;
 
@@ -147,7 +149,6 @@ function renderComposeToolbarIcon(
     viewBox="0 0 18 18"
     fill="none"
     stroke="currentColor"
-    stroke-width="1.55"
     stroke-linecap="round"
     stroke-linejoin="round"
     aria-hidden="true"
@@ -189,6 +190,10 @@ export class JantComposeEditor extends LitElement {
     threadItem: { type: Boolean, attribute: "thread-item" },
     removable: { type: Boolean },
     inlineFormat: { type: Boolean, attribute: "inline-format" },
+    titleByDefault: { type: Boolean, attribute: "title-by-default" },
+    positionLabel: { type: String, attribute: "position-label" },
+    badgeLabel: { type: String, attribute: "badge-label" },
+    headerExtra: { attribute: false },
     slashCommandDiscovered: { type: Boolean },
     _title: { state: true },
     _bodyJson: { state: true },
@@ -215,6 +220,29 @@ export class JantComposeEditor extends LitElement {
   declare threadItem: boolean;
   declare removable: boolean;
   declare inlineFormat: boolean;
+  /**
+   * Whether a note's title field starts visible. A post that opens a thread is
+   * usually the one worth naming, so it defaults on there; a reply or a
+   * continuation post carries the thread's title already, so it defaults off.
+   * On a new single post the owner narrows it further with the author's own
+   * remembered answer. Either way the `T` tool overrides it, and a post that
+   * arrives with a title always shows the field.
+   */
+  declare titleByDefault: boolean;
+  /**
+   * "1/3"-style position marker shown before the format selector. Empty for a
+   * single post, where there is no "which one" to answer.
+   */
+  declare positionLabel: string;
+  /** Status marker for the header row, e.g. "Editing". Mutually exclusive with
+   * `positionLabel` in practice — a thread post is never an edit. */
+  declare badgeLabel: string;
+  /**
+   * Owner-supplied content for the right side of the format header — the
+   * dialog's per-post date/permalink control. Passed in rather than built here
+   * because publish metadata belongs to the dialog, not to the editor.
+   */
+  declare headerExtra: unknown;
   declare slashCommandDiscovered: boolean;
   declare _title: string;
   declare _bodyJson: JSONContent | null;
@@ -243,7 +271,6 @@ export class JantComposeEditor extends LitElement {
   private _emojiContainer: HTMLElement | null = null;
   private readonly _urlStatusId = `compose-url-status-${randomUUID()}`;
   private _onDocClickBound = this._onDocumentClick.bind(this);
-  private _scrollBufferApplied = false;
   private _filePickerCleanup: (() => void) | null = null;
   private _suppressAttachedTextOpenUntil = 0;
   /**
@@ -273,6 +300,10 @@ export class JantComposeEditor extends LitElement {
     this.threadItem = false;
     this.removable = false;
     this.inlineFormat = false;
+    this.titleByDefault = true;
+    this.positionLabel = "";
+    this.badgeLabel = "";
+    this.headerExtra = null;
     this.slashCommandDiscovered = false;
     this._title = "";
     this._bodyJson = null;
@@ -280,7 +311,7 @@ export class JantComposeEditor extends LitElement {
     this._quoteText = "";
     this._quoteAuthor = "";
     this._rating = 0;
-    this._showTitle = false;
+    this._showTitle = true;
     this._showRating = false;
     this._attachedTexts = [];
     this._attachments = [];
@@ -778,9 +809,90 @@ export class JantComposeEditor extends LitElement {
     }
   }
 
+  /**
+   * What this row contributes to the composer's submit state.
+   *
+   * The editor owns these fields, so it owns the answer: the dialog reduces
+   * `getStatus()` over the rows it has rather than reading editors back out of
+   * the DOM, which during a render still holds the row it is about to remove.
+   *
+   * @returns Whether the row holds anything worth keeping, and whether it is
+   *   complete enough to publish
+   * @example
+   * editor.getStatus(); // { hasContent: true, publishable: false } — link, no URL yet
+   */
+  getStatus(): ComposeRowStatus {
+    const data = this.getData();
+    const hasContent =
+      !!data.body ||
+      !!data.title.trim() ||
+      !!data.url.trim() ||
+      !!data.quoteText.trim() ||
+      !!data.quoteAuthor.trim() ||
+      data.rating > 0 ||
+      data.attachments.length > 0 ||
+      data.attachedTexts.length > 0;
+    const fieldsValid =
+      !this.getUrlValidationMessage() && !this.getLinkTitleValidationMessage();
+
+    let publishable: boolean;
+    switch (this.format) {
+      // A link is its URL and title, both of which the validators already
+      // require — nothing else has to be filled in.
+      case "link":
+        publishable = fieldsValid;
+        break;
+      case "quote":
+        publishable = fieldsValid && !!data.quoteText.trim();
+        break;
+      default:
+        publishable = fieldsValid && hasContent;
+    }
+
+    return { hasContent, publishable };
+  }
+
+  #lastStatus: ComposeRowStatus | null = null;
+
+  /** Tell the owner when — and only when — this row's answer changes. */
+  #notifyStatus() {
+    const status = this.getStatus();
+    if (
+      this.#lastStatus?.hasContent === status.hasContent &&
+      this.#lastStatus?.publishable === status.publishable
+    ) {
+      return;
+    }
+    this.#lastStatus = status;
+    this.dispatchEvent(
+      new CustomEvent<ComposeRowStatus>("jant:compose-status", {
+        bubbles: true,
+        detail: status,
+      }),
+    );
+  }
+
+  /**
+   * Set the title toggle's default and apply it now.
+   *
+   * `titleByDefault` alone only takes effect on the first update or on
+   * `reset()`, and an owner that resets before Lit re-renders would seed from
+   * the previous session's value. An owner that knows the default up front
+   * calls this instead.
+   *
+   * @param show - Whether a note's title field starts visible
+   * @example
+   * editor.setTitleDefault(false); // next new note opens without a title field
+   */
+  setTitleDefault(show: boolean) {
+    this.titleByDefault = show;
+    this._showTitle = show;
+  }
+
   reset() {
     this.#clearPendingInlineImageUploads();
     this._title = "";
+    this._showTitle = this.titleByDefault;
     this._bodyJson = null;
     this._editor?.commands.clearContent();
     this._lastEditorSelection = null;
@@ -788,7 +900,6 @@ export class JantComposeEditor extends LitElement {
     this._quoteText = "";
     this._quoteAuthor = "";
     this._rating = 0;
-    this._showTitle = false;
     this._showRating = false;
     this._attachedTexts = [];
     // Revoke preview URLs before clearing
@@ -811,9 +922,12 @@ export class JantComposeEditor extends LitElement {
     status: ComposeAttachment["status"],
     mediaId: string | null,
     error: string | null,
+    remoteUrl?: string | null,
   ) {
     this._attachments = this._attachments.map((a) =>
-      a.clientId === clientId ? { ...a, status, mediaId, error } : a,
+      a.clientId === clientId
+        ? { ...a, status, mediaId, error, remoteUrl: remoteUrl ?? a.remoteUrl }
+        : a,
     );
   }
 
@@ -911,20 +1025,6 @@ export class JantComposeEditor extends LitElement {
     return this._title.trim() ? null : this.labels.linkTitleRequired;
   }
 
-  private _getInlineUrlValidationMessage(): string | null {
-    if (this.format === "link" && !this._url.trim()) {
-      return null;
-    }
-    return this.getUrlValidationMessage();
-  }
-
-  private _getInlineLinkTitleValidationMessage(): string | null {
-    if (this.format !== "link" || !this._title.trim()) {
-      return null;
-    }
-    return this.getLinkTitleValidationMessage();
-  }
-
   revealUrlValidation(): string | null {
     this._showUrlValidation = true;
     return this.getUrlValidationMessage();
@@ -978,7 +1078,6 @@ export class JantComposeEditor extends LitElement {
       toolbarMode: "compose",
       onUpdate: (json) => {
         this._bodyJson = json;
-        this._ensureScrollBuffer();
         this.promoteLeadingH1Title();
         hideSlashCommandHint(this);
       },
@@ -1009,36 +1108,6 @@ export class JantComposeEditor extends LitElement {
       tableControlLabels: this.labels.tableControls,
     });
     this._lastEditorSelection = this._readEditorSelection();
-
-    // Lock editor min-height once so new lines fill existing space
-    // instead of growing the dialog line-by-line.
-    // Skip in page mode where the editor grows freely with the page.
-    this._scrollBufferApplied = false;
-    const dom = this._editor.view.dom as HTMLElement;
-    const isPageMode = !!this.closest(".compose-page-shell");
-    if (!isPageMode) {
-      const last = dom.lastElementChild as HTMLElement | null;
-      const contentH = last ? last.offsetTop + last.offsetHeight : 0;
-      const buffer = this.format !== "note" ? 60 : 120;
-      dom.style.minHeight = `${contentH + buffer}px`;
-    }
-  }
-
-  /**
-   * One-time: adds bottom padding for scroll buffer once the
-   * compose-body starts scrolling. Since the dialog is already at
-   * max-height by that point, the extra padding doesn't grow it.
-   */
-  private _ensureScrollBuffer() {
-    if (this._scrollBufferApplied) return;
-    const dom = this._editor?.view?.dom as HTMLElement | undefined;
-    if (!dom) return;
-    const body = this.querySelector(".compose-body") as HTMLElement | null;
-    if (!body) return;
-    if (body.scrollHeight > body.clientHeight + 20) {
-      dom.style.paddingBottom = "40px";
-      this._scrollBufferApplied = true;
-    }
   }
 
   private _destroyEditor() {
@@ -1060,6 +1129,17 @@ export class JantComposeEditor extends LitElement {
     "_attachedTexts",
     "_attachmentOrder",
   ]);
+
+  protected willUpdate(changed: Map<string, unknown>) {
+    super.willUpdate(changed);
+
+    // `titleByDefault` is an owner-supplied prop, so it is only known once the
+    // first update runs. Seed the toggle from it there and leave it alone after
+    // that — from then on the value belongs to the user (and to `reset()`).
+    if (!this.hasUpdated) {
+      this._showTitle = this.titleByDefault;
+    }
+  }
 
   protected updated(changed: Map<string, unknown>) {
     super.updated(changed);
@@ -1097,6 +1177,11 @@ export class JantComposeEditor extends LitElement {
         this.#sortable = null;
       }
     }
+
+    // Every field that can change this row's answer is reactive, so `updated()`
+    // is where the owner hears about it — including the ones a user edit never
+    // touches, like an upload finishing.
+    this.#notifyStatus();
 
     // Notify parent dialog of content changes for draft auto-save. A format
     // conversion writes content fields too, but it's not a user edit, so skip
@@ -1171,6 +1256,8 @@ export class JantComposeEditor extends LitElement {
     showRating?: boolean;
     media?: Array<{
       id: string;
+      /** Preserved so a restored draft's attachmentOrder still maps by clientId */
+      clientId?: string;
       previewUrl: string;
       posterUrl?: string | null;
       alt?: string;
@@ -1196,6 +1283,8 @@ export class JantComposeEditor extends LitElement {
       this._rating = data.rating;
       this._showRating = true;
     }
+    // A post that already has a title shows the field whatever the default is —
+    // otherwise editing a titled reply would silently drop its title.
     if (data.showTitle !== undefined) this._showTitle = data.showTitle;
     else if (data.title && data.format === "note") this._showTitle = true;
     if (data.showRating !== undefined) this._showRating = data.showRating;
@@ -1217,13 +1306,14 @@ export class JantComposeEditor extends LitElement {
     // Convert media attachments to ComposeAttachment[] with status "done"
     if (data.media?.length) {
       const attachments = data.media.map((m) => ({
-        clientId: randomUUID(),
+        clientId: m.clientId ?? randomUUID(),
         file: new File([], m.originalName ?? "existing", { type: m.mimeType }),
         previewUrl: m.previewUrl,
         posterUrl: m.posterUrl ?? null,
         status: "done" as const,
         progress: null,
         mediaId: m.id,
+        remoteUrl: m.previewUrl,
         alt: m.alt ?? "",
         error: null,
         summary: m.summary ?? null,
@@ -1281,6 +1371,7 @@ export class JantComposeEditor extends LitElement {
 
     this._showUrlValidation = false;
     this._showLinkTitleValidation = false;
+    this.#notifyStatus();
   }
 
   /** Updates editor content and title from fullscreen close */
@@ -1304,6 +1395,10 @@ export class JantComposeEditor extends LitElement {
       );
     }
     this._lastEditorSelection = selection ?? this._readEditorSelection();
+    // Content handed in from outside has to be visible to the owner in the same
+    // tick: fullscreen's ⌘↵ hands the text back and publishes on the next line,
+    // with no render in between to carry the news.
+    this.#notifyStatus();
   }
 
   private static SUMMARY_LENGTH = 100;
@@ -1528,6 +1623,25 @@ export class JantComposeEditor extends LitElement {
     el.style.height = `${el.scrollHeight}px`;
   }
 
+  /**
+   * Puts the caret in the body when the click landed on blank section instead
+   * of on the editor. The surfaces that reserve height — the `/new` page, the
+   * dialog on a phone — leave a stretch of empty paper under a two-line
+   * editor, and it should behave like paper: click it, write there. Only the
+   * layout wrappers forward; a click that reached a real control belongs to
+   * that control.
+   */
+  private _focusBodyFromBlankSpace = (e: MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    const forwards =
+      target.classList.contains("compose-body") ||
+      target.classList.contains("compose-field-enter") ||
+      target.classList.contains("compose-tiptap-wrap");
+    if (!forwards) return;
+    this._editor?.commands.focus("end");
+  };
+
   private _setRating(star: number) {
     this._rating = this._rating === star ? 0 : star;
   }
@@ -1588,6 +1702,7 @@ export class JantComposeEditor extends LitElement {
         status: "pending",
         progress: null,
         mediaId: null,
+        remoteUrl: null,
         alt: "",
         error: null,
         summary: null,
@@ -1978,28 +2093,15 @@ export class JantComposeEditor extends LitElement {
     return html`
       <div class="compose-field-enter">
         ${this._showTitle
-          ? html`
-              <div class="compose-note-title-row">
-                <input
-                  type="text"
-                  .value=${this._title}
-                  @input=${(e: Event) => this._onInput("_title", e)}
-                  @focus=${(e: Event) => this._onFieldFocus(e)}
-                  @keydown=${this._handleTitleKeydown}
-                  class="compose-input compose-note-title"
-                  placeholder=${this.labels.titlePlaceholder}
-                />
-                <button
-                  type="button"
-                  class="compose-note-title-dismiss"
-                  @click=${() => {
-                    this._showTitle = false;
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-            `
+          ? html`<input
+              type="text"
+              .value=${this._title}
+              @input=${(e: Event) => this._onInput("_title", e)}
+              @focus=${(e: Event) => this._onFieldFocus(e)}
+              @keydown=${this._handleTitleKeydown}
+              class="compose-input compose-note-title"
+              placeholder=${this.labels.titlePlaceholder}
+            />`
           : nothing}
         <div class="compose-tiptap-wrap">
           <div class="compose-tiptap-body"></div>
@@ -2013,10 +2115,10 @@ export class JantComposeEditor extends LitElement {
 
   private _renderLinkFields() {
     const urlError = this._showUrlValidation
-      ? this._getInlineUrlValidationMessage()
+      ? this.getUrlValidationMessage()
       : null;
     const titleError = this._showLinkTitleValidation
-      ? this._getInlineLinkTitleValidationMessage()
+      ? this.getLinkTitleValidationMessage()
       : null;
 
     return html`
@@ -2034,7 +2136,10 @@ export class JantComposeEditor extends LitElement {
             @input=${(e: Event) => this._onInput("_url", e)}
             @focus=${(e: Event) => this._onFieldFocus(e)}
             @blur=${() => {
-              this._showUrlValidation = true;
+              // Leaving a field empty is not yet a mistake — it becomes one at
+              // submit, where revealUrlValidation() opens this gate anyway.
+              // Blur only speaks up about something already typed and wrong.
+              if (this._url.trim()) this._showUrlValidation = true;
             }}
             class="compose-input compose-url-input"
             placeholder=${this.labels.urlPlaceholder}
@@ -2060,7 +2165,8 @@ export class JantComposeEditor extends LitElement {
           @focus=${(e: Event) => this._onFieldFocus(e)}
           @keydown=${this._handleTitleKeydown}
           @blur=${() => {
-            this._showLinkTitleValidation = true;
+            // Same gate as the URL above: quiet while empty, loud on submit.
+            if (this._title.trim()) this._showLinkTitleValidation = true;
           }}
           class="compose-input compose-link-title"
           placeholder=${this.labels.linkTitlePlaceholder}
@@ -2076,9 +2182,7 @@ export class JantComposeEditor extends LitElement {
           : nothing}
         <div class="compose-divider"></div>
         <div class="compose-tiptap-wrap">
-          <div
-            class="compose-tiptap-body compose-tiptap-thoughts compose-tiptap-link"
-          ></div>
+          <div class="compose-tiptap-body compose-tiptap-link"></div>
           <span class="compose-slash-discovery-hint" aria-hidden="true">
             ${this.labels.slashHint}
           </span>
@@ -2102,7 +2206,7 @@ export class JantComposeEditor extends LitElement {
             @focus=${(e: Event) => this._onFieldFocus(e)}
             class="compose-input compose-quote-text"
             placeholder=${this.labels.quotePlaceholder}
-            rows="5"
+            rows="4"
           ></textarea>
         </div>
         <div class="compose-quote-author-row">
@@ -2147,9 +2251,7 @@ export class JantComposeEditor extends LitElement {
           aria-hidden="true"
         ></div>
         <div class="compose-tiptap-wrap">
-          <div
-            class="compose-tiptap-body compose-tiptap-thoughts compose-tiptap-thoughts-quote"
-          ></div>
+          <div class="compose-tiptap-body"></div>
           <span class="compose-slash-discovery-hint" aria-hidden="true">
             ${this.labels.slashHint}
           </span>
@@ -2605,12 +2707,13 @@ export class JantComposeEditor extends LitElement {
             "compose-tool-btn-active": this._showEmojiPicker,
           })}
           title=${this.labels.emoji}
+          aria-pressed=${this._showEmojiPicker ? "true" : "false"}
           @click=${() => this._toggleEmojiPicker()}
         >
           ${renderComposeToolbarIcon(COMPOSE_TOOLBAR_ICONS.emoji)}
         </button>
 
-        <div class="compose-tool-sep"></div>
+        <div class="compose-tool-gap"></div>
 
         <button
           type="button"
@@ -2619,6 +2722,7 @@ export class JantComposeEditor extends LitElement {
             "compose-tool-btn-active": this._showRating,
           })}
           title=${this.labels.rate}
+          aria-pressed=${this._showRating ? "true" : "false"}
           @click=${() => {
             const willShow = !this._showRating;
             this._showRating = willShow;
@@ -2643,9 +2747,20 @@ export class JantComposeEditor extends LitElement {
                   "compose-tool-btn-active": this._showTitle,
                 })}
                 title=${this.labels.title}
+                aria-pressed=${this._showTitle ? "true" : "false"}
                 @click=${() => {
                   const willShow = !this._showTitle;
                   this._showTitle = willShow;
+                  // Only this deliberate click is worth remembering. The other
+                  // writers of `_showTitle` — H1 promotion, format conversion,
+                  // fullscreen reveal — are the program acting on one post, not
+                  // the author stating a habit, so they stay silent.
+                  this.dispatchEvent(
+                    new CustomEvent("jant:title-toggle", {
+                      bubbles: true,
+                      detail: { showTitle: willShow },
+                    }),
+                  );
                   if (willShow) {
                     this.updateComplete.then(() => {
                       this.querySelector<HTMLInputElement>(
@@ -2689,14 +2804,10 @@ export class JantComposeEditor extends LitElement {
 
     return html`
       <div class="compose-thread-post-header">
-        <div class="compose-segmented compose-thread-segmented">
-          <div
-            class=${classMap({
-              "compose-format-pill": true,
-              "compose-format-pill-link": this.format === "link",
-              "compose-format-pill-quote": this.format === "quote",
-            })}
-          ></div>
+        <div class="compose-segmented">
+          <!-- No sliding indicator: the items size to their labels now, so a
+               thirds-based pill would not line up. The active item carries its
+               own background instead. -->
           ${formats.map(
             (f) => html`
               <button
@@ -2721,6 +2832,17 @@ export class JantComposeEditor extends LitElement {
             `,
           )}
         </div>
+        ${this.positionLabel
+          ? html`<span class="compose-post-position"
+              >${this.positionLabel}</span
+            >`
+          : nothing}
+        ${this.badgeLabel
+          ? html`<span class="compose-post-position compose-post-badge"
+              >${this.badgeLabel}</span
+            >`
+          : nothing}
+        ${this.headerExtra ?? nothing}
         ${this.removable
           ? html`<button
               type="button"
@@ -2762,11 +2884,11 @@ export class JantComposeEditor extends LitElement {
   }
 
   render() {
+    // The format selector lives here in every mode — single post, reply, and
+    // thread item alike — so there is exactly one place it can be.
     return html`
-      ${this.threadItem || this.inlineFormat
-        ? this._renderFormatHeader()
-        : nothing}
-      <section class="compose-body">
+      ${this._renderFormatHeader()}
+      <section class="compose-body" @click=${this._focusBodyFromBlankSpace}>
         ${this.format === "note"
           ? this._renderNoteFields()
           : this.format === "link"

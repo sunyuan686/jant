@@ -16,10 +16,15 @@ import {
 } from "../db/index.js";
 import type { DatabaseDialect } from "../db/dialect.js";
 import {
+  buildRootActivityExpr,
+  rootActivityColumns,
+} from "../db/thread-activity.js";
+import { buildReaderVisibilityConditions } from "../db/post-visibility.js";
+import {
   sqliteSchemaBundle,
   type DatabaseSchema,
 } from "../db/schema-bundle.js";
-import { createEntityId } from "../lib/ids.js";
+import { createEntityId, isTypeId, ID_PREFIX } from "../lib/ids.js";
 import { now } from "../lib/time.js";
 import type {
   Collection,
@@ -30,6 +35,7 @@ import type {
   CollectionsDirectoryData,
   CreateCollection,
   CreateCollectionDirectoryEntry,
+  SmartCollectionDirectoryEntry,
   UpdateCollection,
   UpdateCollectionDirectoryEntry,
   CollectionSortOrder,
@@ -45,6 +51,13 @@ import {
   type PathService,
 } from "./path.js";
 import { getCollectionPagePath } from "../lib/collection-paths.js";
+import { getSlugValidationIssue } from "../lib/slug-format.js";
+import type { SmartCollectionService } from "./smart-collection.js";
+import {
+  DIRECTORY_POSITION_RETRY_ATTEMPTS as POSITION_RETRY_ATTEMPTS,
+  getAppendDirectoryPosition as appendDirectoryPosition,
+  getLastDirectoryPosition as lastDirectoryPosition,
+} from "./collection-directory-position.js";
 import {
   CreateCollectionDirectoryItemSchema,
   CollectionDirectoryLabelSchema,
@@ -55,8 +68,6 @@ import {
   CollectionTitleSchema,
   parseValidated,
 } from "../lib/schemas.js";
-
-const POSITION_RETRY_ATTEMPTS = 5;
 
 // Re-export shared constraint detection — see db/dialect.ts
 import { isUniqueConstraintError } from "../db/dialect.js";
@@ -87,6 +98,21 @@ function parseCollectionSelectionSlugs(
   return slugs.length > 0 ? slugs : null;
 }
 
+/**
+ * Who is looking at the collections directory.
+ *
+ * The directory lists every collection in every language view — that is site
+ * skeleton, and it does not depend on the reader. Its *numbers* do: they answer
+ * "how many threads will I see if I click this", so they carry the same
+ * visibility and language narrowing the collection page applies.
+ */
+export interface CollectionDirectoryViewer {
+  /** Signed-in authors see their private threads counted; readers do not. */
+  isAuthenticated: boolean;
+  /** Content language of the current view, when the site has more than one. */
+  lang?: string;
+}
+
 export interface CollectionService {
   getById(id: string): Promise<Collection | null>;
   getBySlug(slug: string): Promise<Collection | null>;
@@ -95,12 +121,25 @@ export interface CollectionService {
     slugExpression: string,
   ): Promise<ResolvedCollectionSelection | null>;
   list(): Promise<Collection[]>;
-  listDirectoryData(): Promise<CollectionsDirectoryData>;
+  listDirectoryData(
+    viewer: CollectionDirectoryViewer,
+  ): Promise<CollectionsDirectoryData>;
   /** List collections sorted by most recent Thread addition (for compose dialog) */
   listByRecentActivity(): Promise<Collection[]>;
   create(data: CreateCollection): Promise<Collection>;
   update(id: string, data: UpdateCollection): Promise<Collection | null>;
   delete(id: string): Promise<boolean>;
+  /**
+   * Whether a collection can take this address.
+   *
+   * A collection shares the root namespace with posts and smart collections,
+   * so the whole path registry answers this, not the collection table.
+   *
+   * @param slug - Address to test, already lowercased
+   * @param excludeId - Ignore the address this collection already holds
+   * @returns True when nothing else holds the address
+   */
+  checkSlugAvailability(slug: string, excludeId?: string): Promise<boolean>;
   /** List all collection directory items ordered by position */
   listDirectoryItems(): Promise<CollectionDirectoryEntry[]>;
   /** Create a collection directory item (collection, divider, or link) */
@@ -114,7 +153,14 @@ export interface CollectionService {
     id: string,
     data: UpdateCollectionDirectoryEntry,
   ): Promise<CollectionDirectoryEntry | null>;
-  /** Move a collection directory item between two neighbors */
+  /**
+   * Move a collection directory row between two neighbors.
+   *
+   * Each id is a directory row id, or — for a collection or smart collection
+   * the directory renders without one — that entry's own id. Naming one of
+   * those writes rows for everything unplaced, in the order the directory
+   * already shows, and then moves within them.
+   */
   moveDirectoryItem(
     id: string,
     after: string | null,
@@ -209,12 +255,22 @@ export function createCollectionService(
   paths: PathService | undefined,
   databaseSchema: DatabaseSchema = sqliteSchemaBundle,
   databaseDialect: DatabaseDialect = "sqlite",
+  /**
+   * Consulted before a collection is deleted, so a smart collection that
+   * filters by it is named rather than silently widened.
+   *
+   * Passed as a dependency rather than reached for, following the same shape
+   * `storage?: StorageDriver` uses for media cleanup — the route stays out of
+   * cross-service orchestration.
+   */
+  smartCollections?: SmartCollectionService,
 ): CollectionService {
   const resolvedPaths = paths ?? createPathService(db, siteId, databaseSchema);
   const {
     collections,
     pathRegistry,
     collectionDirectoryItems: directoryItemsTable,
+    smartCollections: smartCollectionsTable,
     threadCollections,
     posts,
     navItems,
@@ -283,6 +339,7 @@ export function createCollectionService(
       siteId: row.siteId,
       type: row.type as CollectionDirectoryEntryType,
       collectionId: row.collectionId,
+      smartCollectionId: row.smartCollectionId,
       label: row.label,
       url: row.url,
       description: row.description,
@@ -346,13 +403,7 @@ export function createCollectionService(
   }
 
   async function getLastDirectoryPosition(): Promise<string | null> {
-    const rows = await db
-      .select({ position: directoryItemsTable.position })
-      .from(directoryItemsTable)
-      .where(eq(directoryItemsTable.siteId, siteId))
-      .orderBy(sql`${directoryItemsTable.position} DESC`)
-      .limit(1);
-    return rows[0]?.position ?? null;
+    return lastDirectoryPosition(db, directoryItemsTable, siteId);
   }
 
   async function listOrderedDirectoryPositions(excludeId?: string) {
@@ -368,8 +419,7 @@ export function createCollectionService(
   }
 
   async function getAppendDirectoryPosition(): Promise<string> {
-    const lastPos = await getLastDirectoryPosition();
-    return generateKeyBetween(lastPos, null);
+    return appendDirectoryPosition(db, directoryItemsTable, siteId);
   }
 
   async function pathExists(path: string): Promise<boolean> {
@@ -421,6 +471,140 @@ export function createCollectionService(
     return generateKeyBetween(rows.at(-1)?.position ?? null, null);
   }
 
+  /**
+   * Write rows for the entries the directory only shows, in the order it shows
+   * them.
+   *
+   * A directory row is a position, not a membership: `buildDirectoryItems`
+   * appends every collection and smart collection that has none, so an unplaced
+   * entry is visible but has nothing to move and cannot be named as a
+   * neighbour. Materializing in exactly the render order is invisible — nothing
+   * on screen changes — and afterwards every row the author can see is a row
+   * the author can drag.
+   *
+   * @returns Directory row id, keyed by the collection or smart collection it places
+   */
+  async function materializeDirectoryRows(): Promise<Map<string, string>> {
+    const [directoryRows, collectionRows, smartCollectionRows] =
+      await Promise.all([
+        db
+          .select({
+            id: directoryItemsTable.id,
+            collectionId: directoryItemsTable.collectionId,
+            smartCollectionId: directoryItemsTable.smartCollectionId,
+            position: directoryItemsTable.position,
+          })
+          .from(directoryItemsTable)
+          .where(eq(directoryItemsTable.siteId, siteId))
+          .orderBy(asc(directoryItemsTable.position)),
+        db
+          .select({ id: collections.id })
+          .from(collections)
+          .where(eq(collections.siteId, siteId))
+          .orderBy(asc(collections.createdAt)),
+        db
+          .select({ id: smartCollectionsTable.id })
+          .from(smartCollectionsTable)
+          .where(eq(smartCollectionsTable.siteId, siteId))
+          .orderBy(asc(smartCollectionsTable.createdAt)),
+      ]);
+
+    const placed = new Map<string, string>();
+    let lastPosition: string | null = null;
+    for (const row of directoryRows) {
+      const entityId = row.collectionId ?? row.smartCollectionId;
+      if (entityId) placed.set(entityId, row.id);
+      lastPosition = row.position;
+    }
+
+    // Manual collections before smart ones, matching the two fallback loops in
+    // `buildDirectoryItems`. Read them in the other order and the first drag
+    // would reshuffle rows the author never touched.
+    const unplaced: { type: CollectionDirectoryEntryType; entityId: string }[] =
+      [
+        ...collectionRows
+          .filter((row) => !placed.has(row.id))
+          .map((row) => ({ type: "collection" as const, entityId: row.id })),
+        ...smartCollectionRows
+          .filter((row) => !placed.has(row.id))
+          .map((row) => ({
+            type: "smart_collection" as const,
+            entityId: row.id,
+          })),
+      ];
+
+    const timestamp = now();
+    for (const entry of unplaced) {
+      for (let attempt = 0; attempt < POSITION_RETRY_ATTEMPTS; attempt += 1) {
+        const id = createEntityId("collectionDirectoryItem");
+        const position = generateKeyBetween(lastPosition, null);
+        try {
+          await db.insert(directoryItemsTable).values({
+            id,
+            siteId,
+            type: entry.type,
+            collectionId: entry.type === "collection" ? entry.entityId : null,
+            smartCollectionId:
+              entry.type === "smart_collection" ? entry.entityId : null,
+            label: null,
+            url: null,
+            position,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          });
+          placed.set(entry.entityId, id);
+          lastPosition = position;
+          break;
+        } catch (err) {
+          if (
+            !isUniqueConstraintError(err) ||
+            attempt === POSITION_RETRY_ATTEMPTS - 1
+          ) {
+            throw err;
+          }
+          lastPosition = await getLastDirectoryPosition();
+        }
+      }
+    }
+
+    return placed;
+  }
+
+  /**
+   * Name the three rows a move talks about by their directory row id.
+   *
+   * The drag surface names an unplaced collection or smart collection by its
+   * own id, because that is all it has to render. Any such id here means the
+   * directory has to become explicit before a position can be computed.
+   *
+   * @returns Row ids, or `null` when the moved row no longer exists
+   */
+  async function resolveDirectoryMoveRows(
+    id: string,
+    afterId: string | null,
+    beforeId: string | null,
+  ): Promise<{
+    id: string;
+    after: string | null;
+    before: string | null;
+  } | null> {
+    const isRowId = (value: string | null) =>
+      value === null || isTypeId(value, ID_PREFIX.collectionDirectoryItem);
+
+    if (isRowId(id) && isRowId(afterId) && isRowId(beforeId)) {
+      return { id, after: afterId, before: beforeId };
+    }
+
+    const placed = await materializeDirectoryRows();
+    const toRowId = (value: string | null) =>
+      value === null || isRowId(value) ? value : (placed.get(value) ?? null);
+
+    const rowId = toRowId(id);
+    if (!rowId) return null;
+
+    return { id: rowId, after: toRowId(afterId), before: toRowId(beforeId) };
+  }
+
   async function hydrateCollection(
     row: typeof collections.$inferSelect | undefined,
   ): Promise<Collection | null> {
@@ -445,34 +629,38 @@ export function createCollectionService(
       .filter((row): row is Collection => row !== null);
   }
 
-  async function listDirectoryCollections(): Promise<
-    CollectionDirectoryCollection[]
-  > {
-    const threadActivityAt = sql<number>`CASE
-      WHEN ${posts.updatedAt} > ${posts.createdAt}
-        AND ${posts.updatedAt} > COALESCE(${posts.lastActivityAt}, -1)
-      THEN ${posts.updatedAt}
-      ELSE COALESCE(
-        ${posts.lastActivityAt},
+  async function listDirectoryCollections(
+    viewer: CollectionDirectoryViewer,
+  ): Promise<CollectionDirectoryCollection[]> {
+    // Joined on thread_id rather than id, so a Thread counts once no matter
+    // which of its posts matched — the same shape
+    // `posts.countCollectionThreadRootsForCollections` uses for the collection
+    // page. The two numbers are shown one click apart and have to agree.
+    const readerConditions = buildReaderVisibilityConditions(posts, siteId, {
+      status: "published",
+      excludePrivate: !viewer.isAuthenticated,
+      lang: viewer.lang,
+    });
+
+    const threadCount =
+      sql<number>`CAST(COUNT(DISTINCT ${posts.threadId}) AS INTEGER)`.as(
+        "thread_count",
+      );
+    // Rows here are Thread *members*, so the root's activity is reached
+    // through a correlated subquery; the outer MAX only collapses the group.
+    // A member whose root row is missing falls back to its own timestamps.
+    const recentActivityAt = sql<number | null>`MAX(
+      COALESCE(
+        (
+          SELECT ${buildRootActivityExpr(rootActivityColumns("root"))}
+          FROM post AS root
+          WHERE root.site_id = ${siteId}
+            AND root.id = ${posts.threadId}
+        ),
         ${posts.publishedAt},
         ${posts.updatedAt}
       )
-    END`;
-    const threadCount = sql<number>`
-      CAST(COUNT(
-        CASE
-          WHEN ${posts.id} IS NOT NULL THEN 1
-        END
-      ) AS INTEGER)
-    `.as("thread_count");
-    const recentActivityAt = sql<number | null>`
-      MAX(
-        CASE
-          WHEN ${posts.id} IS NOT NULL
-          THEN ${threadActivityAt}
-        END
-      )
-    `.as("recent_activity_at");
+    )`.as("recent_activity_at");
 
     const rows = await db
       .select({
@@ -488,11 +676,15 @@ export function createCollectionService(
           eq(collections.id, threadCollections.collectionId),
         ),
       )
+      // The reader's conditions belong in ON, not WHERE: a collection this
+      // reader can see nothing in stays listed and reads `0 threads`, which is
+      // what the directory promises — every collection in every view.
       .leftJoin(
         posts,
         and(
           eq(posts.siteId, threadCollections.siteId),
-          eq(threadCollections.threadId, posts.id),
+          eq(posts.threadId, threadCollections.threadId),
+          ...readerConditions,
         ),
       )
       .where(eq(collections.siteId, siteId))
@@ -519,14 +711,33 @@ export function createCollectionService(
       .filter((row): row is CollectionDirectoryCollection => row !== null);
   }
 
+  /**
+   * Order the directory: explicitly placed rows first, then everything else.
+   *
+   * A directory row is a *position*, not a membership. Both kinds of collection
+   * appear whether or not one exists — anything unplaced is appended here — so
+   * there is no such thing as a collection missing from `/collections`, and no
+   * "add to directory" picker to build. The rows exist only so a collection can
+   * be interleaved with dividers and links and dragged around.
+   *
+   * Creating either kind writes its row, so the appended tail is for rows from
+   * before that was true and for imports. An entry in it is rendered under its
+   * own id, because there is no row id to render; moving one places it first —
+   * see `materializeDirectoryRows`.
+   */
   function buildDirectoryItems(
     directoryCollections: CollectionDirectoryCollection[],
+    directorySmartCollections: SmartCollectionDirectoryEntry[],
     orderedDirectoryItems: CollectionDirectoryEntry[],
   ): CollectionDirectoryItem[] {
     const collectionMap = new Map(
       directoryCollections.map((collection) => [collection.id, collection]),
     );
+    const smartCollectionMap = new Map(
+      directorySmartCollections.map((entry) => [entry.id, entry]),
+    );
     const seenCollections = new Set<string>();
+    const seenSmartCollections = new Set<string>();
     const items: CollectionDirectoryItem[] = [];
 
     for (const item of orderedDirectoryItems) {
@@ -551,6 +762,21 @@ export function createCollectionService(
         continue;
       }
 
+      if (item.type === "smart_collection") {
+        const smartCollection = item.smartCollectionId
+          ? smartCollectionMap.get(item.smartCollectionId)
+          : undefined;
+        if (!smartCollection) continue;
+
+        seenSmartCollections.add(smartCollection.id);
+        items.push({
+          id: item.id,
+          type: "smart_collection",
+          smartCollection,
+        });
+        continue;
+      }
+
       const collection = item.collectionId
         ? collectionMap.get(item.collectionId)
         : undefined;
@@ -570,6 +796,15 @@ export function createCollectionService(
         id: collection.id,
         type: "collection",
         collection,
+      });
+    }
+
+    for (const smartCollection of directorySmartCollections) {
+      if (seenSmartCollections.has(smartCollection.id)) continue;
+      items.push({
+        id: smartCollection.id,
+        type: "smart_collection",
+        smartCollection,
       });
     }
 
@@ -628,15 +863,31 @@ export function createCollectionService(
       return hydrateCollections(rows);
     },
 
-    async listDirectoryData() {
-      const [directoryCollections, orderedDirectoryItems] = await Promise.all([
-        listDirectoryCollections(),
+    async listDirectoryData(viewer) {
+      const [
+        directoryCollections,
+        directorySmartCollections,
+        orderedDirectoryItems,
+      ] = await Promise.all([
+        listDirectoryCollections(viewer),
+        // One pass for every smart collection, not one query each — see
+        // `posts.aggregateMany`. Both kinds of row are measured through the
+        // same reader predicate, so a signed-out visitor sees a directory
+        // whose counts and dates agree with the pages behind them.
+        smartCollections
+          ? smartCollections.listDirectoryEntries(viewer)
+          : Promise.resolve([] as SmartCollectionDirectoryEntry[]),
         this.listDirectoryItems(),
       ]);
 
       return {
         collections: directoryCollections,
-        items: buildDirectoryItems(directoryCollections, orderedDirectoryItems),
+        smartCollections: directorySmartCollections,
+        items: buildDirectoryItems(
+          directoryCollections,
+          directorySmartCollections,
+          orderedDirectoryItems,
+        ),
         directoryItems: orderedDirectoryItems,
       };
     },
@@ -841,6 +1092,13 @@ export function createCollectionService(
     },
 
     async delete(id) {
+      // Refused, not repaired: clearing the condition would quietly widen a
+      // smart collection the author never edited. This is the only place that
+      // refusal lives — `smart_collection.collection_id` carries no foreign key,
+      // precisely so the answer can name the smart collections in the way
+      // instead of failing a constraint.
+      await smartCollections?.assertCollectionUnused(id);
+
       await db
         .delete(threadCollections)
         .where(
@@ -865,6 +1123,24 @@ export function createCollectionService(
         .where(and(eq(collections.siteId, siteId), eq(collections.id, id)))
         .returning();
       return result.length > 0;
+    },
+
+    async checkSlugAvailability(slug, excludeId) {
+      const issue = getSlugValidationIssue(slug);
+      if (issue === "invalid") {
+        throw new ValidationError("Slug contains invalid characters");
+      }
+      if (issue === "reserved") {
+        throw new ValidationError("Slug is reserved");
+      }
+
+      const resolved = await resolvedPaths.resolve(toCollectionPath(slug));
+      if (!resolved) return true;
+      return Boolean(
+        excludeId &&
+        resolved.kind === "slug" &&
+        resolved.collectionId === excludeId,
+      );
     },
 
     async listDirectoryItems() {
@@ -1026,13 +1302,16 @@ export function createCollectionService(
     },
 
     async moveDirectoryItem(id, afterId, beforeId) {
+      const rows = await resolveDirectoryMoveRows(id, afterId, beforeId);
+      if (!rows) return null;
+
       const items = await db
         .select()
         .from(directoryItemsTable)
         .where(
           and(
             eq(directoryItemsTable.siteId, siteId),
-            eq(directoryItemsTable.id, id),
+            eq(directoryItemsTable.id, rows.id),
           ),
         )
         .limit(1);
@@ -1044,13 +1323,17 @@ export function createCollectionService(
           const result = await db
             .update(directoryItemsTable)
             .set({
-              position: await getDirectoryMovePosition(id, afterId, beforeId),
+              position: await getDirectoryMovePosition(
+                rows.id,
+                rows.after,
+                rows.before,
+              ),
               updatedAt: timestamp,
             })
             .where(
               and(
                 eq(directoryItemsTable.siteId, siteId),
-                eq(directoryItemsTable.id, id),
+                eq(directoryItemsTable.id, rows.id),
               ),
             )
             .returning();

@@ -2,21 +2,32 @@ import { msg } from "@lingui/core/macro";
 import type { FC } from "hono/jsx";
 import { useLingui } from "../../i18n/context.js";
 import type { CollectionDirectoryItem } from "../../types.js";
-import {
-  getCollectionsDirectoryPath,
-  getNewCollectionPath,
-} from "../../lib/collection-paths.js";
-import { toPublicPath } from "../../lib/url.js";
 import { CollectionDirectory } from "./CollectionDirectory.js";
-import { getCollectionMutationLabels } from "./collection-management-labels.js";
+import {
+  getCollectionDialogLabels,
+  getCollectionMutationLabels,
+} from "./collection-management-labels.js";
+import {
+  getSmartCollectionDialogLabels,
+  getSmartCollectionLabels,
+} from "./smart-collection-labels.js";
+import { getIconSvg } from "../../lib/icons.js";
 
 const escapeJson = (data: unknown) =>
   JSON.stringify(data).replace(/</g, "\\u003c");
 
 export interface CollectionsManagerProps {
   items: CollectionDirectoryItem[];
+  /** Collections and smart collections already in the site navigation. */
   navigationCollectionIds?: string[];
   sitePathPrefix?: string;
+  /**
+   * Site path prefix plus the language prefix of the view being rendered.
+   * Collection pages exist once per language, so a reader on `/en/collections`
+   * must land on `/en/{slug}` rather than being dropped into the primary view.
+   * Required for the same reason as on {@link CollectionDirectoryProps}.
+   */
+  basePath: string;
   siteOrigin?: string;
 }
 
@@ -24,24 +35,29 @@ export const CollectionsManager: FC<CollectionsManagerProps> = ({
   items,
   navigationCollectionIds = [],
   sitePathPrefix = "",
+  basePath,
   siteOrigin = "",
 }) => {
   const { i18n } = useLingui();
-  const collectionsHref = toPublicPath(
-    getCollectionsDirectoryPath(),
-    sitePathPrefix,
-  );
-  const newCollectionHref = toPublicPath(
-    `${getNewCollectionPath()}?returnTo=${encodeURIComponent(collectionsHref)}`,
-    sitePathPrefix,
-  );
   const mutationLabels = getCollectionMutationLabels(i18n);
 
+  const smartLabels = getSmartCollectionLabels(i18n);
   const labels = {
     collectionsTitle: i18n._(
       msg({
         message: "Collections",
         comment: "@context: Collections page heading",
+      }),
+    ),
+    smartCollectionNoun: smartLabels.noun,
+    newSmartCollection: smartLabels.newSmartCollection,
+    editSmartCollection: smartLabels.editSmartCollection,
+    deleteSmartCollection: smartLabels.deleteSmartCollection,
+    confirmDeleteSmartCollection: smartLabels.confirmDelete,
+    smartCollectionDeleted: i18n._(
+      msg({
+        message: "Smart collection deleted.",
+        comment: "@context: Confirmation after deleting a smart collection",
       }),
     ),
     organize: i18n._(
@@ -169,11 +185,12 @@ export const CollectionsManager: FC<CollectionsManagerProps> = ({
                 class="collections-page-action-group"
                 data-collections-toolbar
               >
-                <a
-                  href={newCollectionHref}
+                <button
+                  type="button"
                   class="collections-page-toolbar-button"
                   aria-label={labels.newCollection}
                   title={labels.newCollection}
+                  data-collections-action="collection"
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -190,7 +207,7 @@ export const CollectionsManager: FC<CollectionsManagerProps> = ({
                     <path d="M12 5v14" />
                     <path d="M5 12h14" />
                   </svg>
-                </a>
+                </button>
                 <div class="relative">
                   <button
                     type="button"
@@ -248,6 +265,29 @@ export const CollectionsManager: FC<CollectionsManagerProps> = ({
                       </span>
                       <span class="collections-page-menu-item-label">
                         {labels.organize}
+                      </span>
+                    </button>
+                    {/* Beside Add link and Add divider, not a second `+`:
+                        the `+` is where a collection is created, and two plus
+                        signs would immediately raise "which plus". */}
+                    <button
+                      type="button"
+                      class="collections-page-menu-item"
+                      data-collections-action="smart-collection"
+                    >
+                      {/* Full stroke, unlike the funnel that marks a smart
+                          collection beside its title: here it sits among
+                          menu icons drawn at the same weight, and `icon-fine`
+                          would single it out as the lighter one. */}
+                      <span
+                        class="collections-page-menu-item-icon"
+                        aria-hidden="true"
+                        dangerouslySetInnerHTML={{
+                          __html: getIconSvg("funnel") ?? "",
+                        }}
+                      />
+                      <span class="collections-page-menu-item-label">
+                        {smartLabels.newSmartCollection}
                       </span>
                     </button>
                     <button
@@ -318,6 +358,18 @@ export const CollectionsManager: FC<CollectionsManagerProps> = ({
         </div>
       </header>
 
+      {/* The dialog is a Lit component and cannot reach the i18n catalogs, so
+          the page that can open it carries its strings. */}
+      <div
+        hidden
+        data-collection-dialog-labels={escapeJson(
+          getCollectionDialogLabels(i18n),
+        )}
+        data-smart-collection-dialog-labels={escapeJson(
+          getSmartCollectionDialogLabels(i18n),
+        )}
+      />
+
       <jant-collections-manager
         items={escapeJson(items)}
         labels={escapeJson(labels)}
@@ -327,6 +379,7 @@ export const CollectionsManager: FC<CollectionsManagerProps> = ({
           items={items}
           emptyMessage={labels.emptyState}
           sitePathPrefix={sitePathPrefix}
+          basePath={basePath}
           siteOrigin={siteOrigin}
         />
       </jant-collections-manager>

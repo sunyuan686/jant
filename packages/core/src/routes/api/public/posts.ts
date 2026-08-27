@@ -5,6 +5,7 @@ import type { AppVariables } from "../../../types/app-context.js";
 import { getCollectionPagePath } from "../../../lib/collection-paths.js";
 import {
   CollectionSortOrderSchema,
+  ContentLanguageSchema,
   FormatSchema,
   parseValidated,
 } from "../../../lib/schemas.js";
@@ -31,6 +32,11 @@ publicPostsApiRoutes.use("*", requirePublicApiEnabled());
 
 const ListPublicPostsQuerySchema = z.object({
   format: FormatSchema.optional(),
+  /**
+   * Restrict to one content language. Machine surfaces name the language
+   * explicitly; browsing surfaces express it as a URL prefix instead.
+   */
+  lang: ContentLanguageSchema.optional(),
   collection: z.string().optional(),
   sort: CollectionSortOrderSchema.optional(),
   cursor: z.string().optional(),
@@ -61,10 +67,25 @@ export type PublicPostBaseResponse = {
   previewImageUrl: string | null;
   replyToId: string | null;
   threadId: string;
+  /**
+   * BCP 47 content language, or null on a post written before the site
+   * enabled multilingual content.
+   */
+  language: string | null;
+  /**
+   * Shared by every translation of this Thread. Null when the Thread has no
+   * translations.
+   */
+  translationGroupId: string | null;
+  /** Reply published without announcing its Thread. Always false on roots. */
+  quietReply: boolean;
   pinnedAt: number | null;
   featuredAt: number | null;
   publishedAt: number | null;
+  /** Root only: newest post in the Thread, quiet replies excluded. */
   lastActivityAt: number;
+  /** Root only: newest post in the Thread, quiet replies included. */
+  threadUpdatedAt: number;
   createdAt: number;
   updatedAt: number;
   attachments: ReturnType<typeof toApiAttachment>[];
@@ -146,10 +167,14 @@ export function toPublicPost(
     previewImageUrl,
     replyToId: post.replyToId,
     threadId: post.threadId,
+    language: post.language,
+    translationGroupId: post.translationGroupId,
+    quietReply: post.quietReply,
     pinnedAt: post.pinnedAt,
     featuredAt: post.featuredAt,
     publishedAt: post.publishedAt,
     lastActivityAt: post.lastActivityAt,
+    threadUpdatedAt: post.threadUpdatedAt,
     createdAt: post.createdAt,
     updatedAt: post.updatedAt,
     attachments: mediaList.map((media) =>
@@ -197,10 +222,8 @@ export function toPublicPost(
 }
 
 publicPostsApiRoutes.get("/", async (c) => {
-  const { format, collection, sort, cursor, limit, content } = parseValidated(
-    ListPublicPostsQuerySchema,
-    c.req.query(),
-  );
+  const { format, lang, collection, sort, cursor, limit, content } =
+    parseValidated(ListPublicPostsQuerySchema, c.req.query());
 
   // Resolve collection slug(s) — accepts comma-separated (e.g. "tech,art")
   // or "+" separated (e.g. "tech+art"), matching the page URL convention.
@@ -258,6 +281,7 @@ publicPostsApiRoutes.get("/", async (c) => {
           excludePrivate: true,
           excludeLatestHidden: true,
           rootFormat: format,
+          lang,
           sortOrder,
           cursor: cursor ?? undefined,
           limit,
@@ -265,6 +289,7 @@ publicPostsApiRoutes.get("/", async (c) => {
       )
     : await c.var.services.posts.list({
         format,
+        lang,
         status: "published",
         cursor: cursor ?? undefined,
         limit,

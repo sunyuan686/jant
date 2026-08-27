@@ -19,26 +19,37 @@ import {
   customType,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
-import { SYSTEM_NAV_KEY_VALUES } from "../../types/constants.js";
+import {
+  ARCHIVE_LAYOUTS,
+  COLLECTION_DIRECTORY_ENTRY_TYPES,
+  COLLECTION_SORT_ORDERS,
+  CONTENT_DISPOSITIONS,
+  EARLIEST_FILTERABLE_YEAR,
+  FORMATS,
+  GITHUB_APP_ACCOUNT_TYPES,
+  LATEST_FILTERABLE_YEAR,
+  NAV_ITEM_PLACEMENTS,
+  NAV_ITEM_TYPES,
+  PATH_KINDS,
+  PUBLIC_ARCHIVE_VISIBILITIES,
+  SITE_DOMAIN_KINDS,
+  SITE_MEMBER_ROLES,
+  SITE_STATUSES,
+  SMART_COLLECTION_SORT_ORDERS,
+  STATUSES,
+  SYSTEM_NAV_KEY_VALUES,
+  UPLOAD_SESSION_STATES,
+  VISIBILITIES,
+} from "../../types/constants.js";
 
-const SITE_STATUSES = ["active", "suspended"] as const;
-const SITE_DOMAIN_KINDS = ["primary", "alias"] as const;
-const SITE_MEMBER_ROLES = ["owner", "admin", "editor"] as const;
-const FORMATS = ["note", "link", "quote"] as const;
-const STATUSES = ["draft", "published"] as const;
-const VISIBILITIES = ["public", "latest_hidden", "private"] as const;
-const COLLECTION_SORT_ORDERS = ["newest", "oldest", "rating_desc"] as const;
-const NAV_ITEM_TYPES = ["link", "system", "collection", "page"] as const;
-const NAV_ITEM_PLACEMENTS = ["header", "more"] as const;
-const UPLOAD_SESSION_STATES = [
-  "pending",
-  "uploaded",
-  "completed",
-  "aborted",
-  "failed",
-] as const;
-const CONTENT_DISPOSITIONS = ["inline", "attachment"] as const;
-
+/**
+ * Render a value list as the `IN (...)` body of a CHECK constraint.
+ *
+ * Every list it is handed comes from `types/constants.ts`. Declaring one
+ * locally instead is how a CHECK once shipped missing an enum value: the
+ * shared list grew, the schema's private copy did not, and the generated
+ * constraint rejected rows the application treats as valid.
+ */
 function sqlTextEnum(values: readonly string[]) {
   return sql.raw(values.map((value) => `'${value}'`).join(", "));
 }
@@ -179,8 +190,43 @@ export const posts = pgTable(
     previewProvider: text("preview_provider"),
     replyToId: text("reply_to_id"),
     threadId: text("thread_id").notNull(),
+    /**
+     * BCP 47 content language in canonical form (`en`, `zh-Hans`).
+     *
+     * Uniform across a Thread: replies inherit the Root's value on creation and
+     * a language change rewrites every row in the Thread. Language filters can
+     * therefore be plain column predicates even on member-grained queries.
+     *
+     * NULL only exists before multilingual content is first enabled; enabling
+     * stamps every NULL row with the primary language.
+     */
+    language: text("language"),
+    /**
+     * Shared translation-group key (TypeID, `tgr_` prefix). Rows sharing a value
+     * are translations of one another — one row per language, no direction.
+     *
+     * Only ever set on Thread Roots (`thread_id = id`); enforced in the post
+     * service so both dialects share one rule (see the SQLite schema for why a
+     * table CHECK is not an option there).
+     */
+    translationGroupId: text("translation_group_id"),
+    /**
+     * The author added this reply without announcing it. Persisted so both
+     * activity timestamps below stay recomputable from the rows alone.
+     * Always false on Thread roots.
+     */
+    quietReply: boolean("quiet_reply").notNull().default(false),
     publishedAt: integer("published_at"),
+    /**
+     * Root only: newest published_at in the Thread, excluding quiet replies —
+     * "last announced". Drives Latest and the feeds.
+     */
     lastActivityAt: integer("last_activity_at"),
+    /**
+     * Root only: newest published_at in the Thread, quiet replies included —
+     * "last changed". Drives the archive's updated sort.
+     */
+    threadUpdatedAt: integer("thread_updated_at"),
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
   },
@@ -228,6 +274,9 @@ export const posts = pgTable(
     index("idx_post_site_root_published_activity")
       .on(table.siteId, table.lastActivityAt, table.id)
       .where(sql`${table.replyToId} IS NULL AND ${table.status} = 'published'`),
+    index("idx_post_site_root_thread_updated")
+      .on(table.siteId, table.threadUpdatedAt, table.id)
+      .where(sql`${table.replyToId} IS NULL AND ${table.status} = 'published'`),
     index("idx_post_site_root_draft_updated")
       .on(table.siteId, table.updatedAt, table.id)
       .where(sql`${table.replyToId} IS NULL AND ${table.status} = 'draft'`),
@@ -241,6 +290,12 @@ export const posts = pgTable(
       .where(
         sql`${table.status} = 'published' AND ${table.featuredAt} IS NOT NULL`,
       ),
+    // One Post per language inside a translation group. The `site_id` prefix
+    // matches the indexing convention here and lets the same index serve
+    // "list the members of this group" without a second index.
+    uniqueIndex("uq_post_site_translation_group_language")
+      .on(table.siteId, table.translationGroupId, table.language)
+      .where(sql`${table.translationGroupId} IS NOT NULL`),
     index("idx_post_search_document").using("gin", table.searchDocument),
     index("idx_post_search_text_trgm").using(
       "gin",
@@ -442,6 +497,82 @@ export const collections = pgTable(
 );
 
 // =============================================================================
+// Smart Collections
+// =============================================================================
+
+/**
+ * A collection whose members are decided by conditions rather than by tagging.
+ *
+ * See the SQLite schema for why this is its own table and what `NULL` means in
+ * a condition column. The two dialects must stay identical: Drizzle ignores a
+ * column it does not know about, so a field added on one side and forgotten on
+ * the other loses data silently.
+ */
+export const smartCollections = pgTable(
+  "smart_collection",
+  {
+    id: text("id").primaryKey(),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => sites.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description"),
+
+    // --- Conditions (see lib/filter-dimensions.ts) --------------------------
+    format: text("format", { enum: FORMATS }),
+    year: integer("year"),
+    // No foreign key, alone among this schema's id columns. See the SQLite
+    // schema for why the refusal is held in the service instead.
+    collectionId: text("collection_id"),
+    /** `any` | `none` | comma-joined MEDIA_KINDS. One folded vocabulary. */
+    media: text("media"),
+    hasTitle: boolean("has_title"),
+    hasReplies: boolean("has_replies"),
+    visibility: text("visibility", { enum: PUBLIC_ARCHIVE_VISIBILITIES }),
+
+    // --- Presentation (not conditions) --------------------------------------
+    sort: text("sort", { enum: SMART_COLLECTION_SORT_ORDERS })
+      .notNull()
+      .default("newest"),
+    /** NULL follows the site's `ARCHIVE_DEFAULT_LAYOUT`. */
+    layout: text("layout", { enum: ARCHIVE_LAYOUTS }),
+
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "chk_smart_collection_format",
+      sql`${table.format} IS NULL OR ${table.format} IN (${sqlTextEnum(FORMATS)})`,
+    ),
+    check(
+      "chk_smart_collection_visibility",
+      sql`${table.visibility} IS NULL OR ${table.visibility} IN (${sqlTextEnum(PUBLIC_ARCHIVE_VISIBILITIES)})`,
+    ),
+    check(
+      "chk_smart_collection_sort",
+      sql`${table.sort} IN (${sqlTextEnum(SMART_COLLECTION_SORT_ORDERS)})`,
+    ),
+    check(
+      "chk_smart_collection_layout",
+      sql`${table.layout} IS NULL OR ${table.layout} IN (${sqlTextEnum(ARCHIVE_LAYOUTS)})`,
+    ),
+    check(
+      "chk_smart_collection_year",
+      sql`${table.year} IS NULL OR ${table.year} BETWEEN ${sql.raw(String(EARLIEST_FILTERABLE_YEAR))} AND ${sql.raw(String(LATEST_FILTERABLE_YEAR))}`,
+    ),
+    index("idx_smart_collection_site_created_at").on(
+      table.siteId,
+      table.createdAt,
+    ),
+    index("idx_smart_collection_site_collection_id").on(
+      table.siteId,
+      table.collectionId,
+    ),
+  ],
+);
+
+// =============================================================================
 // Path Registry (slug + alias + redirect)
 // =============================================================================
 
@@ -462,6 +593,10 @@ export const pathRegistry = pgTable(
     collectionId: text("collection_id").references(() => collections.id, {
       onDelete: "cascade",
     }),
+    smartCollectionId: text("smart_collection_id").references(
+      () => smartCollections.id,
+      { onDelete: "cascade" },
+    ),
     redirectToPath: text("redirect_to_path"),
     redirectType: integer("redirect_type"),
     archiveQuery: text("archive_query"),
@@ -471,7 +606,7 @@ export const pathRegistry = pgTable(
   (table) => [
     check(
       "chk_path_registry_kind",
-      sql`${table.kind} IN ('slug', 'alias', 'redirect', 'archive')`,
+      sql`${table.kind} IN (${sqlTextEnum(PATH_KINDS)})`,
     ),
     uniqueIndex("uq_path_registry_site_path").on(table.siteId, table.path),
     uniqueIndex("uq_path_registry_site_post_slug")
@@ -480,18 +615,28 @@ export const pathRegistry = pgTable(
     uniqueIndex("uq_path_registry_site_collection_slug")
       .on(table.siteId, table.collectionId)
       .where(sql`${table.kind} = 'slug' AND ${table.collectionId} IS NOT NULL`),
+    uniqueIndex("uq_path_registry_site_smart_collection_slug")
+      .on(table.siteId, table.smartCollectionId)
+      .where(
+        sql`${table.kind} = 'slug' AND ${table.smartCollectionId} IS NOT NULL`,
+      ),
     index("idx_path_registry_site_post_id").on(table.siteId, table.postId),
     index("idx_path_registry_site_collection_id").on(
       table.siteId,
       table.collectionId,
+    ),
+    index("idx_path_registry_site_smart_collection_id").on(
+      table.siteId,
+      table.smartCollectionId,
     ),
     check(
       "chk_path_registry_shape",
       sql`(
         ${table.kind} IN ('slug', 'alias')
         AND (
-          (${table.postId} IS NOT NULL AND ${table.collectionId} IS NULL)
-          OR (${table.postId} IS NULL AND ${table.collectionId} IS NOT NULL)
+          (${table.postId} IS NOT NULL AND ${table.collectionId} IS NULL AND ${table.smartCollectionId} IS NULL)
+          OR (${table.postId} IS NULL AND ${table.collectionId} IS NOT NULL AND ${table.smartCollectionId} IS NULL)
+          OR (${table.postId} IS NULL AND ${table.collectionId} IS NULL AND ${table.smartCollectionId} IS NOT NULL)
         )
         AND ${table.redirectToPath} IS NULL
         AND ${table.redirectType} IS NULL
@@ -500,6 +645,7 @@ export const pathRegistry = pgTable(
         ${table.kind} = 'redirect'
         AND ${table.postId} IS NULL
         AND ${table.collectionId} IS NULL
+        AND ${table.smartCollectionId} IS NULL
         AND ${table.redirectToPath} IS NOT NULL
         AND ${table.redirectType} IN (301, 302)
         AND ${table.archiveQuery} IS NULL
@@ -507,6 +653,7 @@ export const pathRegistry = pgTable(
         ${table.kind} = 'archive'
         AND ${table.postId} IS NULL
         AND ${table.collectionId} IS NULL
+        AND ${table.smartCollectionId} IS NULL
         AND ${table.redirectToPath} IS NULL
         AND ${table.redirectType} IS NULL
         AND ${table.archiveQuery} IS NOT NULL
@@ -526,10 +673,16 @@ export const collectionDirectoryItems = pgTable(
     siteId: text("site_id")
       .notNull()
       .references(() => sites.id, { onDelete: "cascade" }),
-    type: text("type", { enum: ["collection", "divider", "link"] }).notNull(),
+    type: text("type", {
+      enum: COLLECTION_DIRECTORY_ENTRY_TYPES,
+    }).notNull(),
     collectionId: text("collection_id").references(() => collections.id, {
       onDelete: "cascade",
     }),
+    smartCollectionId: text("smart_collection_id").references(
+      () => smartCollections.id,
+      { onDelete: "cascade" },
+    ),
     label: text("label"),
     url: text("url"),
     description: text("description"),
@@ -540,11 +693,15 @@ export const collectionDirectoryItems = pgTable(
   (table) => [
     check(
       "chk_collection_directory_item_type",
-      sql`${table.type} IN ('collection', 'divider', 'link')`,
+      sql`${table.type} IN (${sqlTextEnum(COLLECTION_DIRECTORY_ENTRY_TYPES)})`,
     ),
     index("idx_collection_directory_item_site_collection_id").on(
       table.siteId,
       table.collectionId,
+    ),
+    index("idx_collection_directory_item_site_smart_collection_id").on(
+      table.siteId,
+      table.smartCollectionId,
     ),
     uniqueIndex("uq_collection_directory_item_site_position").on(
       table.siteId,
@@ -555,27 +712,41 @@ export const collectionDirectoryItems = pgTable(
       .where(
         sql`${table.type} = 'collection' AND ${table.collectionId} IS NOT NULL`,
       ),
+    uniqueIndex("uq_collection_directory_item_site_smart_collection_once")
+      .on(table.siteId, table.smartCollectionId)
+      .where(
+        sql`${table.type} = 'smart_collection' AND ${table.smartCollectionId} IS NOT NULL`,
+      ),
     check(
       "chk_collection_directory_item_shape",
       sql`(
         ${table.type} = 'collection'
         AND ${table.collectionId} IS NOT NULL
+        AND ${table.smartCollectionId} IS NULL
+        AND ${table.label} IS NULL
+        AND ${table.url} IS NULL
+      ) OR (
+        ${table.type} = 'smart_collection'
+        AND ${table.collectionId} IS NULL
+        AND ${table.smartCollectionId} IS NOT NULL
         AND ${table.label} IS NULL
         AND ${table.url} IS NULL
       ) OR (
         ${table.type} = 'divider'
         AND ${table.collectionId} IS NULL
+        AND ${table.smartCollectionId} IS NULL
         AND ${table.url} IS NULL
       ) OR (
         ${table.type} = 'link'
         AND ${table.collectionId} IS NULL
+        AND ${table.smartCollectionId} IS NULL
         AND ${table.label} IS NOT NULL
         AND ${table.url} IS NOT NULL
       )`,
     ),
     check(
       "chk_collection_directory_item_label",
-      sql`${table.type} <> 'collection' OR ${table.label} IS NULL`,
+      sql`${table.type} NOT IN ('collection', 'smart_collection') OR ${table.label} IS NULL`,
     ),
     check(
       "chk_collection_directory_item_description",
@@ -641,6 +812,10 @@ export const navItems = pgTable(
     collectionId: text("collection_id").references(() => collections.id, {
       onDelete: "cascade",
     }),
+    smartCollectionId: text("smart_collection_id").references(
+      () => smartCollections.id,
+      { onDelete: "cascade" },
+    ),
     postId: text("post_id").references(() => posts.id, {
       onDelete: "cascade",
     }),
@@ -670,21 +845,31 @@ export const navItems = pgTable(
         ${table.type} = 'link'
         AND ${table.systemKey} IS NULL
         AND ${table.collectionId} IS NULL
+        AND ${table.smartCollectionId} IS NULL
         AND ${table.postId} IS NULL
       ) OR (
         ${table.type} = 'system'
         AND ${table.systemKey} IS NOT NULL
         AND ${table.collectionId} IS NULL
+        AND ${table.smartCollectionId} IS NULL
         AND ${table.postId} IS NULL
       ) OR (
         ${table.type} = 'collection'
         AND ${table.systemKey} IS NULL
         AND ${table.collectionId} IS NOT NULL
+        AND ${table.smartCollectionId} IS NULL
+        AND ${table.postId} IS NULL
+      ) OR (
+        ${table.type} = 'smart_collection'
+        AND ${table.systemKey} IS NULL
+        AND ${table.collectionId} IS NULL
+        AND ${table.smartCollectionId} IS NOT NULL
         AND ${table.postId} IS NULL
       ) OR (
         ${table.type} = 'page'
         AND ${table.systemKey} IS NULL
         AND ${table.collectionId} IS NULL
+        AND ${table.smartCollectionId} IS NULL
         AND ${table.postId} IS NOT NULL
       )`,
     ),
@@ -695,6 +880,9 @@ export const navItems = pgTable(
     uniqueIndex("uq_nav_item_site_collection_id")
       .on(table.siteId, table.collectionId)
       .where(sql`${table.collectionId} IS NOT NULL`),
+    uniqueIndex("uq_nav_item_site_smart_collection_id")
+      .on(table.siteId, table.smartCollectionId)
+      .where(sql`${table.smartCollectionId} IS NOT NULL`),
     uniqueIndex("uq_nav_item_site_post_id")
       .on(table.siteId, table.postId)
       .where(sql`${table.postId} IS NOT NULL`),
@@ -841,8 +1029,6 @@ export const verification = pgTable("verification", {
 // ---------------------------------------------------------------------------
 // GitHub App Installations (junction table: installation ↔ site, many-to-many)
 // ---------------------------------------------------------------------------
-
-const GITHUB_APP_ACCOUNT_TYPES = ["User", "Organization"] as const;
 
 export const githubAppInstallation = pgTable(
   "github_app_installation",

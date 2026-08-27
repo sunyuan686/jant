@@ -10,11 +10,13 @@
 
 import { z } from "zod";
 import {
+  ARCHIVE_LAYOUTS,
   FORMATS,
   STATUSES,
   VISIBILITIES,
   SORT_ORDERS,
   COLLECTION_SORT_ORDERS,
+  SMART_COLLECTION_SORT_ORDERS,
   NAV_ITEM_TYPES,
   SYSTEM_NAV_KEY_VALUES,
   MAX_MEDIA_ATTACHMENTS,
@@ -30,14 +32,20 @@ import {
   type ConfigEditorDefinition,
   type ConfigKey,
 } from "../types.js";
-import { isCjkSerifFont } from "../i18n/detect.js";
 import {
+  formatLanguageList,
   isLocale,
   isValidContentLanguage,
   normalizeContentLanguage,
+  parseLanguageList,
 } from "../i18n/locales.js";
 import { ValidationError } from "./errors.js";
 import { createTypeIdSchema, ID_PREFIX } from "./ids.js";
+import {
+  FILTER_DIMENSION_KEYS,
+  FILTER_DIMENSIONS,
+  type PostFilterSelection,
+} from "./filter-dimensions.js";
 import { normalizeSlug } from "./slug-format.js";
 import { isReservedPath } from "./constants.js";
 import { sanitizeUrl, normalizePath } from "./url.js";
@@ -172,13 +180,30 @@ export const SystemNavKeySchema = z.enum(SYSTEM_NAV_KEY_VALUES);
 export const RedirectTypeSchema = z.enum(["301", "302"]);
 
 /**
- * Custom URL target type enum schema
+ * Custom URL target type enum schema.
+ *
+ * Every kind a stored path can be, including `archive` — which is read and
+ * listed but no longer created. See {@link CreatableCustomUrlTargetTypeSchema}.
  */
 export const CustomUrlTargetTypeSchema = z.enum([
   "post",
   "collection",
   "redirect",
   "archive",
+]);
+
+/**
+ * The target kinds a new custom URL may take.
+ *
+ * `archive` is absent: hand-typing `format=note&title=none` into a text field
+ * is the problem smart collections exist to replace, and a form that stopped
+ * offering it while the endpoint still accepted it would not have stopped
+ * offering it. Existing archive paths keep working indefinitely.
+ */
+export const CreatableCustomUrlTargetTypeSchema = z.enum([
+  "post",
+  "collection",
+  "redirect",
 ]);
 
 /**
@@ -193,9 +218,24 @@ export const RatingSchema = z.coerce
   .or(z.literal("").transform(() => undefined))
   .transform((v) => (v === 0 ? undefined : v));
 
+/**
+ * Any syntactically valid BCP 47 tag, normalized to canonical case.
+ *
+ * Deliberately open: Jant ships dashboard catalogs for a handful of locales but
+ * content can be written in any language.
+ */
+export const ContentLanguageSchema = z
+  .string()
+  .trim()
+  .refine(isValidContentLanguage, {
+    message: "Enter a valid BCP 47 language tag (e.g. en, zh-Hans, ja).",
+  })
+  .transform(normalizeContentLanguage);
+
 const PostIdSchema = createTypeIdSchema(ID_PREFIX.post);
 const MediaIdSchema = createTypeIdSchema(ID_PREFIX.media);
 const CollectionIdSchema = createTypeIdSchema(ID_PREFIX.collection);
+const SmartCollectionIdSchema = createTypeIdSchema(ID_PREFIX.smartCollection);
 const CollectionDirectoryItemIdSchema = createTypeIdSchema(
   ID_PREFIX.collectionDirectoryItem,
 );
@@ -294,6 +334,12 @@ const PostFieldsSchema = z.object({
     .optional(),
   replyToId: PostIdSchema.optional(),
   quietReply: z.boolean().optional(),
+  // Content language. The post service normalizes and enforces the
+  // thread-uniform rule; this only rejects tags that are not BCP 47 at all.
+  language: ContentLanguageSchema.optional().or(
+    z.literal("").transform(() => undefined),
+  ),
+  translationOfId: PostIdSchema.optional(),
   publishedAt: z.number().int().positive().optional(),
   mediaIds: z.array(MediaIdSchema).max(MAX_MEDIA_ATTACHMENTS).optional(),
   mediaAlts: z.record(MediaIdSchema, z.string()).optional(),
@@ -566,6 +612,14 @@ export const CreateNavItemSchema = z.discriminatedUnion("type", [
     label: sanitizeText(100).pipe(z.string().min(1)).optional(),
     placement: z.enum(["header", "more"]).optional(),
   }),
+  // Placed exactly like a collection — the label follows the target's title
+  // and the URL follows its address; only which column holds the key differs.
+  z.object({
+    type: z.literal("smart_collection"),
+    smartCollectionId: SmartCollectionIdSchema,
+    label: sanitizeText(100).pipe(z.string().min(1)).optional(),
+    placement: z.enum(["header", "more"]).optional(),
+  }),
   z.object({
     type: z.literal("page"),
     postId: PostIdSchema,
@@ -620,6 +674,19 @@ export const CreateCollectionDirectoryItemSchema = z.discriminatedUnion(
   ],
 );
 
+/**
+ * A row in the collections directory, as the drag surface names it.
+ *
+ * A placed row is named by its directory row id. A collection or smart
+ * collection that has never been placed is named by its own id, because that is
+ * all the directory has to render — moving one is what gives it a row.
+ */
+export const CollectionDirectoryRowIdSchema = z.union([
+  CollectionDirectoryItemIdSchema,
+  CollectionIdSchema,
+  SmartCollectionIdSchema,
+]);
+
 export const UpdateCollectionDirectoryItemSchema = z.object({
   label: z.union([CollectionDirectoryLabelSchema, z.null()]).optional(),
   url: CollectionDirectoryLinkUrlSchema.optional(),
@@ -633,6 +700,7 @@ export {
   NavItemIdSchema,
   PathIdSchema,
   PostIdSchema,
+  SmartCollectionIdSchema,
 };
 
 /**
@@ -676,6 +744,61 @@ export const CreateCollectionSchema = z.object({
  * API request body schema for updating a collection
  */
 export const UpdateCollectionSchema = CreateCollectionSchema.partial();
+
+/**
+ * What a stored selection may hold — the validator a create or update request
+ * runs its conditions through.
+ *
+ * Assembled from the dimension registry rather than restated, so a new
+ * dimension is accepted by every endpoint the moment it is declared, and a
+ * dimension whose stored vocabulary is narrower than its URL one (`visibility`)
+ * is narrow everywhere at once.
+ *
+ * The registry itself carries plain predicates, not schemas, because the smart
+ * collection dialog compiles it into the browser bundle. The Zod wrapper lives
+ * here, on the server side of that line, where request bodies are validated and
+ * a rejected condition still has to say which one it was.
+ */
+export const PostFilterSelectionSchema = z
+  .object(
+    Object.fromEntries(
+      FILTER_DIMENSION_KEYS.map((key) => [
+        key,
+        z
+          .custom((value) => FILTER_DIMENSIONS[key].storage.isStorable(value), {
+            message: `Invalid value for the ${key} condition`,
+          })
+          .optional(),
+      ]),
+    ),
+  )
+  .strict() as unknown as z.ZodType<PostFilterSelection>;
+
+/**
+ * API request body schema for creating a smart collection.
+ *
+ * The conditions come from the dimension registry rather than being restated
+ * here, so a new dimension is accepted the moment it is declared and a stored
+ * vocabulary narrower than the URL one (`visibility` never being `private`)
+ * is narrow at every entry point at once.
+ */
+export const CreateSmartCollectionSchema = z.object({
+  slug: CollectionSlugSchema,
+  title: CollectionTitleSchema,
+  description: CollectionDescriptionValueSchema.nullable().optional(),
+  // Omitted means no conditions, which is the honest spelling of "every post".
+  selection: PostFilterSelectionSchema.optional(),
+  sort: z.enum(SMART_COLLECTION_SORT_ORDERS).optional(),
+  layout: z.enum(ARCHIVE_LAYOUTS).nullable().optional(),
+});
+
+export const UpdateSmartCollectionSchema =
+  CreateSmartCollectionSchema.partial();
+
+/** The body of a preview request: the conditions, and nothing else. */
+export const SmartCollectionPreviewSchema = z.object({
+  selection: PostFilterSelectionSchema.optional(),
+});
 
 export const SiteNameSettingSchema = sanitizeSettingText(MAX_SITE_NAME_LENGTH);
 export const SiteDescriptionSettingSchema = sanitizeSettingText(
@@ -808,10 +931,15 @@ export function normalizeEditableSettingValue(
         );
       }
       break;
-    case "CJK_SERIF_FONT":
-      if (!isCjkSerifFont(normalized)) {
-        throw new ValidationError("Choose an available CJK font fallback.");
+    case "MULTILINGUAL_ENABLED":
+      if (normalized !== "true" && normalized !== "false") {
+        throw new ValidationError("Multilingual content is on or off.");
       }
+      break;
+    case "ADDITIONAL_LANGUAGES":
+      // Re-serialized from the parsed form so a hand-written value cannot
+      // store blanks, duplicates, or non-canonical casing.
+      normalized = formatLanguageList(parseLanguageList(normalized));
       break;
     case "TIME_ZONE":
       if (!isSupportedTimeZone(normalized)) {
@@ -837,11 +965,10 @@ export const CreateCustomUrlSchema = z.object({
       "Path must contain only lowercase alphanumeric characters, hyphens, slashes, and dots",
     )
     .transform((p) => (p.startsWith("/") ? p : `/${p}`)),
-  targetType: CustomUrlTargetTypeSchema,
+  targetType: CreatableCustomUrlTargetTypeSchema,
   targetId: z.string().optional(),
   toPath: z.string().optional(),
   redirectType: RedirectTypeSchema.optional(),
-  archiveQuery: z.string().optional(),
 });
 
 // =============================================================================
@@ -861,6 +988,23 @@ export const SetupSchema = z.object({
     .string()
     .min(8, "Password must be at least 8 characters")
     .max(128),
+  // Prefilled from Accept-Language and confirmed by the author. Optional so an
+  // older client or a scripted setup still succeeds; the route falls back to
+  // the same detection the form used.
+  contentLanguage: ContentLanguageSchema.optional().or(
+    z.literal("").transform(() => undefined),
+  ),
+});
+
+/**
+ * Setup on a site whose shell already exists.
+ *
+ * A control plane created the site and its owner, so the only thing left to
+ * settle is the language its author writes in — the one fact no header, host,
+ * or billing record can supply.
+ */
+export const SetupLanguageSchema = z.object({
+  contentLanguage: ContentLanguageSchema,
 });
 
 /**

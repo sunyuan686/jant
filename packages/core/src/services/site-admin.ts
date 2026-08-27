@@ -218,6 +218,7 @@ export function createSiteAdminService(
     media,
     navItems,
     pathRegistry,
+    smartCollections,
     threadCollections,
     posts,
     settings,
@@ -313,17 +314,20 @@ export function createSiteAdminService(
       databaseSchema,
       databaseDialect,
     );
-    if (await settingsService.isOnboardingComplete()) {
+    if ((await settingsService.getOnboardingStatus()) !== "pending") {
       return;
     }
 
     await settingsService.set(SETTINGS_KEYS.SITE_NAME, input.siteName);
+    // The control plane can only pass a guess — today it forwards the locale
+    // the owner was browsing it in, which is their reading language, not
+    // necessarily the one they write in. It stands in until setup asks, so the
+    // site is never languageless, and setup offers it preselected.
     await settingsService.updateLocaleSettings(
       {
         siteLanguage: input.siteLanguage?.trim()
           ? detectLocaleFromHeader(input.siteLanguage)
           : baseLocale,
-        cjkSerifFont: "off",
         timeZone: input.timeZone,
       },
       {
@@ -332,7 +336,9 @@ export function createSiteAdminService(
     );
     const navItems = createNavItemService(targetDb, siteId, databaseSchema);
     await navItems.materializeDefaultNavigation();
-    await settingsService.completeOnboarding();
+    // Not `completeOnboarding()`: the site is real and readable from here, but
+    // its owner still owes setup the one answer nothing can infer.
+    await settingsService.markSiteProvisioned();
   }
 
   async function createWithDatabase(
@@ -509,6 +515,14 @@ export function createSiteAdminService(
     );
     await targetDb.delete(posts).where(eq(posts.siteId, siteId));
 
+    // Both kinds of collection, and smart ones first — a smart collection holds
+    // a `collection_id`. There is no constraint forcing that order any more
+    // (see the note on the column in `db/schema.ts`), but this function names
+    // every table it clears, and leaving one to an implicit cascade from `site`
+    // is how the next table gets forgotten.
+    await targetDb
+      .delete(smartCollections)
+      .where(eq(smartCollections.siteId, siteId));
     await targetDb.delete(collections).where(eq(collections.siteId, siteId));
     await targetDb.delete(apiTokens).where(eq(apiTokens.siteId, siteId));
     await targetDb.delete(settings).where(eq(settings.siteId, siteId));
@@ -782,11 +796,11 @@ export function createSiteAdminService(
             (theme) => theme.id === appConfig.fontThemeId,
           )
         : undefined;
+      // The static export is one site-wide stylesheet, so it uses the site
+      // language for the CJK stack. Per-page language overrides are a runtime
+      // concern that a flat Hugo export has no equivalent for.
       const fontOverrides = {
-        ...getCjkFontCssVariables(
-          appConfig.siteLanguage,
-          appConfig.cjkSerifFont,
-        ),
+        ...getCjkFontCssVariables(appConfig.siteLanguage),
         ...(fontTheme ? getFontThemeCssVariables(fontTheme) : {}),
       };
       const themeCss = buildThemeStyle(
@@ -809,10 +823,13 @@ export function createSiteAdminService(
           siteUrl: appConfig.siteUrl,
           siteDescription: appConfig.siteDescription,
           siteLanguage: appConfig.siteLanguage,
+          multilingualEnabled: appConfig.multilingualEnabled,
+          additionalLanguages: appConfig.additionalLanguages,
           showJantBrandingOnHome: appConfig.showJantBrandingOnHome,
           publicApiEnabled: appConfig.publicApiEnabled,
           rssFeedsEnabled: appConfig.rssFeedsEnabled,
           mainRssFeed: appConfig.mainRssFeed,
+          archiveDefaultLayout: appConfig.archiveDefaultLayout,
           siteFooter: appConfig.siteFooter,
           showHeaderAvatar: appConfig.showHeaderAvatar,
           siteAvatarUrl: appConfig.siteAvatarUrl,

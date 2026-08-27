@@ -249,7 +249,11 @@ export function convertComposeFormat(
   if (prepend.length) content.unshift(...prepend);
 
   out.bodyJson = content.length ? { type: "doc", content } : null;
-  out.showTitle = to === "note" && out.title.trim().length > 0;
+  // A title carried in from another format has nowhere to show unless the note's
+  // title field is open, so opening it is the only way not to drop it. The
+  // toggle is otherwise left alone, so note → link → note keeps the user's
+  // choice instead of resetting it.
+  if (to === "note" && out.title.trim().length > 0) out.showTitle = true;
 
   return out;
 }

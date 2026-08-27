@@ -16,8 +16,9 @@ import {
   parseValidated,
 } from "../../lib/schemas.js";
 import { assertFound, parseIdParam, NotFoundError } from "../../lib/errors.js";
+import { AddressQuerySchema, requestInternalPath } from "../../lib/address.js";
+import { toPublicPath } from "../../lib/url.js";
 import { ID_PREFIX } from "../../lib/ids.js";
-import { getCollectionPagePath } from "../../lib/collection-paths.js";
 import { renderSiteHeaderHtml } from "../../lib/site-header-fragment.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
@@ -69,6 +70,51 @@ navItemsApiRoutes.get("/pages", requireAuthApi(), async (c) => {
   return c.json({ pages });
 });
 
+/**
+ * What a pasted address could become in navigation.
+ *
+ * The author is holding a URL, not a title, so searching titles cannot answer
+ * them. The rules stay in the service; this only says which address was asked
+ * about, so the picker can name it back.
+ */
+navItemsApiRoutes.get("/resolve", requireAuthApi(), async (c) => {
+  const { url } = parseValidated(AddressQuerySchema, c.req.query());
+  const path = requestInternalPath(c, url);
+  if (path === null) {
+    return c.json({ resolution: { kind: "external", address: url.trim() } });
+  }
+
+  const resolution = await c.var.services.navItems.resolveNavTarget(path);
+  const address = toPublicPath(path, c.var.appConfig.sitePathPrefix);
+
+  if (resolution.status === "page") {
+    return c.json({
+      resolution: { kind: "page", address, page: resolution.page },
+    });
+  }
+  if (resolution.status === "collection") {
+    return c.json({
+      resolution: {
+        kind: "collection",
+        address,
+        collection: resolution.collection,
+      },
+    });
+  }
+
+  if (resolution.status === "smart_collection") {
+    return c.json({
+      resolution: {
+        kind: "smart_collection",
+        address,
+        smartCollection: resolution.smartCollection,
+      },
+    });
+  }
+
+  return c.json({ resolution: { kind: resolution.status, address } });
+});
+
 // Move nav item (requires auth) — must be before /:id
 navItemsApiRoutes.put("/:id/move", requireAuthApi(), async (c) => {
   const id = parseIdParam(c.req.param("id"), ID_PREFIX.navItem);
@@ -98,16 +144,17 @@ navItemsApiRoutes.post("/", requireAuthApi(), async (c) => {
       placement: body.placement,
     });
   } else if (body.type === "collection") {
-    const collection = await c.var.services.collections.getById(
-      body.collectionId,
-    );
-    if (!collection) throw new NotFoundError("Collection");
-
     item = await c.var.services.navItems.create({
       type: "collection",
       collectionId: body.collectionId,
-      label: body.label || collection.title,
-      url: getCollectionPagePath(collection.slug),
+      label: body.label,
+      placement: body.placement,
+    });
+  } else if (body.type === "smart_collection") {
+    item = await c.var.services.navItems.create({
+      type: "smart_collection",
+      smartCollectionId: body.smartCollectionId,
+      label: body.label,
       placement: body.placement,
     });
   } else if (body.type === "page") {

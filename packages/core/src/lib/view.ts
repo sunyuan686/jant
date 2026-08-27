@@ -32,6 +32,7 @@ import {
   formatDate,
   formatTime,
   formatRelativeTime,
+  formatYearMonthLabel,
 } from "./time.js";
 import { getCollectionPagePath } from "./collection-paths.js";
 import { getMediaUrl, getImageUrl, getPublicUrlForProvider } from "./image.js";
@@ -401,9 +402,40 @@ export function toPostView(
     collections,
     replyToId: post.replyToId ?? undefined,
     threadRootId: post.replyToId ? post.threadId : undefined,
+    // Language is a Thread property, carried on the root. Repeating it on every
+    // reply would invite per-reply controls that the data model does not allow.
+    language: post.replyToId ? undefined : (post.language ?? undefined),
     isLastInThread: isLastInThread ?? true,
     body: post.body ?? undefined,
   };
+}
+
+/**
+ * Resolves the unpublished draft sitting at the end of a Thread, if any.
+ *
+ * Both maps come from the same ordering over the same rows, differing only in
+ * whether drafts are eligible — so when they disagree, the draft-inclusive
+ * answer is by definition unpublished. No status lookup needed.
+ *
+ * @param threadId - Thread root ID to look up
+ * @param publishedTails - Tails from `getThreadTailIds(ids)`
+ * @param draftInclusiveTails - Tails from `getThreadTailIds(ids, { includeDrafts: true })`
+ * @returns The trailing draft's Post ID, or undefined when the Thread ends
+ *   on a published Post
+ * @example
+ * ```ts
+ * const draftTailId = resolveDraftTailId(post.threadId, tails, draftTails);
+ * if (draftTailId) view.draftTailId = draftTailId;
+ * ```
+ */
+export function resolveDraftTailId(
+  threadId: string,
+  publishedTails: Map<string, string>,
+  draftInclusiveTails: Map<string, string>,
+): string | undefined {
+  const withDrafts = draftInclusiveTails.get(threadId);
+  if (!withDrafts) return undefined;
+  return withDrafts === publishedTails.get(threadId) ? undefined : withDrafts;
 }
 
 /**
@@ -479,6 +511,31 @@ export function toPostViewsFromPosts(
  * @param currentPath - Current URL path for active state
  * @param isAuthenticated - Whether the user is logged in (affects system settings item)
  */
+/**
+ * System nav destinations that exist once per language view.
+ *
+ * `settings` is absent on purpose: the dashboard is a single, language-neutral
+ * surface, so a reader browsing `/en` still signs in at `/signin`.
+ */
+const LANGUAGE_SCOPED_SYSTEM_KEYS = new Set<string>([
+  "latest",
+  "featured",
+  "collections",
+  "archive",
+  "rss",
+]);
+
+/** Whether a nav item points at a surface that a language view re-serves. */
+function isLanguageScopedNavItem(item: NavItem): boolean {
+  if (item.type === "system") {
+    return LANGUAGE_SCOPED_SYSTEM_KEYS.has(item.systemKey ?? "");
+  }
+  // Collections keep their slug but filter by language; posts and free-form
+  // links have one address each. A smart collection is a collection in this
+  // respect too — `/en/quotes` is the English half of the same conditions.
+  return item.type === "collection" || item.type === "smart_collection";
+}
+
 export function toNavItemView(
   item: NavItem,
   currentPath: string,
@@ -486,6 +543,7 @@ export function toNavItemView(
   sitePathPrefix = "",
   collectionFreshness?: Map<string, number>,
   siteOrigin = "",
+  basePath = sitePathPrefix,
 ): NavItemView {
   let url = item.url;
   let label = item.label;
@@ -518,14 +576,15 @@ export function toNavItemView(
   // so strip it back to a path and skip external-link affordances.
   const sameSitePath = toSameSitePath(url, siteOrigin);
   const isExternal = sameSitePath === null && isFullUrl(url);
+  const linkPrefix = isLanguageScopedNavItem(item) ? basePath : sitePathPrefix;
   const publicUrl = isExternal
     ? url
-    : toPublicPath(sameSitePath ?? url, sitePathPrefix);
+    : toPublicPath(sameSitePath ?? url, linkPrefix);
 
   let isActive = false;
   if (!isExternal) {
-    if (publicUrl === sitePathPrefix || publicUrl === "/") {
-      isActive = currentPath === (sitePathPrefix || "/");
+    if (publicUrl === linkPrefix || publicUrl === "/") {
+      isActive = currentPath === (linkPrefix || "/");
     } else {
       isActive =
         currentPath === publicUrl || currentPath.startsWith(`${publicUrl}/`);
@@ -543,9 +602,11 @@ export function toNavItemView(
     type: item.type as NavItemType,
     systemKey: item.systemKey,
     collectionId: item.collectionId,
+    smartCollectionId: item.smartCollectionId,
     postId: item.postId,
     label,
     url: publicUrl,
+    targetTitle: item.targetTitle,
     placement: item.placement as NavItemPlacement,
     isActive,
     isExternal,
@@ -568,6 +629,7 @@ export function toNavItemViews(
   sitePathPrefix = "",
   collectionFreshness?: Map<string, number>,
   siteOrigin = "",
+  basePath = sitePathPrefix,
 ): NavItemView[] {
   return items.map((item) =>
     toNavItemView(
@@ -577,6 +639,7 @@ export function toNavItemViews(
       sitePathPrefix,
       collectionFreshness,
       siteOrigin,
+      basePath,
     ),
   );
 }
@@ -675,11 +738,8 @@ export function toArchiveGroups(
     const [year, month] = yearMonth.split("-");
     if (!year || !month) continue;
 
-    const date = new Date(parseInt(year, 10), parseInt(month, 10) - 1);
-    const label = date.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "long",
-    });
+    const label = formatYearMonthLabel(yearMonth);
+    if (!label) continue;
 
     groups.push({
       year,
@@ -709,11 +769,8 @@ export function toArchiveGroupsWithMedia(
     const [year, month] = yearMonth.split("-");
     if (!year || !month) continue;
 
-    const date = new Date(parseInt(year, 10), parseInt(month, 10) - 1);
-    const label = date.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "long",
-    });
+    const label = formatYearMonthLabel(yearMonth);
+    if (!label) continue;
 
     groups.push({
       year,

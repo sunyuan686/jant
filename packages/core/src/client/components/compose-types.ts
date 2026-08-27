@@ -11,6 +11,18 @@ import type { TableControlLabels } from "../tiptap/table-control-labels.js";
 
 export type ComposeFormat = "note" | "link" | "quote";
 
+/**
+ * What one composer row says about itself. An editor owns its fields, so it
+ * owns these two answers too — the dialog reduces them over the rows it has
+ * instead of reading editors back out of the DOM while it renders.
+ */
+export interface ComposeRowStatus {
+  /** Anything worth keeping: the check behind "discard this?" and autosave. */
+  hasContent: boolean;
+  /** Enough to publish this row: its format's requirements met, fields valid. */
+  publishable: boolean;
+}
+
 export interface ComposeAttachment {
   clientId: string;
   file: File;
@@ -25,6 +37,12 @@ export interface ComposeAttachment {
   status: "pending" | "processing" | "uploading" | "done" | "error";
   progress: number | null;
   mediaId: string | null;
+  /**
+   * Server URL of the uploaded file, set when the upload completes. Unlike
+   * `previewUrl` (a blob URL revoked on editor reset) it stays valid, so
+   * draft restore can rehydrate the attachment after the dialog closed.
+   */
+  remoteUrl: string | null;
   alt: string;
   error: string | null;
   /** Text content preview for text files (first ~100 chars) */
@@ -64,6 +82,23 @@ export interface DraftItem {
   }[];
 }
 
+/**
+ * Snapshot of a media attachment whose upload completed. Stored in the local
+ * draft (and passed by the bridge on failure restore) so uploaded images
+ * survive a failed publish or a page reload — the bytes are already on the
+ * server, only the reference needs restoring.
+ */
+export interface LocalDraftMedia {
+  clientId: string;
+  mediaId: string;
+  url: string;
+  mimeType: string;
+  name?: string;
+  alt?: string;
+  summary?: string | null;
+  chars?: number | null;
+}
+
 export interface LocalDraft {
   format: ComposeFormat;
   title: string;
@@ -80,6 +115,13 @@ export interface LocalDraft {
   showRating: boolean;
   collectionIds: string[];
   replyToId: string | null;
+  /** Language the author picked, if they picked one. */
+  language?: string | null;
+  /**
+   * Thread root this draft is a translation of. Carried so a half-written
+   * translation picked up later still knows what it belongs to.
+   */
+  translationOfId?: string | null;
   attachedTexts: Array<{
     clientId: string;
     bodyJson: JSONContent | null;
@@ -87,9 +129,15 @@ export interface LocalDraft {
     summary: string;
   }>;
   attachmentOrder?: string[];
+  mediaAttachments?: LocalDraftMedia[];
   /** Present when the draft is a multi-post thread */
   threadItems?: Array<{
     format: ComposeFormat;
+    /** Per-post publish date; empty means "follows the thread". */
+    publishedAtInput?: string;
+    publishedAtTimeMinutes?: number | null;
+    /** Per-post permalink; empty means the server assigns a random id. */
+    slug?: string;
     title: string;
     bodyJson: JSONContent | null;
     url: string;
@@ -102,12 +150,14 @@ export interface LocalDraft {
       summary: string;
     }>;
     attachmentOrder?: string[];
+    mediaAttachments?: LocalDraftMedia[];
   }>;
   savedAt: number;
 }
 
 export interface ComposeLabels {
   cancel: string;
+  close: string;
   note: string;
   link: string;
   quote: string;
@@ -195,6 +245,21 @@ export interface ComposeLabels {
   publishHideFromLatest: string;
   publishPrivate: string;
   publishSettings: string;
+  languageLabel: string;
+  languageAuto: string;
+  languageAutoHint: string;
+  languageAutoDetected: string;
+  languageAutoPending: string;
+  languageTriggerLabel: string;
+  translationOf: string;
+  translationContext: string;
+  translationContextInLanguage: string;
+  translationContextOpen: string;
+  translationContextOriginal: string;
+  translationContextHide: string;
+  translationContextHideLong: string;
+  translationContextShow: string;
+  translationContextShowLong: string;
   publishVisibilityLabel: string;
   publishVisibilityPublic: string;
   publishVisibilityPublicHint: string;
@@ -229,9 +294,8 @@ export interface ComposeLabels {
   threadLimitReached: string;
   showMore: string;
   showLess: string;
-  newThread: string;
-  replyTitle: string;
-  editTitle: string;
+  editing: string;
+  composeDialogLabel: string;
   slashHint: string;
   tableControls: TableControlLabels;
   collectionFormLabels: CollectionFormLabels;
@@ -308,8 +372,24 @@ export interface ComposeSubmitDetail {
   replyThreadRootId?: string;
   replyRefreshKind?: "timeline-item" | "post-card" | "post-view";
   replyRefreshId?: string;
+  /**
+   * Content language chosen by the author. Absent means "nobody said" — the
+   * server reads one out of the text rather than guessing in the browser,
+   * because it sees the final text.
+   */
+  language?: string;
+  /** Thread root this post is being written as a translation of. */
+  translationOfId?: string;
   /** Present when submitting a multi-post thread; index 0 is the root */
   threadPosts?: ComposeSubmitDetail[];
+}
+
+/** One language the site publishes, as offered in the composer. */
+export interface ComposeLanguage {
+  /** Canonical BCP 47 tag. */
+  tag: string;
+  /** The language's own name for itself, e.g. "日本語". */
+  label: string;
 }
 
 export interface ComposeCollection {

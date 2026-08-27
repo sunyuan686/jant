@@ -38,6 +38,16 @@ msgstr "{count, plural, one {Found # result} other {Found # results}}"
 msgid "{count} images couldn't be saved to your library — their original links were kept."
 msgstr "{count} images couldn't be saved to your library — their original links were kept."
 
+#. @context: Smart collection dialog live count — how many threads the conditions gather out of the site total
+#: src/ui/shared/smart-collection-labels.ts
+msgid "{count} of {total} threads"
+msgstr "{count} of {total} threads"
+
+#. @context: Value shown on a post's permalink control when the link is generated automatically — a stand-in for the path the server will assign. Sits next to real permalinks rendered as /my-post, so keep the leading slash
+#: src/ui/compose/ComposeDialog.tsx
+msgid "/…"
+msgstr "/…"
+
 #. @context: Placeholder for the custom collections link URL
 #: src/ui/shared/collection-management-labels.ts
 msgid "/archive?format=quote or https://example.com"
@@ -64,6 +74,11 @@ msgstr "A calmer accent makes"
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "A calmer, warmer accent makes the default theme feel quieter and more intentional."
 msgstr "A calmer, warmer accent makes the default theme feel quieter and more intentional."
+
+#. @context: Collection dialog validation message
+#: src/ui/shared/collection-management-labels.ts
+msgid "A collection needs a title and a link."
+msgstr "A collection needs a title and a link."
 
 #. @context: Section title for the usage guidance section on the brand asset page
 #: src/ui/pages/BrandPage.tsx
@@ -112,6 +127,11 @@ msgstr "A reference link for checking whether the accent feels editorial instead
 #: src/ui/pages/BrandPage.tsx
 msgid "A single ZIP with the main logo, reverse logo, square PNG, rounded, square, and circle tiles, plus favicon, Apple touch icon, and social preview image."
 msgstr "A single ZIP with the main logo, reverse logo, square PNG, rounded, square, and circle tiles, plus favicon, Apple touch icon, and social preview image."
+
+#. @context: Smart collection dialog validation message
+#: src/ui/shared/smart-collection-labels.ts
+msgid "A smart collection needs a title and a link."
+msgstr "A smart collection needs a title and a link."
 
 #. @context: Main sample article title
 #: src/ui/pages/ThemeSamplePage.tsx
@@ -173,6 +193,11 @@ msgstr "Add column after"
 msgid "Add column before"
 msgstr "Add column before"
 
+#. @context: Smart collection dialog button
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Add condition"
+msgstr "Add condition"
+
 #. @context: Primary action to add a custom link on collections page
 #: src/ui/shared/collection-management-labels.ts
 msgid "Add Link"
@@ -198,6 +223,12 @@ msgstr "Add to Navigation"
 msgid "Adding…"
 msgstr "Adding…"
 
+#. @context: Built-in navigation label for the archive page. Reads as the widest of Featured / Latest / All rather than 'old posts' — the page is the complete index, and its URL stays /archive.
+#: src/ui/shared/navigation-labels.ts
+msgctxt "nav"
+msgid "All"
+msgstr "All"
+
 #. @context: Archive filter - collection dropdown default
 #: src/ui/pages/ArchivePage.tsx
 msgid "All collections"
@@ -208,8 +239,10 @@ msgstr "All collections"
 msgid "All formats"
 msgstr "All formats"
 
+#. @context: Archive page heading and document title when no filter is active. Names the surface, not the current selection — the nav calls the same destination 'All'.
 #. @context: Archive thread filter - threads and single posts
 #: src/ui/pages/ArchivePage.tsx
+#: src/ui/shared/archive-labels.ts
 msgid "All posts"
 msgstr "All posts"
 
@@ -222,6 +255,11 @@ msgstr "All visibility"
 #: src/ui/pages/ArchivePage.tsx
 msgid "All years"
 msgstr "All years"
+
+#. @context: Label before links to this post's translations
+#: src/ui/pages/PostPage.tsx
+msgid "Also available in"
+msgstr "Also available in"
 
 #. @context: Alt text for the sample detail article image
 #: src/ui/pages/ThemeSamplePage.tsx
@@ -249,17 +287,9 @@ msgid "Apple touch icon"
 msgstr "Apple touch icon"
 
 #. @context: Archive feed title prefix
-#. @context: Archive page title
 #. @context: Inactive nav link label on sample page
 #: src/routes/pages/archive.tsx
-#: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/ThemeSamplePage.tsx
-msgid "Archive"
-msgstr "Archive"
-
-#. @context: Built-in navigation label for the archive page
-#: src/ui/shared/navigation-labels.ts
-msgctxt "nav"
 msgid "Archive"
 msgstr "Archive"
 
@@ -269,14 +299,9 @@ msgid "Article detail page"
 msgstr "Article detail page"
 
 #. @context: Archive media filter - audio
-#: src/ui/pages/ArchivePage.tsx
+#: src/lib/filter-dimensions.ts
 msgid "Audio"
 msgstr "Audio"
-
-#. @context: Error toast when authentication secret is missing from server config
-#: src/routes/auth/setup.tsx
-msgid "Auth secret is missing. Check your environment variables."
-msgstr "Auth secret is missing. Check your environment variables."
 
 #. @context: Error toast when authentication system is unavailable
 #: src/routes/auth/signin.tsx
@@ -293,10 +318,15 @@ msgstr "Author (optional)"
 msgid "Auto"
 msgstr "Auto"
 
-#. @context: Compose summary shown near the submit controls when a manual custom link is cleared
-#: src/ui/compose/ComposeDialog.tsx
-msgid "Auto link"
-msgstr "Auto link"
+#. @context: Smart collection page — what it gathers, when no condition narrows it
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Automatically collects every post."
+msgstr "Automatically collects every post."
+
+#. @context: Smart collection page — what it gathers. {conditions} is the list of conditions, already joined. A label and a list, not a sentence: the conditions are named in the archive's own words, which are noun fragments like "Titled" or "With media".
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Automatically collects: {conditions}"
+msgstr "Automatically collects: {conditions}"
 
 #. @context: Usage label for the circle tile asset card
 #: src/ui/pages/BrandPage.tsx
@@ -334,13 +364,6 @@ msgstr "Brand pack"
 msgid "Brand tile"
 msgstr "Brand tile"
 
-#. @context: Breadcrumb label on collection detail page
-#. @context: Breadcrumb label on collection editor page
-#: src/ui/pages/CollectionEditorPage.tsx
-#: src/ui/pages/CollectionPage.tsx
-msgid "Breadcrumb"
-msgstr "Breadcrumb"
-
 #. @context: Secondary hero button label to jump to the file list
 #: src/ui/pages/BrandPage.tsx
 msgid "Browse files"
@@ -361,16 +384,19 @@ msgstr "Built-in background"
 msgid "Buttons can stay steady, but links, thread markers, and subtle emphasis should feel closer to ink on paper than dashboard chrome."
 msgstr "Buttons can stay steady, but links, thread markers, and subtle emphasis should feel closer to ink on paper than dashboard chrome."
 
+#. @context: Back out of the attached-text sub-editor, paired with Done. Leaving the composer itself says Close instead — it may keep the work as a draft, so nothing is being cancelled.
 #. @context: Button label to dismiss a dialog or action
 #. @context: Button to cancel form
-#. @context: Close compose dialog
-#. @context: Confirm close action sheet - cancel and return to editor
-#: src/ui/compose/ComposeDialog.tsx
 #: src/ui/compose/ComposeDialog.tsx
 #: src/ui/shared/collection-management-labels.ts
 #: src/ui/shared/collection-management-labels.ts
 msgid "Cancel"
 msgstr "Cancel"
+
+#. @context: Collection editing dialog warning shown when editing moves an existing collection link
+#: src/ui/shared/collection-management-labels.ts
+msgid "Changing the link breaks the old one immediately."
+msgstr "Changing the link breaks the old one immediately."
 
 #. @context: Compose custom slug helper while checking whether a manual slug is available
 #: src/ui/compose/ComposeDialog.tsx
@@ -416,6 +442,11 @@ msgstr "Circle tile"
 msgid "Clear filter"
 msgstr "Clear filter"
 
+#. @context: Leaves the composer — the × on a single post, and the button in a thread. Prompts to save a draft first if there is unsaved work.
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Close"
+msgstr "Close"
+
 #. @context: Close drawer button label
 #: src/ui/layouts/SiteLayout.tsx
 msgid "Close menu"
@@ -427,6 +458,8 @@ msgid "collection"
 msgstr "collection"
 
 #. @context: Compose collection selector trigger label
+#. @context: Post filter dimension name - collection membership
+#: src/lib/filter-dimensions.ts
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Collection"
 msgstr "Collection"
@@ -466,14 +499,14 @@ msgstr "Collection saved."
 msgid "collections"
 msgstr "collections"
 
-#. @context: Breadcrumb link to collections page
-#. @context: Breadcrumb link to collections page
 #. @context: Collections page heading
 #. @context: Collections page heading
 #. @context: Inactive nav link label on sample page
-#: src/ui/pages/CollectionEditorPage.tsx
+#. @context: Link back to the collections directory from a collection page
+#. @context: Link back to the collections directory from a collection page
 #: src/ui/pages/CollectionPage.tsx
 #: src/ui/pages/CollectionsPage.tsx
+#: src/ui/pages/SmartCollectionPage.tsx
 #: src/ui/pages/ThemeSamplePage.tsx
 #: src/ui/shared/CollectionsManager.tsx
 msgid "Collections"
@@ -502,10 +535,20 @@ msgstr "Combined Collections"
 msgid "Compare it against the theme controls"
 msgstr "Compare it against the theme controls"
 
-#. @context: Setup form submit button
-#: src/routes/auth/setup.tsx
-msgid "Complete Setup"
-msgstr "Complete Setup"
+#. @context: Accessible name for the compose dialog
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Compose"
+msgstr "Compose"
+
+#. @context: Smart collection dialog section heading
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Conditions"
+msgstr "Conditions"
+
+#. @context: One line under the New Smart Collection heading, saying how it differs from an ordinary collection
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Conditions choose what belongs here, not you. Posts you write later join on their own."
+msgstr "Conditions choose what belongs here, not you. Posts you write later join on their own."
 
 #. @context: Password reset form field
 #: src/routes/auth/reset.tsx
@@ -517,24 +560,35 @@ msgstr "Confirm Password"
 msgid "Continue →"
 msgstr "Continue →"
 
+#. @context: Tooltip on the draft badge, which opens the editor
+#: src/ui/feed/PostStatusBadges.tsx
+msgid "Continue writing this draft"
+msgstr "Continue writing this draft"
+
 #. @context: Controls section heading on sample page
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "Controls"
 msgstr "Controls"
 
+#. @context: Collection dialog load failure
+#: src/ui/shared/collection-management-labels.ts
+msgid "Could not open this collection. Try again."
+msgstr "Could not open this collection. Try again."
+
+#. @context: Smart collection dialog load failure
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Could not open this smart collection. Try again."
+msgstr "Could not open this smart collection. Try again."
+
+#. @context: Smart collection dialog save failure
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Could not save. Try again."
+msgstr "Could not save. Try again."
+
 #. @context: Error after a Collection could not be added to site navigation
 #: src/ui/shared/collection-management-labels.ts
 msgid "Couldn't add this collection to navigation. Try again."
 msgstr "Couldn't add this collection to navigation. Try again."
-
-#. @context: Error toast when account creation fails
-#. @context: Error toast when account creation fails
-#. @context: Error toast when account creation fails
-#: src/routes/auth/setup.tsx
-#: src/routes/auth/setup.tsx
-#: src/routes/auth/setup.tsx
-msgid "Couldn't create your account. Check the details and try again."
-msgstr "Couldn't create your account. Check the details and try again."
 
 #. @context: Toast shown when edit mode fails to load a post
 #: src/ui/compose/ComposeDialog.tsx
@@ -551,15 +605,15 @@ msgstr "Couldn't publish. Saved as draft."
 msgid "Couldn't save. Try again in a moment."
 msgstr "Couldn't save. Try again in a moment."
 
+#. @context: Smart collection dialog while the count is loading
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Counting…"
+msgstr "Counting…"
+
 #. @context: Compose collection combobox empty state when no collections exist
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Create a collection to get started."
 msgstr "Create a collection to get started."
-
-#. @context: Setup page description
-#: src/routes/auth/setup.tsx
-msgid "Create your admin account."
-msgstr "Create your admin account."
 
 #. @context: Thread item label on sample page
 #: src/ui/pages/ThemeSamplePage.tsx
@@ -611,7 +665,9 @@ msgid "Default preview image for social shares and link unfurls."
 msgstr "Default preview image for social shares and link unfurls."
 
 #. @context: Delete collection action
+#. @context: Destructive menu item on a smart collection's row and page. The row says which one; the confirmation names what is lost.
 #: src/ui/shared/collection-management-labels.ts
+#: src/ui/shared/smart-collection-labels.ts
 msgid "Delete"
 msgstr "Delete"
 
@@ -645,6 +701,11 @@ msgstr "Delete table"
 msgid "Delete this collection permanently? Threads inside won't be removed."
 msgstr "Delete this collection permanently? Threads inside won't be removed."
 
+#. @context: Confirmation before deleting a smart collection, naming what is lost
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Delete this smart collection? Its link stops working."
+msgstr "Delete this smart collection? Its link stops working."
+
 #. @context: Hint shown on signin page when demo credentials are pre-filled
 #: src/routes/auth/signin.tsx
 msgid "Demo credentials are pre-filled — hit Sign In to continue."
@@ -654,6 +715,11 @@ msgstr "Demo credentials are pre-filled — hit Sign In to continue."
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Describe this for people with visual impairments..."
 msgstr "Describe this for people with visual impairments..."
+
+#. @context: Smart collection dialog field
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Description"
+msgstr "Description"
 
 #. @context: Collection form field
 #. @context: Field label for a custom collections link description
@@ -676,6 +742,11 @@ msgstr "Design"
 msgid "Designing a calmer default accent for Jant"
 msgstr "Designing a calmer default accent for Jant"
 
+#. @context: Compose language option that leaves detection to Jant
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Detect"
+msgstr "Detect"
+
 #. @context: Confirm close action sheet - discard changes button for editing published post
 #. @context: More menu - discard post
 #: src/ui/compose/ComposeDialog.tsx
@@ -687,6 +758,11 @@ msgstr "Discard"
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Discard changes?"
 msgstr "Discard changes?"
+
+#. @context: Smart collection dialog section heading
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Display"
+msgstr "Display"
 
 #. @context: Label for a divider item while organizing collections
 #: src/ui/shared/CollectionsManager.tsx
@@ -756,6 +832,11 @@ msgstr "Download SVG"
 msgid "Download the official Jant logo, icons, and preview files."
 msgstr "Download the official Jant logo, icons, and preview files."
 
+#. @context: Post status badge for an unpublished draft, shown to the author only
+#: src/ui/feed/PostStatusBadges.tsx
+msgid "Draft"
+msgstr "Draft"
+
 #. @context: Accessible label for a draft item's more-actions button
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Draft actions"
@@ -797,16 +878,15 @@ msgstr "Drafts"
 msgid "Drag collections, links, and dividers into the order you want."
 msgstr "Drag collections, links, and dividers into the order you want."
 
-#. @context: Compose dialog header title when editing a post
 #. @context: Per-collection edit action
-#. @context: Per-collection edit action
-#. @context: Per-collection edit action
-#: src/ui/compose/ComposeDialog.tsx
-#: src/ui/pages/CollectionEditorPage.tsx
-#: src/ui/pages/CollectionEditorPage.tsx
 #: src/ui/shared/collection-management-labels.ts
 msgid "Edit"
 msgstr "Edit"
+
+#. @context: Title of the dialog that edits an existing collection
+#: src/ui/shared/collection-management-labels.ts
+msgid "Edit Collection"
+msgstr "Edit Collection"
 
 #. @context: Compose action to reopen the custom link field from the action row summary
 #: src/ui/compose/ComposeDialog.tsx
@@ -838,14 +918,22 @@ msgstr "Edit post"
 msgid "Edit publish date"
 msgstr "Edit publish date"
 
+#. @context: Dialog title when editing an existing smart collection
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Edit Smart Collection"
+msgstr "Edit Smart Collection"
+
+#. @context: Marker above the composer when changing a post that is already published
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Editing"
+msgstr "Editing"
+
 #. @context: Sample link post title on the theme sample page
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "Editorial interfaces worth borrowing from"
 msgstr "Editorial interfaces worth borrowing from"
 
 #. @context: Setup/signin form field - email
-#. @context: Setup/signin form field - email
-#: src/routes/auth/setup.tsx
 #: src/routes/auth/signin.tsx
 msgid "Email"
 msgstr "Email"
@@ -895,8 +983,8 @@ msgstr "Favicon"
 #. @context: Inactive browse tab label on sample page
 #. @context: Page heading for the featured posts feed
 #. @context: Tooltip and screen reader label for the featured-post icon in the post footer when no featured date is available
+#: src/lib/filter-dimensions.ts
 #: src/routes/pages/featured.tsx
-#: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/FeaturedPage.tsx
 #: src/ui/pages/ThemeSamplePage.tsx
 #: src/ui/shared/PostFooter.tsx
@@ -920,12 +1008,6 @@ msgstr "Featured on {date} at {time}"
 #: src/ui/layouts/BaseLayout.tsx
 msgid "Featured posts"
 msgstr "Featured posts"
-
-#. @context: Built-in navigation label for feed
-#: src/ui/shared/navigation-labels.ts
-msgctxt "nav"
-msgid "Feed"
-msgstr "Feed"
 
 #. @context: Search snippet suffix on sample page
 #: src/ui/pages/ThemeSamplePage.tsx
@@ -958,14 +1040,24 @@ msgid "File uploaded."
 msgstr "File uploaded."
 
 #. @context: Archive media filter - files/documents
-#: src/ui/pages/ArchivePage.tsx
+#: src/lib/filter-dimensions.ts
 msgid "Files"
 msgstr "Files"
+
+#. @context: Smart collection layout option — use the site's configured archive layout
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Follow site default"
+msgstr "Follow site default"
 
 #. @context: Paragraph mentioning code on the sample detail article
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "For the same reason, inline code should stay neutral. Something like theme.siteAccent = soften(green, 12%) should not suddenly become the loudest thing on the page."
 msgstr "For the same reason, inline code should stay neutral. Something like theme.siteAccent = soften(green, 12%) should not suddenly become the loudest thing on the page."
+
+#. @context: Post filter dimension name - note, link, or quote
+#: src/lib/filter-dimensions.ts
+msgid "Format"
+msgstr "Format"
 
 #. @context: Compose dialog - open fullscreen editor
 #: src/ui/compose/ComposeDialog.tsx
@@ -986,6 +1078,11 @@ msgstr "Generating a link..."
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Give it a title..."
 msgstr "Give it a title..."
+
+#. @context: Smart collection layout option
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Grid"
+msgstr "Grid"
 
 #. @context: Table cell in the sample detail article
 #: src/ui/pages/ThemeSamplePage.tsx
@@ -1014,19 +1111,31 @@ msgstr "Helps screen readers describe the image"
 
 #. @context: Archive visibility filter for posts hidden from Latest
 #. @context: Compose publish settings visibility option
+#: src/lib/filter-dimensions.ts
 #: src/ui/compose/ComposeDialog.tsx
-#: src/ui/pages/ArchivePage.tsx
 msgid "Hidden from Latest"
 msgstr "Hidden from Latest"
+
+#. @context: Button that folds away the original while writing its translation. Sits right after the words “Translating into …”, which is what makes it clear what gets hidden — the accessible name spells it out
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Hide"
+msgstr "Hide"
 
 #. @context: Compose dropdown option for hiding a post from the Latest view
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Hide from Latest"
 msgstr "Hide from Latest"
 
+#. @context: Accessible name of the button that folds away the post being translated
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Hide the original"
+msgstr "Hide the original"
+
+#. @context: Collection sort order option
 #. @context: Collection sort order option
 #. @context: Collection sort order option
 #: src/ui/pages/CollectionPage.tsx
+#: src/ui/pages/SmartCollectionPage.tsx
 #: src/ui/shared/collection-management-labels.ts
 msgid "Highest rated"
 msgstr "Highest rated"
@@ -1057,7 +1166,7 @@ msgid "Image unavailable"
 msgstr "Image unavailable"
 
 #. @context: Archive media filter - images
-#: src/ui/pages/ArchivePage.tsx
+#: src/lib/filter-dimensions.ts
 msgid "Images"
 msgstr "Images"
 
@@ -1123,6 +1232,11 @@ msgstr "Jant looks best when the accent feels editorial. Buttons can stay sturdy
 msgid "Journal"
 msgstr "Journal"
 
+#. @context: Confirm close action sheet - dismiss the sheet and return to the editor. Says what it does rather than 'Cancel', which the composer already spends on leaving.
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Keep editing"
+msgstr "Keep editing"
+
 #. @context: Guidance title on the brand asset page
 #: src/ui/pages/BrandPage.tsx
 msgid "Keep the artwork unchanged."
@@ -1142,6 +1256,25 @@ msgstr "Label"
 #: src/ui/shared/CollectionsManager.tsx
 msgid "Label (optional)"
 msgstr "Label (optional)"
+
+#. @context: Accessible label for the site language switcher
+#. @context: Compose field for the post's content language
+#: src/ui/compose/ComposeDialog.tsx
+#: src/ui/layouts/SiteLayout.tsx
+msgid "Language"
+msgstr "Language"
+
+#. @context: Accessible label for the site language switcher when it names the language on screen
+#. @context: Accessible name of the composer's language button, which sits beside Post and names the language this post would publish in
+#: src/ui/compose/ComposeDialog.tsx
+#: src/ui/layouts/SiteLayout.tsx
+msgid "Language: {language}"
+msgstr "Language: {language}"
+
+#. @context: Tooltip text for the timestamp on an unpublished draft
+#: src/ui/shared/PostFooter.tsx
+msgid "Last edited on {date} at {time}"
+msgstr "Last edited on {date} at {time}"
 
 #. @context: Active browse tab label on sample page
 #. @context: Browser page title for the latest feed
@@ -1164,6 +1297,13 @@ msgstr "Latest"
 #: src/ui/layouts/BaseLayout.tsx
 msgid "Latest posts"
 msgstr "Latest posts"
+
+#. @context: Archive grid/list toggle group label
+#. @context: Smart collection dialog field
+#: src/ui/pages/ArchivePage.tsx
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Layout"
+msgstr "Layout"
 
 #. @context: Compose publish settings slug help text
 #: src/ui/compose/ComposeDialog.tsx
@@ -1226,10 +1366,8 @@ msgstr "Link to your latest posts. Your homepage shows this feed."
 msgid "Link updated."
 msgstr "Link updated."
 
-#. @context: Archive feed title segment for link format filter
 #. @context: Post format label plural - links
-#: src/routes/pages/archive.tsx
-#: src/ui/pages/ArchivePage.tsx
+#: src/lib/filter-dimensions.ts
 msgid "Links"
 msgstr "Links"
 
@@ -1237,6 +1375,11 @@ msgstr "Links"
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "Links should read clearly without glowing against the page."
 msgstr "Links should read clearly without glowing against the page."
+
+#. @context: Smart collection layout option
+#: src/ui/shared/smart-collection-labels.ts
+msgid "List"
+msgstr "List"
 
 #. @context: Inline link label in the sample note post body
 #. @context: Inline link label in the sample note summary
@@ -1287,6 +1430,8 @@ msgid "March 15"
 msgstr "March 15"
 
 #. @context: Compose toolbar - media tooltip
+#. @context: Post filter dimension name - attached media
+#: src/lib/filter-dimensions.ts
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Media"
 msgstr "Media"
@@ -1332,10 +1477,8 @@ msgid "Navigation and reading states"
 msgstr "Navigation and reading states"
 
 #. @context: Button to create a collection from collections page
-#. @context: Page title for new collection
-#. @context: Page title for new collection
-#: src/ui/pages/CollectionEditorPage.tsx
-#: src/ui/pages/CollectionEditorPage.tsx
+#. @context: Title of the dialog that creates a collection
+#: src/ui/shared/collection-management-labels.ts
 #: src/ui/shared/CollectionsManager.tsx
 msgid "New Collection"
 msgstr "New Collection"
@@ -1366,14 +1509,21 @@ msgstr "New Password"
 msgid "New post"
 msgstr "New post"
 
-#. @context: Compose dialog header title when composing a thread
-#: src/ui/compose/ComposeDialog.tsx
-msgid "New Thread"
-msgstr "New Thread"
+#. @context: Menu item on the collections page that opens the smart collection dialog
+#: src/ui/shared/smart-collection-labels.ts
+msgid "New Smart Collection"
+msgstr "New Smart Collection"
+
+#. @context: Archive page meta note explaining the active sort order
+#: src/ui/pages/ArchivePage.tsx
+msgid "newest changes first"
+msgstr "newest changes first"
 
 #. @context: Collection sort order option
 #. @context: Collection sort order option
+#. @context: Collection sort order option
 #: src/ui/pages/CollectionPage.tsx
+#: src/ui/pages/SmartCollectionPage.tsx
 #: src/ui/shared/collection-management-labels.ts
 msgid "Newest first"
 msgstr "Newest first"
@@ -1401,6 +1551,11 @@ msgstr "No collections match that search. Try a different name."
 msgid "No collections yet. Start one to organize threads by topic."
 msgstr "No collections yet. Start one to organize threads by topic."
 
+#. @context: Smart collection dialog with no conditions set
+#: src/ui/shared/smart-collection-labels.ts
+msgid "No conditions yet. Add one to choose what lands here."
+msgstr "No conditions yet. Add one to choose what lands here."
+
 #. @context: Drafts panel empty state
 #: src/ui/compose/ComposeDialog.tsx
 msgid "No drafts yet. Save a draft to find it here."
@@ -1421,6 +1576,11 @@ msgstr "No results. Try different keywords."
 msgid "No threads match these filters. Try adjusting your selection or clear all filters."
 msgstr "No threads match these filters. Try adjusting your selection or clear all filters."
 
+#. @context: Help text under the compose language field before there is enough writing to read a language out of; {language} is the one it would publish in meanwhile, which is the language of the page the composer was opened from
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Not enough text to tell yet — publishes in {language}"
+msgstr "Not enough text to tell yet — publishes in {language}"
+
 #. @context: Action to dismiss the post-create Collection navigation prompt
 #: src/ui/shared/CollectionsManager.tsx
 msgid "Not now"
@@ -1440,10 +1600,8 @@ msgstr "Note"
 msgid "note treatment"
 msgstr "note treatment"
 
-#. @context: Archive feed title segment for note format filter
 #. @context: Post format label plural - notes
-#: src/routes/pages/archive.tsx
-#: src/ui/pages/ArchivePage.tsx
+#: src/lib/filter-dimensions.ts
 msgid "Notes"
 msgstr "Notes"
 
@@ -1452,14 +1610,36 @@ msgstr "Notes"
 msgid "Nothing here yet. Add threads to one of these collections to fill this view."
 msgstr "Nothing here yet. Add threads to one of these collections to fill this view."
 
+#. @context: Empty state when a collection has no posts in the language being browsed
+#: src/ui/pages/CollectionPage.tsx
+msgid "Nothing in {language} here yet."
+msgstr "Nothing in {language} here yet."
+
 #. @context: Empty state message on featured page
 #: src/ui/pages/FeaturedPage.tsx
 msgid "Nothing in Featured yet. Mark a post as featured to show it here."
 msgstr "Nothing in Featured yet. Mark a post as featured to show it here."
 
+#. @context: Smart collection page when no post matches
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Nothing matches these conditions yet."
+msgstr "Nothing matches these conditions yet."
+
+#. @context: Value shown on a post's date control when it will publish at the current time
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Now"
+msgstr "Now"
+
+#. @context: Archive page count when a filter narrows the view, following the matching count — reads as '42 of 1,240 threads'
+#: src/ui/pages/ArchivePage.tsx
+msgid "of {total} {unit}"
+msgstr "of {total} {unit}"
+
+#. @context: Collection sort order option
 #. @context: Collection sort order option
 #. @context: Collection sort order option
 #: src/ui/pages/CollectionPage.tsx
+#: src/ui/pages/SmartCollectionPage.tsx
 #: src/ui/shared/collection-management-labels.ts
 msgid "Oldest first"
 msgstr "Oldest first"
@@ -1499,6 +1679,16 @@ msgstr "Open raw PNG"
 msgid "Open raw SVG"
 msgstr "Open raw SVG"
 
+#. @context: Tooltip on the source post link above the compose editor while writing a translation
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Open the original in a new tab"
+msgstr "Open the original in a new tab"
+
+#. @context: Collection editing dialog field
+#: src/ui/shared/collection-management-labels.ts
+msgid "Order by"
+msgstr "Order by"
+
 #. @context: Menu action to organize collections
 #: src/ui/shared/CollectionsManager.tsx
 msgid "Organize"
@@ -1510,8 +1700,6 @@ msgid "Outline"
 msgstr "Outline"
 
 #. @context: Setup/signin form field - password
-#. @context: Setup/signin form field - password
-#: src/routes/auth/setup.tsx
 #: src/routes/auth/signin.tsx
 msgid "Password"
 msgstr "Password"
@@ -1537,6 +1725,11 @@ msgstr ""
 msgid "Paste a URL..."
 msgstr "Paste a URL..."
 
+#. @context: Post status badge for a pinned post
+#: src/ui/feed/PostStatusBadges.tsx
+msgid "Pinned"
+msgstr "Pinned"
+
 #. @context: Compose button - publish post
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Post"
@@ -1556,6 +1749,11 @@ msgstr "Post hidden"
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Post privately"
 msgstr "Post privately"
+
+#. @context: Smart collection dialog — conditions are combined with AND
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Posts matching all of these"
+msgstr "Posts matching all of these"
 
 #. @context: Hover hint for the homepage compose shortcut
 #: src/ui/compose/ComposePrompt.tsx
@@ -1600,15 +1798,17 @@ msgstr "Primary logo files"
 
 #. @context: Archive visibility filter - private posts
 #. @context: Compose publish settings visibility option
+#. @context: Post status badge for a private post
+#: src/lib/filter-dimensions.ts
 #: src/ui/compose/ComposeDialog.tsx
-#: src/ui/pages/ArchivePage.tsx
+#: src/ui/feed/PostStatusBadges.tsx
 msgid "Private"
 msgstr "Private"
 
 #. @context: Archive visibility filter - public posts
 #. @context: Compose publish settings visibility option
+#: src/lib/filter-dimensions.ts
 #: src/ui/compose/ComposeDialog.tsx
-#: src/ui/pages/ArchivePage.tsx
 msgid "Public"
 msgstr "Public"
 
@@ -1618,11 +1818,6 @@ msgstr "Public"
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "Publish"
 msgstr "Publish"
-
-#. @context: Compose summary shown near the submit controls when an edited post no longer has a custom publish date
-#: src/ui/compose/ComposeDialog.tsx
-msgid "Publish now"
-msgstr "Publish now"
 
 #. @context: Compose publish settings panel title
 #: src/ui/compose/ComposeDialog.tsx
@@ -1673,11 +1868,9 @@ msgstr "Quote"
 msgid "Quoted or highlighted passages should feel like annotations, not warnings."
 msgstr "Quoted or highlighted passages should feel like annotations, not warnings."
 
-#. @context: Archive feed title segment for quote format filter
 #. @context: Placeholder for the custom collections link label
 #. @context: Post format label plural - quotes
-#: src/routes/pages/archive.tsx
-#: src/ui/pages/ArchivePage.tsx
+#: src/lib/filter-dimensions.ts
 #: src/ui/shared/collection-management-labels.ts
 msgid "Quotes"
 msgstr "Quotes"
@@ -1686,6 +1879,21 @@ msgstr "Quotes"
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Rate"
 msgstr "Rate"
+
+#. @context: Help text under the compose language field
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Read from what you write"
+msgstr "Read from what you write"
+
+#. @context: Help text under the compose language field once a language has been detected
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Read from what you write — looks like {language}"
+msgstr "Read from what you write — looks like {language}"
+
+#. @context: Link out of an empty language view of a collection
+#: src/ui/pages/CollectionPage.tsx
+msgid "Read it in {language}"
+msgstr "Read it in {language}"
 
 #. @context: Collapse an expanded untitled note back to its preview in the feed
 #: src/ui/feed/NoteCard.tsx
@@ -1727,6 +1935,11 @@ msgstr "References"
 msgid "Remove attachment"
 msgstr "Remove attachment"
 
+#. @context: Smart collection dialog condition row button
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Remove condition"
+msgstr "Remove condition"
+
 #. @context: Tooltip for divider delete button
 #: src/ui/shared/CollectionsManager.tsx
 msgid "Remove Divider"
@@ -1748,15 +1961,15 @@ msgid "Replace image"
 msgstr "Replace image"
 
 #. @context: Archive tile label for multiple thread replies
+#. @context: Post filter dimension name - whether a thread has replies
+#: src/lib/filter-dimensions.ts
 #: src/ui/pages/ArchivePage.tsx
 msgid "Replies"
 msgstr "Replies"
 
 #. @context: Archive tile label for a single thread reply
 #. @context: Compose button - reply to post
-#. @context: Compose dialog header title when replying to a post
 #. @context: Reply button label in the post footer
-#: src/ui/compose/ComposeDialog.tsx
 #: src/ui/compose/ComposeDialog.tsx
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/shared/PostFooter.tsx
@@ -1793,8 +2006,16 @@ msgstr "Reset Password"
 msgid "Reverse logo"
 msgstr "Reverse logo"
 
+#. @context: Built-in navigation label for the feed. Keep the acronym in every locale — it is what readers scan for. The document /feed serves is Atom, but RSS is the category name readers and feed apps use, and it matches the vocabulary the rest of the product already speaks (systemKey `rss`, `mainRssFeed`). 'Feed' would collide with Featured/Latest/All, which are feeds too.
+#: src/ui/shared/navigation-labels.ts
+msgctxt "nav"
+msgid "RSS"
+msgstr "RSS"
+
+#. @context: Tooltip for the RSS feed link on a collection page
 #. @context: Tooltip for the RSS feed link on a collection page
 #: src/ui/pages/CollectionPage.tsx
+#: src/ui/pages/SmartCollectionPage.tsx
 msgid "RSS feed"
 msgstr "RSS feed"
 
@@ -1891,6 +2112,21 @@ msgstr "Settings"
 msgid "Shared links"
 msgstr "Shared links"
 
+#. @context: Button that brings back the folded-away original while writing its translation
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Show"
+msgstr "Show"
+
+#. @context: Archive view option - grid
+#: src/ui/pages/ArchivePage.tsx
+msgid "Show as a grid of tiles"
+msgstr "Show as a grid of tiles"
+
+#. @context: Archive view option - list
+#: src/ui/pages/ArchivePage.tsx
+msgid "Show as a list with full posts"
+msgstr "Show as a list with full posts"
+
 #. @context: Collapse expanded thread ancestor context in the feed
 #. @context: Collapse expanded thread ancestor context in the feed
 #. @context: Collapse reply context
@@ -1908,6 +2144,11 @@ msgstr "Show less"
 #: src/ui/pages/PostPage.tsx
 msgid "Show more"
 msgstr "Show more"
+
+#. @context: Accessible name of the button that brings back the folded-away post being translated
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Show the original"
+msgstr "Show the original"
 
 #. @context: Description for the settings system navigation toggle
 #: src/ui/shared/navigation-labels.ts
@@ -1934,12 +2175,9 @@ msgstr "Sign In"
 msgid "Sign in to start writing."
 msgstr "Sign in to start writing."
 
-#. @context: Archive feed title segment for hasReplies=0 filter
-#: src/routes/pages/archive.tsx
-msgid "single posts"
-msgstr "single posts"
-
 #. @context: Archive thread filter - posts without replies
+#. @context: Archive thread filter - posts without replies
+#: src/lib/filter-dimensions.ts
 #: src/ui/pages/ArchivePage.tsx
 msgid "Single posts"
 msgstr "Single posts"
@@ -1949,15 +2187,27 @@ msgstr "Single posts"
 msgid "Site accent"
 msgstr "Site accent"
 
-#. @context: Setup form field - site name
-#: src/routes/auth/setup.tsx
-msgid "Site Name"
-msgstr "Site Name"
-
 #. @context: Description for the favicon asset card
 #: src/ui/pages/BrandPage.tsx
 msgid "Small browser icon used in tabs and bookmarks."
 msgstr "Small browser icon used in tabs and bookmarks."
+
+#. @context: Name of a collection whose members come from conditions
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Smart Collection"
+msgstr "Smart Collection"
+
+#. @context: Confirmation after deleting a smart collection
+#. @context: Confirmation after deleting a smart collection
+#: src/ui/pages/SmartCollectionPage.tsx
+#: src/ui/shared/CollectionsManager.tsx
+msgid "Smart collection deleted."
+msgstr "Smart collection deleted."
+
+#. @context: Confirmation after saving a smart collection
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Smart collection saved."
+msgstr "Smart collection saved."
 
 #. @context: Asset keyword on the public brand asset page
 #: src/ui/pages/BrandPage.tsx
@@ -1976,11 +2226,9 @@ msgstr "Some uploads failed. Saved as draft."
 
 #. @context: Fallback validation error for compose form
 #. @context: Fallback validation error for password reset form
-#. @context: Fallback validation error for setup form
 #. @context: Fallback validation error for sign-in form
 #. @context: Fallback validation error for thread compose form
 #: src/routes/auth/reset.tsx
-#: src/routes/auth/setup.tsx
 #: src/routes/auth/signin.tsx
 #: src/routes/compose.tsx
 #: src/routes/compose.tsx
@@ -1988,14 +2236,26 @@ msgid "Something doesn't look right. Check the form and try again."
 msgstr "Something doesn't look right. Check the form and try again."
 
 #. @context: Sort menu label on collection detail page
+#. @context: Sort menu label on collection detail page
 #: src/ui/pages/CollectionPage.tsx
+#: src/ui/pages/SmartCollectionPage.tsx
 msgid "Sort"
 msgstr "Sort"
 
-#. @context: Collection form field
-#: src/ui/shared/collection-management-labels.ts
-msgid "Sort Order"
-msgstr "Sort Order"
+#. @context: Archive sort option - threads that recently gained a post first
+#: src/ui/pages/ArchivePage.tsx
+msgid "Sort by when each thread was last added to"
+msgstr "Sort by when each thread was last added to"
+
+#. @context: Archive sort option - newest published first
+#: src/ui/pages/ArchivePage.tsx
+msgid "Sort by when each thread was published"
+msgstr "Sort by when each thread was published"
+
+#. @context: Archive sort toggle group label
+#: src/ui/pages/ArchivePage.tsx
+msgid "Sort order"
+msgstr "Sort order"
 
 #. @context: Compose quote source link placeholder
 #: src/ui/compose/ComposeDialog.tsx
@@ -2086,8 +2346,8 @@ msgstr "Text"
 
 #. @context: Archive media filter - text file attachments
 #. @context: Attached text panel title
+#: src/lib/filter-dimensions.ts
 #: src/ui/compose/ComposeDialog.tsx
-#: src/ui/pages/ArchivePage.tsx
 msgid "Text attachment"
 msgstr "Text attachment"
 
@@ -2120,6 +2380,11 @@ msgstr "The default accent works best when it reads like a fountain-pen underlin
 #: src/ui/pages/ThemeSamplePage.tsx
 msgid "The image should sit quietly inside the article instead of feeling like a card preview."
 msgstr "The image should sit quietly inside the article instead of feeling like a card preview."
+
+#. @context: Accessible name of the scrollable panel holding the post being translated
+#: src/ui/compose/ComposeDialog.tsx
+msgid "The original"
+msgstr "The original"
 
 #. @context: Blockquote on the theme sample page
 #: src/ui/pages/ThemeSamplePage.tsx
@@ -2184,6 +2449,11 @@ msgstr "This link is already in use. Choose something else."
 msgid "This link is reserved. Choose something else."
 msgstr "This link is reserved. Choose something else."
 
+#. @context: Collection editing dialog — the typed collection link is already in use
+#: src/ui/shared/collection-management-labels.ts
+msgid "This link is taken. Choose another."
+msgstr "This link is taken. Choose another."
+
 #. @context: Explanation in the draft preview status bar
 #: src/ui/shared/DraftPreviewBar.tsx
 msgid "This post isn’t published."
@@ -2220,10 +2490,14 @@ msgstr "This uses the real single-post detail rendering with a longer article, i
 #. @context: Archive page summary unit for a single matching thread
 #. @context: Singular thread count label
 #. @context: Singular thread count label
+#. @context: Singular thread count label
+#. @context: Singular thread count label on collection detail page
 #. @context: Singular thread count label on collection detail page
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/CollectionPage.tsx
+#: src/ui/pages/SmartCollectionPage.tsx
+#: src/ui/shared/CollectionDirectory.tsx
 #: src/ui/shared/CollectionDirectory.tsx
 #: src/ui/shared/CollectionsManager.tsx
 msgid "thread"
@@ -2239,22 +2513,26 @@ msgstr "Thread accent"
 msgid "Thread accents"
 msgstr "Thread accents"
 
-#. @context: Archive feed title segment for hasReplies=1 filter
 #. @context: Archive month header count unit for multiple threads
 #. @context: Archive page summary unit for multiple matching threads
 #. @context: Plural thread count label
 #. @context: Plural thread count label
+#. @context: Plural thread count label
 #. @context: Plural thread count label on collection detail page
-#: src/routes/pages/archive.tsx
+#. @context: Plural thread count label on collection detail page
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/CollectionPage.tsx
+#: src/ui/pages/SmartCollectionPage.tsx
+#: src/ui/shared/CollectionDirectory.tsx
 #: src/ui/shared/CollectionDirectory.tsx
 #: src/ui/shared/CollectionsManager.tsx
 msgid "threads"
 msgstr "threads"
 
 #. @context: Archive thread filter - thread roots with replies
+#. @context: Archive thread filter - thread roots with replies
+#: src/lib/filter-dimensions.ts
 #: src/ui/pages/ArchivePage.tsx
 msgid "Threads"
 msgstr "Threads"
@@ -2265,18 +2543,22 @@ msgid "Threads can include up to {count} posts."
 msgstr "Threads can include up to {count} posts."
 
 #. @context: Collection form field
-#. @context: Compose note title placeholder
-#. @context: Compose toolbar - title tooltip
+#. @context: Compose toolbar - show or hide the title field
 #. @context: Input label on sample page
-#: src/ui/compose/ComposeDialog.tsx
+#. @context: Post filter dimension name - whether a post is titled
+#. @context: Smart collection dialog field
+#: src/lib/filter-dimensions.ts
 #: src/ui/compose/ComposeDialog.tsx
 #: src/ui/pages/ThemeSamplePage.tsx
 #: src/ui/shared/collection-management-labels.ts
+#: src/ui/shared/smart-collection-labels.ts
 msgid "Title"
 msgstr "Title"
 
 #. @context: Archive filter - notes that have a title
 #. @context: Archive filter - notes that have a title
+#. @context: Archive filter - notes that have a title
+#: src/lib/filter-dimensions.ts
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/ArchivePage.tsx
 msgid "Titled"
@@ -2291,6 +2573,21 @@ msgstr "to make sure both still feel like they belong to the same product."
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Toggle header row"
 msgstr "Toggle header row"
+
+#. @context: Divider between the original post and the editor writing its translation, when the target language is not known yet
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Translating"
+msgstr "Translating"
+
+#. @context: Divider between the original post above and the editor below, naming the language being written
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Translating into {language}"
+msgstr "Translating into {language}"
+
+#. @context: Compose banner shown while writing a translation of an existing post
+#: src/ui/compose/ComposeDialog.tsx
+msgid "Translation of “{title}”"
+msgstr "Translation of “{title}”"
 
 #. @context: Usage label for the square logo PNG asset card
 #: src/ui/pages/BrandPage.tsx
@@ -2314,6 +2611,10 @@ msgstr "Type the quote..."
 
 #. @context: Archive filter - notes without a title
 #. @context: Archive filter - notes without a title
+#. @context: Archive filter - notes without a title
+#. @context: Compose note title placeholder. States what the note is while the field is empty rather than asking for a title — untitled notes are a normal kind of note here, and Archive files them under this same word.
+#: src/lib/filter-dimensions.ts
+#: src/ui/compose/ComposeDialog.tsx
 #: src/ui/pages/ArchivePage.tsx
 #: src/ui/pages/ArchivePage.tsx
 msgid "Untitled"
@@ -2382,7 +2683,7 @@ msgid "Use this page to judge buttons, links, cards, forms, thread accents, and 
 msgstr "Use this page to judge buttons, links, cards, forms, thread accents, and quiet surfaces before changing a theme globally."
 
 #. @context: Archive media filter - video
-#: src/ui/pages/ArchivePage.tsx
+#: src/lib/filter-dimensions.ts
 msgid "Video"
 msgstr "Video"
 
@@ -2397,14 +2698,11 @@ msgid "View earlier notes in this thread"
 msgstr "View earlier notes in this thread"
 
 #. @context: Compose publish settings section label
+#. @context: Post filter dimension name - who can see a post
+#: src/lib/filter-dimensions.ts
 #: src/ui/compose/ComposeDialog.tsx
 msgid "Visibility"
 msgstr "Visibility"
-
-#. @context: Setup page welcome heading
-#: src/routes/auth/setup.tsx
-msgid "Welcome to Jant"
-msgstr "Welcome to Jant"
 
 #. @context: Table header in the sample detail article
 #: src/ui/pages/ThemeSamplePage.tsx
@@ -2461,25 +2759,21 @@ msgstr "White logo on the Jant green square tile for platforms and layouts that 
 msgid "Why the default accent should feel written, not branded"
 msgstr "Why the default accent should feel written, not branded"
 
-#. @context: Archive feed title segment for hasMedia=1 filter
-#: src/routes/pages/archive.tsx
-msgid "with media"
-msgstr "with media"
+#. @context: Archive filter - posts carrying any media attachment
+#. @context: Archive filter - posts carrying any media attachment
+#. @context: Archive filter - posts carrying any media attachment
+#: src/lib/filter-dimensions.ts
+#: src/ui/pages/ArchivePage.tsx
+#: src/ui/shared/smart-collection-labels.ts
+msgid "With media"
+msgstr "With media"
 
-#. @context: Archive feed title segment for hasTitle=1 filter
-#: src/routes/pages/archive.tsx
-msgid "with title"
-msgstr "with title"
-
-#. @context: Archive feed title segment for hasMedia=0 filter
-#: src/routes/pages/archive.tsx
-msgid "without media"
-msgstr "without media"
-
-#. @context: Archive feed title segment for hasTitle=0 filter
-#: src/routes/pages/archive.tsx
-msgid "without title"
-msgstr "without title"
+#. @context: Archive filter - posts with no media attachment
+#. @context: Archive filter - posts with no media attachment
+#: src/lib/filter-dimensions.ts
+#: src/ui/shared/smart-collection-labels.ts
+msgid "Without media"
+msgstr "Without media"
 
 #. @context: Compose publish settings hint for quiet reply switch
 #: src/ui/compose/ComposeDialog.tsx
@@ -2495,6 +2789,11 @@ msgstr "Write your first post to get started."
 #: src/routes/auth/signin.tsx
 msgid "Wrong email or password. Check your credentials and try again."
 msgstr "Wrong email or password. Check your credentials and try again."
+
+#. @context: Post filter dimension name - year of publication
+#: src/lib/filter-dimensions.ts
+msgid "Year"
+msgstr "Year"
 
 #. @context: Confirm close action sheet title when editing a published post
 #: src/ui/compose/ComposeDialog.tsx

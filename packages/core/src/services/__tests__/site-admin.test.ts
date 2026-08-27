@@ -53,8 +53,8 @@ describe("SiteAdminService", () => {
 
     expect(navigationRows).toEqual([
       { systemKey: "featured", placement: "header" },
-      { systemKey: "collections", placement: "header" },
       { systemKey: "archive", placement: "header" },
+      { systemKey: "collections", placement: "more" },
       { systemKey: "rss", placement: "more" },
       { systemKey: "settings", placement: "more" },
     ]);
@@ -182,12 +182,12 @@ describe("SiteAdminService", () => {
     expect(recovered.site.id).toBe(first.site.id);
     expect(navigationRows.map((row) => row.systemKey)).toEqual([
       "featured",
-      "collections",
       "archive",
+      "collections",
       "rss",
       "settings",
     ]);
-    expect(onboarding.value).toBe("completed");
+    expect(onboarding.value).toBe("provisioned");
   });
 
   it("rejects reuse of an idempotency key with different key or primary host", async () => {

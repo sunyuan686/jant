@@ -14,14 +14,12 @@ const labels = {
   fullscreen: "Fullscreen",
   exitFullscreen: "Exit fullscreen",
   done: "Done",
-  title: "Title",
   titlePlaceholder: "Title",
   bodyPlaceholder: "What's on your mind...",
   showMore: "Show more",
   showLess: "Show less",
-  newThread: "New Thread",
-  replyTitle: "Reply",
-  editTitle: "Edit",
+  editing: "Editing",
+  composeDialogLabel: "Compose",
 } as ComposeLabels;
 
 async function flush(el?: JantComposeFullscreen) {
@@ -58,7 +56,7 @@ describe("JantComposeFullscreen", () => {
     }
   });
 
-  it("opens in body-first mode when the title is hidden", async () => {
+  it("shows the title field when the editor arrived with one open", async () => {
     const el = document.createElement(
       "jant-compose-fullscreen",
     ) as JantComposeFullscreen;
@@ -68,26 +66,39 @@ describe("JantComposeFullscreen", () => {
 
     document.dispatchEvent(
       new CustomEvent("jant:fullscreen-open", {
-        detail: {
-          json: null,
-          title: "",
-          showTitle: false,
-          labels,
-        },
+        detail: { json: null, title: "", showTitle: true, labels },
+      }),
+    );
+    await flush(el);
+
+    expect(el.querySelector(".compose-fullscreen-title")).not.toBeNull();
+    expect(el.textContent).not.toContain("Fullscreen");
+  });
+
+  it("offers a way back to a title the editor had hidden", async () => {
+    const el = document.createElement(
+      "jant-compose-fullscreen",
+    ) as JantComposeFullscreen;
+    el.labels = labels;
+    document.body.appendChild(el);
+    await flush(el);
+
+    document.dispatchEvent(
+      new CustomEvent("jant:fullscreen-open", {
+        detail: { json: null, title: "", showTitle: false, labels },
       }),
     );
     await flush(el);
 
     expect(el.querySelector(".compose-fullscreen-title")).toBeNull();
-    expect(
-      el.querySelector(".compose-fullscreen-title-placeholder"),
-    ).not.toBeNull();
-    expect(el.textContent).not.toContain("Fullscreen");
-    expect(
-      el.querySelector(
-        ".compose-fullscreen-toolbar .compose-fullscreen-title-placeholder",
-      ),
-    ).toBeNull();
+    const reveal = el.querySelector<HTMLButtonElement>(
+      ".compose-fullscreen-title-placeholder",
+    );
+    expect(reveal).not.toBeNull();
+
+    reveal?.click();
+    await flush(el);
+    expect(el.querySelector(".compose-fullscreen-title")).not.toBeNull();
   });
 
   it.each(["metaKey", "ctrlKey"] as const)(
@@ -105,7 +116,6 @@ describe("JantComposeFullscreen", () => {
           detail: {
             json: null,
             title: "Keyboard post",
-            showTitle: true,
             labels,
             editorIndex: 2,
           },
@@ -173,7 +183,6 @@ describe("JantComposeFullscreen", () => {
         detail: {
           json: null,
           title: "",
-          showTitle: false,
           labels,
         },
       }),
@@ -192,66 +201,6 @@ describe("JantComposeFullscreen", () => {
     await flush(el);
 
     expect(el.querySelector(".compose-fullscreen-dialog")).not.toBeNull();
-  });
-
-  it("reveals the title on demand and returns its visibility on close", async () => {
-    const el = document.createElement(
-      "jant-compose-fullscreen",
-    ) as JantComposeFullscreen;
-    el.labels = labels;
-    document.body.appendChild(el);
-    await flush(el);
-
-    document.dispatchEvent(
-      new CustomEvent("jant:fullscreen-open", {
-        detail: {
-          json: null,
-          title: "",
-          showTitle: false,
-          labels,
-        },
-      }),
-    );
-    await flush(el);
-
-    const toggle = el.querySelector<HTMLButtonElement>(
-      ".compose-fullscreen-title-placeholder",
-    );
-    expect(toggle).not.toBeNull();
-    toggle?.click();
-    await flush(el);
-
-    const input = el.querySelector<HTMLInputElement>(
-      ".compose-fullscreen-title",
-    );
-    expect(input).not.toBeNull();
-    if (!input) {
-      throw new Error("expected fullscreen title input");
-    }
-    input.value = "Desk Notes";
-    input.dispatchEvent(new Event("input"));
-
-    let detail: ComposeFullscreenCloseDetail | null = null;
-    document.addEventListener(
-      "jant:fullscreen-close",
-      (event) => {
-        detail = (event as CustomEvent<ComposeFullscreenCloseDetail>).detail;
-      },
-      { once: true },
-    );
-
-    el.querySelector<HTMLButtonElement>(".compose-fullscreen-done")?.click();
-
-    expect(detail).toMatchObject({
-      json: {
-        type: "doc",
-        content: [{ type: "paragraph" }],
-      },
-      title: "Desk Notes",
-      showTitle: true,
-      replyExpanded: false,
-      selection: { from: 1, to: 1 },
-    });
   });
 
   it("restores and returns the current editor selection", async () => {
@@ -275,7 +224,6 @@ describe("JantComposeFullscreen", () => {
             ],
           },
           title: "",
-          showTitle: false,
           selection: { from: 4, to: 4 },
           labels,
         },
@@ -318,7 +266,7 @@ describe("JantComposeFullscreen", () => {
         detail: {
           json: null,
           title: "",
-          showTitle: false,
+          showTitle: true,
           labels,
           replyContext: {
             contentHtml: "<p>A quiet sentence worth answering.</p>",
@@ -333,9 +281,10 @@ describe("JantComposeFullscreen", () => {
     expect(el.textContent).toContain("A quiet sentence worth answering.");
     expect(el.textContent).toContain("Mar 10, 2026");
     expect(el.textContent).toContain("Show more");
+    // The reply's title field lives inside its own row, not the toolbar.
     expect(
       el.querySelector(
-        ".compose-fullscreen-editor-row .compose-fullscreen-title-placeholder-reply",
+        ".compose-fullscreen-editor-row .compose-fullscreen-title-reply",
       ),
     ).not.toBeNull();
   });
@@ -353,7 +302,6 @@ describe("JantComposeFullscreen", () => {
         detail: {
           json: null,
           title: "Follow-up",
-          showTitle: true,
           labels,
           replyContext: {
             contentHtml: "<p>Thread seed.</p>",
@@ -390,7 +338,6 @@ describe("JantComposeFullscreen", () => {
         detail: {
           json: null,
           title: "",
-          showTitle: false,
           labels,
           replyContext: {
             contentHtml: "<p>One more thread preview.</p>",
@@ -436,7 +383,6 @@ describe("JantComposeFullscreen", () => {
         detail: {
           json: null,
           title: "",
-          showTitle: false,
           labels,
         },
       }),
@@ -491,7 +437,6 @@ describe("JantComposeFullscreen", () => {
             ],
           },
           title: "",
-          showTitle: false,
           labels,
         },
       }),

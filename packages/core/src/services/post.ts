@@ -15,6 +15,7 @@ import {
   isNull,
   desc,
   inArray,
+  notInArray,
   sql,
   isNotNull,
   asc,
@@ -32,6 +33,11 @@ import {
   sqliteSchemaBundle,
   type DatabaseSchema,
 } from "../db/schema-bundle.js";
+import {
+  buildRootActivityExpr,
+  rootActivityColumns,
+} from "../db/thread-activity.js";
+import { buildReaderVisibilityConditions } from "../db/post-visibility.js";
 import { createEntityId } from "../lib/ids.js";
 import { now } from "../lib/time.js";
 import { trimTiptapBody } from "../lib/tiptap-render.js";
@@ -74,6 +80,14 @@ import {
   ValidationError,
   NotFoundError,
 } from "../lib/errors.js";
+import {
+  isValidContentLanguage,
+  normalizeContentLanguage,
+  toLanguagePrefix,
+} from "../i18n/locales.js";
+import { readLanguageSettings } from "./language.js";
+import { getOrBuildEntry } from "../i18n/supported-locales.js";
+import { suggestPostLanguage } from "../lib/lang-detect.js";
 import { createPathService, type PathService } from "./path.js";
 import {
   extractYouTubeVideoId,
@@ -141,8 +155,26 @@ export interface PostFilters {
   publishedAfter?: number;
   /** Unix timestamp (exclusive) — only posts published before this time */
   publishedBefore?: number;
+  /**
+   * Unix timestamp (inclusive) — range filter on whichever column `sortBy`
+   * selects. Kept separate from `publishedAfter` so a caller can pin a
+   * publication window (the RSS delay) and still filter on the sort axis.
+   */
+  axisAfter?: number;
+  /** Unix timestamp (exclusive) — upper bound on the `sortBy` column */
+  axisBefore?: number;
   /** Media kinds to filter by (OR logic: post has media of ANY selected kind). */
   mediaKinds?: MediaKind[];
+  /**
+   * Restrict to one BCP 47 content language (canonical form, matched exactly).
+   *
+   * A plain column predicate is correct at every grain because `post.language`
+   * is uniform across a Thread — replies inherit the Root's value and a
+   * language change rewrites the whole Thread. It rides along as a residual
+   * predicate on the existing hot-path partial indexes rather than getting its
+   * own index; see the multilingual design notes for the upgrade path.
+   */
+  lang?: string;
   /** Filter by media presence */
   hasMedia?: boolean;
   /** Filter by title presence */
@@ -156,13 +188,32 @@ export interface PostFilters {
   hasReplies?: boolean;
   /** Explicit result sort order */
   sortOrder?: SortOrder;
-  /** Timestamp used for chronological sorting (defaults to thread activity). */
-  sortBy?: "activity" | "published";
+  /**
+   * Time axis for chronological queries (defaults to announced activity).
+   *
+   * - `activity` — `lastActivityAt`: last announced post. Quiet replies do not
+   *   move it. Latest and the feeds use this.
+   * - `thread_updated` — `threadUpdatedAt`: last post of any kind, quiet
+   *   included. The archive's updated sort uses this.
+   * - `published` — when the Thread root itself was published.
+   *
+   * Selects the column used for sorting **and** for the year/month bucketing
+   * done by `countByYearMonth` and `getDistinctYears`, so a caller that groups
+   * its results cannot end up with buckets that disagree with the order.
+   */
+  sortBy?: "activity" | "thread_updated" | "published";
   /** Ignore global pinned ordering when results must remain chronological. */
   ignorePinnedSort?: boolean;
   limit?: number;
   cursor?: string;
   offset?: number; // offset for page-based pagination
+}
+
+/** What one filter measured over a set of Posts. See `aggregateMany`. */
+export interface PostFilterAggregate {
+  count: number;
+  /** Newest activity among the matched rows; `null` when nothing matched. */
+  recentActivityAt: number | null;
 }
 
 /** Config for automatic summary extraction */
@@ -175,6 +226,8 @@ interface ThreadRootPageOptions {
   status?: Status;
   excludePrivate?: boolean;
   excludeLatestHidden?: boolean;
+  /** See `PostFilters.lang`. */
+  lang?: string;
   /** Exclude Posts published at or after this Unix timestamp. */
   publishedBefore?: number;
   /** Restrict by the Thread root's format without excluding Child Posts. */
@@ -243,7 +296,40 @@ export interface SitemapPostEntry {
   alias: string | null;
   updatedAt: number;
   featuredAt: number | null;
+  /** Content language, when the post has one. */
+  language: string | null;
+  /** Translation group, used to emit sitemap `hreflang` alternates. */
+  translationGroupId: string | null;
 }
+
+/**
+ * What an address the author pasted turned out to be, for the one question the
+ * translation picker asks: can this Thread be linked to that one?
+ *
+ * Every "no" carries which one it is, because the author is looking at a page
+ * they know exists and needs to be told what is wrong with it, not that the
+ * search found nothing.
+ */
+export type TranslationCandidateResolution =
+  /** Linkable: the Thread root the address names. */
+  | { status: "ok"; post: Post }
+  /** No page at that address — a typo, or something since deleted. */
+  | { status: "not_found" }
+  /** A real page, but a collection or an archive rather than a Post. */
+  | { status: "not_a_post" }
+  /** The Thread the author is already linking from. */
+  | { status: "same_thread" }
+  | { status: "unpublished" }
+  /** Nothing to translate between until it has a language. */
+  | { status: "no_language" }
+  /** Written in the same language as this Thread. */
+  | { status: "same_language" }
+  /** A Thread already linked here speaks for that language. */
+  | { status: "language_taken"; language: string }
+  /** Both sides carry a group; linking would silently merge them. */
+  | { status: "group_conflict" }
+  /** Its group already holds this Thread's language. */
+  | { status: "group_language_taken"; language: string };
 
 export interface PostService {
   getById(id: string): Promise<Post | null>;
@@ -289,7 +375,39 @@ export interface PostService {
   count(filters?: PostFilters): Promise<number>;
   /** Count posts matching filters up to a fixed limit (ignores cursor, offset, limit) */
   countUpTo(filters: PostFilters | undefined, limit: number): Promise<number>;
-  /** Count posts grouped by published year-month (YYYY-MM) */
+  /**
+   * Measure several filters at once, in a single round trip.
+   *
+   * One table scan with one `SUM(CASE …)` and one `MAX(CASE …)` per filter,
+   * rather than one query per filter. On Workers the round trip is the cost
+   * that matters, and a page that lists twenty smart collections would
+   * otherwise pay twenty of them — `Promise.all` only turns "slow in sequence"
+   * into "expensive in parallel".
+   *
+   * Every predicate is built by the same `buildFilterConditions` a single
+   * `count` uses, so the numbers here and the numbers on the pages they link to
+   * cannot drift.
+   *
+   * `recentActivityAt` is the newest activity among the matched rows, on the
+   * one definition {@link buildRootActivityExpr} holds for everything that
+   * orders or dates a Thread. It reads the matched row's own columns, so it
+   * describes a Thread only when `base` excludes replies — which is what every
+   * caller does, because a reply is not a member of anything.
+   *
+   * @param filters - One filter per measurement, in order
+   * @param base - Applied to every measurement: the site, the reader's
+   *   visibility floor, and anything else common to all of them
+   * @returns Count and newest activity, positionally matching `filters`;
+   *   `recentActivityAt` is `null` where nothing matched
+   * @example
+   * await posts.aggregateMany([{ format: "note" }, { format: "quote" }], base);
+   * // [{ count: 12, recentActivityAt: 1706100000 }, { count: 5, … }]
+   */
+  aggregateMany(
+    filters: readonly PostFilters[],
+    base: PostFilters,
+  ): Promise<PostFilterAggregate[]>;
+  /** Count posts grouped by year-month (YYYY-MM) on the `sortBy` time axis */
   countByYearMonth(
     filters?: PostFilters,
   ): Promise<{ yearMonth: string; count: number }[]>;
@@ -346,11 +464,132 @@ export interface PostService {
    */
   deleteThreadDraft(id: string, deps?: PostDeleteDeps): Promise<boolean>;
   getThread(rootId: string): Promise<Post[]>;
+  /**
+   * 1-based position of a Post in the reply chain running from its Thread root
+   * down to it: a root is 1, a reply to it is 2, a reply to that is 3.
+   *
+   * Threads are stored as a tree (`replyToId`) flattened under one `threadId`,
+   * so this is the Post's depth, not how many Posts the Thread holds — two
+   * replies to the same parent are both at the same position.
+   *
+   * @param postId - TypeID of the Post to locate
+   * @returns The 1-based position, or 0 when no such Post exists
+   * @example
+   * // Root -> reply -> reply, asked about the last one
+   * await posts.getThreadPosition(lastId); // => 3
+   */
+  getThreadPosition(postId: string): Promise<number>;
   updateThreadStatusAndVisibility(
     rootId: string,
     status: Status,
     visibility: Visibility,
   ): Promise<void>;
+  /**
+   * Set the content language of a whole Thread (root and every reply).
+   *
+   * Thread-wide by design: `post.language` is uniform inside a Thread, which is
+   * what lets every language filter stay a plain column predicate. Rejects a
+   * language another Post in the same translation group already holds.
+   *
+   * @param postId - Any Post in the Thread; the Thread is resolved from it
+   * @param language - Canonical BCP 47 tag
+   * @throws {NotFoundError} When no such Post exists on this site
+   * @throws {ConflictError} When the translation group already has that language
+   * @example
+   * await posts.setThreadLanguage(post.id, "zh-Hans");
+   */
+  setThreadLanguage(postId: string, language: string): Promise<void>;
+  /**
+   * Stamp every Post that has no language yet with `language`.
+   *
+   * Runs once when an author turns multilingual content on, and is idempotent
+   * so re-enabling later only touches Posts written while it was off. Scoped to
+   * this site — hosted deployments share one database.
+   *
+   * @param language - Canonical BCP 47 tag of the site's primary language
+   * @returns Number of Posts stamped
+   * @example
+   * await posts.materializeMissingLanguage("zh-Hans"); // => 347
+   */
+  materializeMissingLanguage(language: string): Promise<number>;
+  /** Count Posts on this site that still have no language. */
+  countMissingLanguage(): Promise<number>;
+  /** Count Posts on this site written in `language`, drafts included. */
+  countByLanguage(language: string): Promise<number>;
+  /**
+   * Every language stamped on this site's Posts, with how many carry it.
+   * Drafts included; the pre-multilingual NULL rows are not.
+   */
+  listLanguagesInUse(): Promise<Array<{ language: string; count: number }>>;
+  /**
+   * List the Thread roots that are translations of the given Post, excluding
+   * the Post itself. Empty when it belongs to no translation group.
+   */
+  listTranslations(postId: string): Promise<Post[]>;
+  /**
+   * List translations for many Thread roots in one round trip, keyed by the
+   * root ID that was asked about. Roots with no group are omitted.
+   */
+  getTranslationsMap(postIds: string[]): Promise<Map<string, Post[]>>;
+  /**
+   * Find published Thread roots this Post could be linked to as a translation.
+   *
+   * Filtered server-side rather than in the menu, because "can these two be
+   * linked" is a rule the service owns: a candidate has to be a Thread root in
+   * a language this Post's translation group does not already hold, and the two
+   * groups must not both exist — `linkTranslation` refuses to merge them.
+   * Offering a post that will be rejected teaches the author nothing.
+   *
+   * The match is a plain substring scan over title and body text. It is a
+   * deliberate, authenticated action over one author's own posts, so the cost
+   * is bounded and the shared search index (which cannot express these filters)
+   * is not worth involving.
+   *
+   * @param postId - Any Post in the Thread looking for a translation
+   * @param options - Search text and how many candidates to return
+   * @returns Matching Thread roots, newest first
+   * @example
+   * await posts.listTranslationCandidates(id, { query: "recipe" });
+   */
+  listTranslationCandidates(
+    postId: string,
+    options: { query: string; limit?: number },
+  ): Promise<Post[]>;
+  /**
+   * Resolve an address the author pasted into the Thread it names, and say
+   * whether this Post could be linked to it as a translation.
+   *
+   * The same rules as {@link PostService.listTranslationCandidates}, asked
+   * about one known Thread instead of searched for — so the answer can be a
+   * reason rather than an empty list. An address that lands on a reply names
+   * its Thread, because translations link whole Threads.
+   *
+   * @param postId - Any Post in the Thread looking for a translation
+   * @param path - Internal path, as produced by `toInternalPath()`
+   * @returns The Thread root to link, or why it cannot be
+   * @example
+   * await posts.resolveTranslationCandidate(id, "/hello-world");
+   * // { status: "unpublished" }
+   */
+  resolveTranslationCandidate(
+    postId: string,
+    path: string,
+  ): Promise<TranslationCandidateResolution>;
+  /**
+   * Link two already-published Thread roots as translations of each other.
+   *
+   * Joins the side without a group into the other's group, minting one when
+   * neither has any. Merging two existing groups is refused — that would
+   * silently restructure both sides.
+   *
+   * @throws {ConflictError} When the languages clash or both sides have groups
+   */
+  linkTranslation(postId: string, otherPostId: string): Promise<void>;
+  /**
+   * Remove a Thread root from its translation group. When that leaves a single
+   * Post behind, its group is cleared too so no one-member groups survive.
+   */
+  unlinkTranslation(postId: string): Promise<void>;
   /** Get reply counts for multiple posts */
   getReplyCounts(postIds: string[]): Promise<Map<string, number>>;
   /** Get preview replies for multiple thread roots */
@@ -416,10 +655,31 @@ export interface PostService {
     rootIds: string[],
     options?: Pick<PostFilters, "publishedBefore">,
   ): Promise<Map<string, Post[]>>;
-  /** Get distinct years that have published posts */
+  /** Get distinct years with posts, bucketed on the `sortBy` time axis */
   getDistinctYears(filters?: PostFilters): Promise<number[]>;
-  /** For each thread ID, return the ID of the last published, non-deleted post */
-  getLastPostIdsByThread(threadIds: string[]): Promise<Map<string, string>>;
+  /**
+   * For each Thread ID, resolve the Post that currently ends the chain.
+   *
+   * Two callers need two different answers. Readers ask what the audience can
+   * see, so drafts must not count — the Reply affordance belongs on the last
+   * published Post. The reply guard asks what the chain physically ends with,
+   * and there an unpublished draft still owns the slot: attaching a second
+   * reply to the same parent would fork a structure that is meant to be linear.
+   *
+   * @param threadIds - Thread root IDs to resolve (duplicates are fine)
+   * @param options - `includeDrafts` counts unpublished members as the tail
+   * @returns Map of Thread root ID to its tail Post ID; threads with no
+   *   matching member are absent from the map
+   * @example
+   * ```ts
+   * const tails = await posts.getThreadTailIds([root.id], { includeDrafts: true });
+   * const tailId = tails.get(root.id);
+   * ```
+   */
+  getThreadTailIds(
+    threadIds: string[],
+    options?: { includeDrafts?: boolean },
+  ): Promise<Map<string, string>>;
   /**
    * Rebuild `post.body_text` for a batch of non-deleted posts, cursor-paginated
    * by post id. For each row, recomputes the plain-text extraction via
@@ -559,6 +819,34 @@ function ensurePostRating(
   throw new ErrorCtor("Rating must be an integer between 1 and 5.");
 }
 
+/**
+ * Normalize a caller-supplied content language to what the column stores.
+ *
+ * Empty, missing, and unparseable values all become `null` — the single-language
+ * state — so the column never holds a half-set value. Whether the tag is one
+ * the site actually offers is a settings-layer question, checked where the site
+ * language configuration is in scope.
+ *
+ * @param value - Raw BCP 47 tag from a request or import
+ * @returns Canonical tag (`zh-Hans`), or `null` when there is nothing to store
+ * @example
+ * normalizePostLanguage("ZH-hans"); // "zh-Hans"
+ * normalizePostLanguage("  ");      // null
+ */
+export function normalizePostLanguage(
+  value: string | null | undefined,
+): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!isValidContentLanguage(trimmed)) {
+    throw new ValidationError(
+      "Enter a valid BCP 47 language tag (e.g. en, zh-Hans, ja).",
+    );
+  }
+  return normalizeContentLanguage(trimmed);
+}
+
 function assertPostFormatShape(data: {
   format: Format;
   title?: string | null;
@@ -640,22 +928,28 @@ export function createPostService(
   const databaseDialect = config.databaseDialect ?? "sqlite";
   const usesBatchWrites = !supportsDrizzleTransaction(db, databaseDialect);
 
-  function buildPublishedYearMonthExpr(): SQL<string> {
-    return databaseDialect === "pg"
-      ? sql<string>`to_char(timezone('UTC', to_timestamp(${posts.publishedAt})), 'YYYY-MM')`
-      : sql<string>`strftime('%Y-%m', ${posts.publishedAt}, 'unixepoch')`;
+  /**
+   * Column that carries the time axis selected by `PostFilters.sortBy`.
+   * Sorting, year/month bucketing, and date-range filters all read it through
+   * here so they can never drift onto different columns.
+   */
+  function timeAxisColumn(filters: Pick<PostFilters, "sortBy">) {
+    if (filters.sortBy === "activity") return posts.lastActivityAt;
+    if (filters.sortBy === "thread_updated") return posts.threadUpdatedAt;
+    return posts.publishedAt;
   }
 
-  function buildPublishedYearExpr(): SQL<string> {
+  function buildYearMonthExpr(column: SQLWrapper): SQL<string> {
     return databaseDialect === "pg"
-      ? sql<string>`to_char(timezone('UTC', to_timestamp(${posts.publishedAt})), 'YYYY')`
-      : sql<string>`strftime('%Y', ${posts.publishedAt}, 'unixepoch')`;
+      ? sql<string>`to_char(timezone('UTC', to_timestamp(${column})), 'YYYY-MM')`
+      : sql<string>`strftime('%Y-%m', ${column}, 'unixepoch')`;
   }
 
-  const effectiveVisibilityExpr = sql<string>`coalesce(
-    ${posts.visibility},
-    (SELECT root.visibility FROM post AS root WHERE root.id = ${posts.threadId} AND root.site_id = ${siteId})
-  )`;
+  function buildYearExpr(column: SQLWrapper): SQL<string> {
+    return databaseDialect === "pg"
+      ? sql<string>`to_char(timezone('UTC', to_timestamp(${column})), 'YYYY')`
+      : sql<string>`strftime('%Y', ${column}, 'unixepoch')`;
+  }
 
   /** Check if a slug is available (not used by posts or path_registry) */
   async function isSlugAvailable(slug: string): Promise<boolean> {
@@ -690,28 +984,58 @@ export function createPostService(
     return rows.length > 0;
   }
 
-  async function recalculateThreadLastActivity(rootId: string): Promise<void> {
+  /**
+   * Recompute both Thread activity timestamps on the root from the Thread's
+   * rows.
+   *
+   * - `lastActivityAt` — newest published post excluding quiet replies. This
+   *   is "last announced" and drives Latest and the feeds.
+   * - `threadUpdatedAt` — newest published post including quiet replies. This
+   *   is "last changed" and drives the archive's updated sort.
+   *
+   * Both are derived, never accumulated, so a quiet reply stays quiet no
+   * matter what later edits or deletions trigger a recalculation.
+   *
+   * @param rootId - Thread root post ID
+   */
+  async function recalculateThreadActivity(rootId: string): Promise<void> {
     const rootRows = await db
       .select({
-        latestPublishedAt: sql<number | null>`MAX(${posts.publishedAt})`.as(
-          "latest_published_at",
+        announcedAt: sql<number | null>`MAX(
+          CASE
+            WHEN ${posts.quietReply} THEN NULL
+            ELSE ${posts.publishedAt}
+          END
+        )`.as("announced_at"),
+        updatedAt: sql<number | null>`MAX(${posts.publishedAt})`.as(
+          "thread_updated_at",
         ),
       })
       .from(posts)
-      .where(and(eq(posts.siteId, siteId), eq(posts.threadId, rootId)));
+      .where(
+        and(
+          eq(posts.siteId, siteId),
+          eq(posts.threadId, rootId),
+          eq(posts.status, "published"),
+        ),
+      );
 
-    const latestPublishedAt = rootRows[0]?.latestPublishedAt ?? null;
+    const announcedAt = rootRows[0]?.announcedAt ?? null;
+    const threadUpdatedAt = rootRows[0]?.updatedAt ?? null;
     const root = await db
       .select({ updatedAt: posts.updatedAt })
       .from(posts)
       .where(and(eq(posts.siteId, siteId), eq(posts.id, rootId)))
       .limit(1);
 
-    const lastActivityAt = latestPublishedAt ?? root[0]?.updatedAt ?? now();
+    const fallback = root[0]?.updatedAt ?? now();
 
     await db
       .update(posts)
-      .set({ lastActivityAt })
+      .set({
+        lastActivityAt: announcedAt ?? fallback,
+        threadUpdatedAt: threadUpdatedAt ?? fallback,
+      })
       .where(and(eq(posts.siteId, siteId), eq(posts.id, rootId)));
   }
 
@@ -833,22 +1157,71 @@ export function createPostService(
     )`;
   }
 
+  /**
+   * Load a Post and assert it can carry a translation group.
+   *
+   * Groups live on Thread roots only, and both sides must belong to this site.
+   * These two rules replace the table CHECK the SQLite schema cannot add, so
+   * every write path that touches `translation_group_id` goes through here.
+   */
+  async function requireTranslatableRoot(
+    postId: string,
+  ): Promise<typeof posts.$inferSelect> {
+    const rows = await db
+      .select()
+      .from(posts)
+      .where(and(eq(posts.siteId, siteId), eq(posts.id, postId)))
+      .limit(1);
+    const row = rows[0];
+    if (!row) {
+      throw new NotFoundError("Post");
+    }
+    if (row.threadId !== row.id) {
+      throw new ValidationError(
+        "Translations link whole threads. Use the thread's first post.",
+      );
+    }
+    return row;
+  }
+
+  /** Reject a language another Post in the same translation group already holds. */
+  async function assertTranslationLanguageFree(
+    groupId: string,
+    language: string,
+    excludePostId?: string,
+  ): Promise<void> {
+    const rows = await db
+      .select({ id: posts.id, title: posts.title })
+      .from(posts)
+      .where(
+        and(
+          eq(posts.siteId, siteId),
+          eq(posts.translationGroupId, groupId),
+          eq(posts.language, language),
+        ),
+      )
+      .limit(2);
+    const clash = rows.find((row) => row.id !== excludePostId);
+    if (clash) {
+      // The language's own name, not its tag: this message is shown to the
+      // author, and "简体中文" is what they picked in the menu — "zh-Hans" is
+      // an implementation detail they never chose.
+      const languageName = getOrBuildEntry(language).native;
+      throw new ConflictError(
+        clash.title
+          ? `"${clash.title}" is already the ${languageName} version in this translation group. Unlink it first, or pick another language.`
+          : `Another post is already the ${languageName} version in this translation group. Unlink it first, or pick another language.`,
+      );
+    }
+  }
+
   /** Build WHERE conditions from filters (shared by list and count) */
   function buildFilterConditions(filters: PostFilters) {
-    const conditions = [eq(posts.siteId, siteId)];
+    const conditions = [
+      eq(posts.siteId, siteId),
+      ...buildReaderVisibilityConditions(posts, siteId, filters),
+    ];
 
-    if (filters.status) {
-      conditions.push(eq(posts.status, filters.status));
-    }
-    if (filters.visibility !== undefined) {
-      conditions.push(sql`${effectiveVisibilityExpr} = ${filters.visibility}`);
-    }
-    if (filters.excludeLatestHidden) {
-      conditions.push(sql`${effectiveVisibilityExpr} != 'latest_hidden'`);
-    }
-    if (filters.excludePrivate) {
-      conditions.push(sql`${effectiveVisibilityExpr} != 'private'`);
-    }
     if (filters.pinned !== undefined) {
       conditions.push(
         filters.pinned
@@ -886,6 +1259,15 @@ export function createPostService(
     }
     if (filters.publishedBefore !== undefined) {
       conditions.push(sql`${posts.publishedAt} < ${filters.publishedBefore}`);
+    }
+    if (filters.axisAfter !== undefined || filters.axisBefore !== undefined) {
+      const axis = timeAxisColumn(filters);
+      if (filters.axisAfter !== undefined) {
+        conditions.push(sql`${axis} >= ${filters.axisAfter}`);
+      }
+      if (filters.axisBefore !== undefined) {
+        conditions.push(sql`${axis} < ${filters.axisBefore}`);
+      }
     }
     if (filters.mediaKinds && filters.mediaKinds.length > 0) {
       const placeholders = filters.mediaKinds.map((k) => sql`${k}`);
@@ -940,19 +1322,6 @@ export function createPostService(
     return conditions;
   }
 
-  async function getLastLivePostIdInThread(
-    threadId: string,
-  ): Promise<string | null> {
-    const rows = await db
-      .select({ id: posts.id })
-      .from(posts)
-      .where(and(eq(posts.siteId, siteId), eq(posts.threadId, threadId)))
-      .orderBy(desc(posts.createdAt), desc(posts.id))
-      .limit(1);
-
-    return rows[0]?.id ?? null;
-  }
-
   function getCursorSortTimestamp(
     row: typeof posts.$inferSelect,
     filters: PostFilters,
@@ -960,7 +1329,31 @@ export function createPostService(
     if (filters.sortBy === "published") {
       return row.publishedAt ?? row.createdAt;
     }
+    if (filters.sortBy === "thread_updated") {
+      return row.threadUpdatedAt ?? -1;
+    }
     return row.status === "draft" ? row.updatedAt : (row.lastActivityAt ?? -1);
+  }
+
+  /**
+   * Chronological sort key for `list()`.
+   *
+   * Shared by the ORDER BY and the keyset cursor comparison — they must read
+   * the same expression or pagination silently skips or repeats rows.
+   */
+  function buildSortTimestampExpr(filters: PostFilters): SQLWrapper {
+    if (filters.sortBy === "published") {
+      return sql<number>`coalesce(${posts.publishedAt}, ${posts.createdAt})`;
+    }
+    if (filters.sortBy === "thread_updated") {
+      return posts.threadUpdatedAt;
+    }
+    if (filters.status === "draft") return posts.updatedAt;
+    if (filters.status === "published") return posts.lastActivityAt;
+    return sql<number>`CASE
+      WHEN ${posts.status} = 'draft' THEN ${posts.updatedAt}
+      ELSE ${posts.lastActivityAt}
+    END`;
   }
 
   function buildLexicographicCursorCondition(
@@ -1002,17 +1395,7 @@ export function createPostService(
       return null;
     }
 
-    const sortTimestampExpr =
-      filters.sortBy === "published"
-        ? sql<number>`coalesce(${posts.publishedAt}, ${posts.createdAt})`
-        : filters.status === "draft"
-          ? posts.updatedAt
-          : filters.status === "published"
-            ? posts.lastActivityAt
-            : sql<number>`CASE
-                WHEN ${posts.status} = 'draft' THEN ${posts.updatedAt}
-                ELSE ${posts.lastActivityAt}
-              END`;
+    const sortTimestampExpr = buildSortTimestampExpr(filters);
     const pinnedSortExpr = sql<number>`coalesce(${posts.pinnedAt}, -1)`;
     const featuredPublishedSortExpr = sql<number>`coalesce(
       ${posts.publishedAt}, ${posts.createdAt}, -1
@@ -1039,80 +1422,61 @@ export function createPostService(
             ...keys,
           ];
 
-    if (filters.featured || filters.sortOrder === undefined) {
-      if (filters.featured) {
+    if (filters.featured) {
+      return buildLexicographicCursorCondition(
+        withPinnedSortKey([
+          {
+            direction: "desc",
+            expr: featuredPublishedSortExpr,
+            value: cursorFeaturedPublishedAt,
+          },
+          { direction: "desc", expr: posts.id, value: cursorPost.id },
+        ]),
+      );
+    }
+
+    // One case per sort order, mirroring `list()` key for key.
+    switch (filters.sortOrder ?? "newest") {
+      case "oldest":
+        return buildLexicographicCursorCondition(
+          withPinnedSortKey([
+            {
+              direction: "asc",
+              expr: sortTimestampSortExpr,
+              value: cursorSortTimestamp,
+            },
+            { direction: "asc", expr: posts.id, value: cursorPost.id },
+          ]),
+        );
+      case "rating_desc":
         return buildLexicographicCursorCondition(
           withPinnedSortKey([
             {
               direction: "desc",
-              expr: featuredPublishedSortExpr,
-              value: cursorFeaturedPublishedAt,
+              expr: ratingPresenceExpr,
+              value: cursorRatingPresence,
+            },
+            { direction: "desc", expr: ratingSortExpr, value: cursorRating },
+            {
+              direction: "desc",
+              expr: sortTimestampSortExpr,
+              value: cursorSortTimestamp,
             },
             { direction: "desc", expr: posts.id, value: cursorPost.id },
           ]),
         );
-      }
-
-      return buildLexicographicCursorCondition(
-        withPinnedSortKey([
-          {
-            direction: "desc",
-            expr: sortTimestampSortExpr,
-            value: cursorSortTimestamp,
-          },
-          { direction: "desc", expr: posts.id, value: cursorPost.id },
-        ]),
-      );
+      case "newest":
+        return buildLexicographicCursorCondition(
+          withPinnedSortKey([
+            {
+              direction: "desc",
+              expr: sortTimestampSortExpr,
+              value: cursorSortTimestamp,
+            },
+            { direction: "desc", expr: posts.id, value: cursorPost.id },
+          ]),
+        );
     }
-
-    if (filters.sortOrder === "oldest") {
-      return buildLexicographicCursorCondition(
-        withPinnedSortKey([
-          {
-            direction: "asc",
-            expr: sortTimestampSortExpr,
-            value: cursorSortTimestamp,
-          },
-          { direction: "asc", expr: posts.id, value: cursorPost.id },
-        ]),
-      );
-    }
-
-    if (filters.sortOrder === "rating_desc") {
-      return buildLexicographicCursorCondition(
-        withPinnedSortKey([
-          {
-            direction: "desc",
-            expr: ratingPresenceExpr,
-            value: cursorRatingPresence,
-          },
-          { direction: "desc", expr: ratingSortExpr, value: cursorRating },
-          {
-            direction: "desc",
-            expr: sortTimestampSortExpr,
-            value: cursorSortTimestamp,
-          },
-          { direction: "desc", expr: posts.id, value: cursorPost.id },
-        ]),
-      );
-    }
-
-    return buildLexicographicCursorCondition(
-      withPinnedSortKey([
-        {
-          direction: "desc",
-          expr: ratingPresenceExpr,
-          value: cursorRatingPresence,
-        },
-        { direction: "asc", expr: ratingSortExpr, value: cursorRating },
-        {
-          direction: "desc",
-          expr: sortTimestampSortExpr,
-          value: cursorSortTimestamp,
-        },
-        { direction: "desc", expr: posts.id, value: cursorPost.id },
-      ]),
-    );
   }
 
   function toPost(
@@ -1147,8 +1511,16 @@ export function createPostService(
       previewProvider: row.previewProvider,
       replyToId: row.replyToId,
       threadId: row.threadId,
+      language: row.language,
+      translationGroupId: row.translationGroupId,
+      quietReply: row.quietReply,
       publishedAt: row.publishedAt,
       lastActivityAt: row.lastActivityAt ?? row.publishedAt ?? row.updatedAt,
+      threadUpdatedAt:
+        row.threadUpdatedAt ??
+        row.lastActivityAt ??
+        row.publishedAt ??
+        row.updatedAt,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
@@ -1238,18 +1610,10 @@ export function createPostService(
   }
 
   function buildThreadRootPageConditions(options?: ThreadRootPageOptions) {
-    const conditions: SQL[] = [eq(posts.siteId, siteId)];
-    const status = options?.status;
-
-    if (status) {
-      conditions.push(eq(posts.status, status));
-    }
-    if (options?.excludePrivate) {
-      conditions.push(sql`${effectiveVisibilityExpr} != 'private'`);
-    }
-    if (options?.excludeLatestHidden) {
-      conditions.push(sql`${effectiveVisibilityExpr} != 'latest_hidden'`);
-    }
+    const conditions: SQL[] = [
+      eq(posts.siteId, siteId),
+      ...buildReaderVisibilityConditions(posts, siteId, options ?? {}),
+    ];
     if (options?.publishedBefore !== undefined) {
       conditions.push(
         sql`${posts.publishedAt} < ${options.publishedBefore}`,
@@ -1278,16 +1642,19 @@ export function createPostService(
     return conditions;
   }
 
+  /**
+   * Thread activity timestamp used to order collection threads.
+   *
+   * Rows here are Thread *members* grouped by thread_id, so the definition is
+   * reached through a subquery to the root. The outer MAX only collapses the
+   * group — the subquery returns one value per thread. The outer COALESCE
+   * covers a member whose root row is missing.
+   */
   function buildCollectionThreadActivityExpr(alias: string) {
     return sql<number>`MAX(
       COALESCE(
         (
-          SELECT CASE
-            WHEN root.updated_at > root.created_at
-              AND root.updated_at > COALESCE(root.last_activity_at, -1)
-            THEN root.updated_at
-            ELSE COALESCE(root.last_activity_at, root.updated_at)
-          END
+          SELECT ${buildRootActivityExpr(rootActivityColumns("root"))}
           FROM post AS root
           WHERE root.site_id = ${siteId}
             AND root.id = ${posts.threadId}
@@ -1547,17 +1914,7 @@ export function createPostService(
       if (filters.cursor && !cursorCondition) {
         return [];
       }
-      const sortTimestamp =
-        filters.sortBy === "published"
-          ? sql<number>`coalesce(${posts.publishedAt}, ${posts.createdAt})`
-          : filters.status === "draft"
-            ? posts.updatedAt
-            : filters.status === "published"
-              ? posts.lastActivityAt
-              : sql<number>`CASE
-                  WHEN ${posts.status} = 'draft' THEN ${posts.updatedAt}
-                  ELSE ${posts.lastActivityAt}
-                END`;
+      const sortTimestamp = buildSortTimestampExpr(filters);
 
       if (cursorCondition) {
         conditions.push(cursorCondition);
@@ -1588,36 +1945,39 @@ export function createPostService(
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .limit(filters.limit ?? 100);
 
-      let query =
-        filters.featured || filters.sortOrder === undefined
-          ? baseQuery.orderBy(
+      // A case per sort order, and no shared fallthrough. This was an if/else
+      // chain whose last branch was written for one order and silently caught
+      // another, so `newest` ordered by rating instead of by time wherever it
+      // was passed explicitly — a smart collection page, most visibly.
+      const buildOrderBy = (): SQL<unknown>[] => {
+        if (filters.featured) {
+          return [
+            ...pinnedOrder,
+            desc(featuredPublishedSortExpr),
+            desc(posts.id),
+          ];
+        }
+        switch (filters.sortOrder ?? "newest") {
+          case "oldest":
+            return [...pinnedOrder, asc(sortTimestampSortExpr), asc(posts.id)];
+          case "rating_desc":
+            return [
               ...pinnedOrder,
-              filters.featured
-                ? desc(featuredPublishedSortExpr)
-                : desc(sortTimestampSortExpr),
+              desc(ratingPresence),
+              desc(posts.rating),
+              desc(sortTimestampSortExpr),
               desc(posts.id),
-            )
-          : filters.sortOrder === "oldest"
-            ? baseQuery.orderBy(
-                ...pinnedOrder,
-                asc(sortTimestampSortExpr),
-                asc(posts.id),
-              )
-            : filters.sortOrder === "rating_desc"
-              ? baseQuery.orderBy(
-                  ...pinnedOrder,
-                  desc(ratingPresence),
-                  desc(posts.rating),
-                  desc(sortTimestampSortExpr),
-                  desc(posts.id),
-                )
-              : baseQuery.orderBy(
-                  ...pinnedOrder,
-                  desc(ratingPresence),
-                  asc(posts.rating),
-                  desc(sortTimestampSortExpr),
-                  desc(posts.id),
-                );
+            ];
+          case "newest":
+            return [
+              ...pinnedOrder,
+              desc(sortTimestampSortExpr),
+              desc(posts.id),
+            ];
+        }
+      };
+
+      let query = baseQuery.orderBy(...buildOrderBy());
 
       if (filters.offset !== undefined) {
         query = query.offset(filters.offset) as typeof query;
@@ -1639,11 +1999,33 @@ export function createPostService(
         conditions.push(sql`${posts.id} > ${afterId}`);
       }
 
+      // `lastmod` describes the page, and a Thread root's page renders its
+      // replies too — so an added or edited reply changes it even though the
+      // root row is untouched. Unlike ordering, edits do count here: the page
+      // really did change. Mirrors `articleModifiedTime` in lib/post-display.
+      //
+      // The outer columns are written out rather than interpolated: Drizzle
+      // only qualifies projection columns when the query has a join, so
+      // `${posts.id}` would render as a bare "id" here and bind to the
+      // subquery's own alias instead of correlating to the outer row.
+      const threadModifiedAt = sql<number>`COALESCE(
+        (
+          SELECT MAX(member.updated_at)
+          FROM post AS member
+          WHERE member.site_id = ${siteId}
+            AND member.thread_id = "post"."id"
+            AND member.status = 'published'
+        ),
+        "post"."updated_at"
+      )`;
+
       const rows = await db
         .select({
           id: posts.id,
-          updatedAt: posts.updatedAt,
+          updatedAt: threadModifiedAt,
           featuredAt: posts.featuredAt,
+          language: posts.language,
+          translationGroupId: posts.translationGroupId,
         })
         .from(posts)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
@@ -1669,6 +2051,8 @@ export function createPostService(
             alias,
             updatedAt: row.updatedAt,
             featuredAt: row.featuredAt,
+            language: row.language,
+            translationGroupId: row.translationGroupId,
           };
         })
         .filter((entry): entry is SitemapPostEntry => entry !== null);
@@ -1715,6 +2099,59 @@ export function createPostService(
       return result[0]?.count ?? 0;
     },
 
+    async aggregateMany(filters, base) {
+      if (filters.length === 0) return [];
+
+      const baseConditions = buildFilterConditions(base);
+      // The row is its own Thread root here — callers exclude replies — so the
+      // activity expression reads the columns in hand. No correlated subquery.
+      const activityAt = buildRootActivityExpr({
+        lastActivityAt: posts.lastActivityAt,
+        publishedAt: posts.publishedAt,
+        updatedAt: posts.updatedAt,
+      });
+      // A `SUM(CASE …)` and a `MAX(CASE …)` per filter, over one pass of the
+      // rows the base predicate already narrows to. The aliases are positional
+      // and generated here, so nothing a caller supplies reaches the SQL as an
+      // identifier.
+      const columns = Object.fromEntries(
+        filters.flatMap((filter, index) => {
+          const conditions = buildFilterConditions({ ...base, ...filter });
+          const predicate =
+            conditions.length > 0 ? and(...conditions) : sql`1 = 1`;
+          return [
+            [
+              `n${index}`,
+              sql<number>`CAST(SUM(CASE WHEN (${predicate}) THEN 1 ELSE 0 END) AS INTEGER)`,
+            ],
+            [
+              `a${index}`,
+              sql<
+                number | null
+              >`MAX(CASE WHEN (${predicate}) THEN ${activityAt} END)`,
+            ],
+          ];
+        }),
+      );
+
+      const rows = await db
+        .select(columns)
+        .from(posts)
+        .where(baseConditions.length > 0 ? and(...baseConditions) : undefined);
+
+      const row = rows[0] as Record<string, number | null> | undefined;
+      return filters.map((_, index) => {
+        const activity = row?.[`a${index}`];
+        return {
+          count: Number(row?.[`n${index}`] ?? 0),
+          recentActivityAt:
+            activity === null || activity === undefined
+              ? null
+              : Number(activity),
+        };
+      });
+    },
+
     async countUpTo(filters = {}, limit) {
       const normalizedLimit = Math.max(0, Math.trunc(limit));
       if (normalizedLimit === 0) {
@@ -1732,11 +2169,9 @@ export function createPostService(
     },
 
     async countByYearMonth(filters = {}) {
-      const conditions = [
-        ...buildFilterConditions(filters),
-        isNotNull(posts.publishedAt),
-      ];
-      const publishedYearMonthExpr = buildPublishedYearMonthExpr();
+      const axis = timeAxisColumn(filters);
+      const conditions = [...buildFilterConditions(filters), isNotNull(axis)];
+      const publishedYearMonthExpr = buildYearMonthExpr(axis);
 
       return db
         .select({
@@ -1760,6 +2195,8 @@ export function createPostService(
           ? ensurePostVisibility(data.visibility)
           : undefined;
       const rating = ensurePostRating(data.rating);
+      // Only replies can be quiet — a root has nothing to stay quiet about.
+      const isQuietReply = Boolean(data.replyToId) && data.quietReply === true;
 
       const rawBody = data.bodyMarkdown
         ? markdownToTiptapJson(data.bodyMarkdown)
@@ -1807,6 +2244,11 @@ export function createPostService(
       let threadId = id;
       let status: Status = requestedStatus ?? "published";
       let visibility: Visibility | null = requestedVisibility ?? "public";
+      // Roots carry the requested language; replies overwrite this with the
+      // root's value below so a Thread never mixes languages.
+      let language = normalizePostLanguage(data.language);
+      let translationGroupId: string | null = null;
+      let sourceTranslationPostId: string | null = null;
 
       // Collapse the two-input (`flag` + `flagAt`) pair the DTO exposes
       // into the single timestamp form the DB column stores. Explicit
@@ -1840,10 +2282,19 @@ export function createPostService(
           );
         }
 
-        const lastLivePostId = await getLastLivePostIdInThread(parent.threadId);
-        if (lastLivePostId && lastLivePostId !== parent.id) {
+        // Drafts count here: an unpublished reply already owns the tail slot,
+        // and a sibling attached to the same parent would fork the chain.
+        const tailId = (
+          await this.getThreadTailIds([parent.threadId], {
+            includeDrafts: true,
+          })
+        ).get(parent.threadId);
+        if (tailId && tailId !== parent.id) {
+          const tail = await this.getById(tailId);
           throw new ConflictError(
-            "This post is no longer the end of the thread. Reply to the latest post instead.",
+            tail?.status === "draft"
+              ? "This thread ends with an unpublished draft. Finish that draft or discard it, then reply."
+              : "This post is no longer the end of the thread. Reply to the latest post instead.",
           );
         }
 
@@ -1854,12 +2305,18 @@ export function createPostService(
           parent.threadId === parent.id
             ? parent
             : await this.getById(parent.threadId);
-        if (root) {
-          if (data.status !== "draft") {
-            status = root.status;
-          }
+        // A reply takes the root's status. A draft earlier in the chain does
+        // not hold it back: readers never saw that post, so publishing past it
+        // reads as continuous, and the draft stays parked until it is dealt
+        // with on its own.
+        if (root && data.status !== "draft") {
+          status = root.status;
         }
         visibility = null;
+        // A reply is part of the root's Thread, so it is written in the
+        // Thread's language whatever the caller asked for. This is what keeps
+        // language filters correct on member-grained queries.
+        language = root?.language ?? parent.language ?? null;
 
         if (
           (data.collectionIds?.length ?? 0) > 0 ||
@@ -1869,6 +2326,60 @@ export function createPostService(
             "Cannot set Collections while creating a Thread reply. Set them on the Thread root instead.",
           );
         }
+      }
+
+      const { primary, languages, reservedPrefixes } =
+        await readLanguageSettings(db, siteId, databaseSchema);
+
+      // Nobody named a language, so read one out of the text. Every write path
+      // that bypasses compose — the API, the Telegram bot, MCP — lands here, so
+      // a multilingual site never accumulates unlabelled posts. An explicit
+      // choice is the author's and is left alone; replies already carry the
+      // Thread's language.
+      if (!data.replyToId && !language) {
+        language = suggestPostLanguage({
+          text: bodyText ?? title ?? quoteText,
+          languages,
+          primary,
+        });
+      }
+
+      // "Add a translation" carries only the source ID until the author
+      // submits; the group is minted here so abandoning the composer leaves
+      // nothing behind (no draft row, no slug, no single-member group).
+      if (data.translationOfId) {
+        if (data.replyToId) {
+          throw new ValidationError(
+            "Translations link whole threads. Add the translation from the thread's first post.",
+          );
+        }
+        const source = await requireTranslatableRoot(data.translationOfId);
+        if (!language) {
+          throw new ValidationError(
+            "Choose a language for this translation before saving it.",
+          );
+        }
+        if (source.language === language) {
+          throw new ConflictError(
+            "That post is already written in this language. Pick a different language for the translation.",
+          );
+        }
+        if (source.translationGroupId) {
+          await assertTranslationLanguageFree(
+            source.translationGroupId,
+            language,
+          );
+          translationGroupId = source.translationGroupId;
+        } else {
+          translationGroupId = createEntityId("translationGroup");
+          sourceTranslationPostId = source.id;
+        }
+      }
+
+      // Featured surfaces only list published posts, so featuring a draft
+      // writes a flag that does nothing and shows nowhere. Say so instead.
+      if (status === "draft" && resolvedFeaturedAt !== null) {
+        throw new ConflictError("Publish this post before featuring it.");
       }
 
       assertDraftPublishedAt(status, data.publishedAt);
@@ -1886,10 +2397,17 @@ export function createPostService(
       // readable slug can still set one explicitly.
       const titleForSlug =
         format === "quote" ? undefined : (title ?? undefined);
+      // Only a non-primary language earns a readable language suffix: the bare
+      // namespace belongs to the primary language, and a suffix shared by two
+      // same-language posts distinguishes nothing.
+      const languageSuffix =
+        language && language !== primary
+          ? toLanguagePrefix(language)
+          : undefined;
 
       if (data.path) {
         const normalized = normalizePath(data.path);
-        if (isReservedPath(normalized)) {
+        if (isReservedPath(normalized, reservedPrefixes)) {
           throw new ValidationError(
             `Path "${normalized}" is reserved and cannot be used`,
           );
@@ -1899,6 +2417,7 @@ export function createPostService(
           slug = await generatePostSlug({
             slug: normalized,
             idLength: config.slugIdLength,
+            reservedPrefixes,
             isAvailable: isSlugAvailable,
           });
         } else {
@@ -1908,6 +2427,8 @@ export function createPostService(
             slug: slugified || undefined,
             title: titleForSlug,
             idLength: config.slugIdLength,
+            languageSuffix,
+            reservedPrefixes,
             isAvailable: isSlugAvailable,
           });
           // Verify the alias path is available before proceeding
@@ -1921,6 +2442,8 @@ export function createPostService(
           slug: data.slug,
           title: titleForSlug,
           idLength: config.slugIdLength,
+          languageSuffix,
+          reservedPrefixes,
           isAvailable: isSlugAvailable,
         });
       }
@@ -1980,6 +2503,23 @@ export function createPostService(
         if (usesBatchWrites) {
           const writeQueries = [];
 
+          // Mint the group on the source Post in the same write as the
+          // translation itself, so a failure never leaves a one-member group.
+          if (sourceTranslationPostId && translationGroupId) {
+            writeQueries.push(
+              db
+                .update(posts)
+                .set({ translationGroupId, updatedAt: timestamp })
+                .where(
+                  and(
+                    eq(posts.siteId, siteId),
+                    eq(posts.id, sourceTranslationPostId),
+                    isNull(posts.translationGroupId),
+                  ),
+                ),
+            );
+          }
+
           writeQueries.push(
             db.insert(posts).values({
               id,
@@ -2000,8 +2540,12 @@ export function createPostService(
               rating,
               replyToId: data.replyToId ?? null,
               threadId,
+              language,
+              translationGroupId,
+              quietReply: isQuietReply,
               publishedAt,
               lastActivityAt: publishedAt ?? timestamp,
+              threadUpdatedAt: publishedAt ?? timestamp,
               createdAt: timestamp,
               updatedAt: timestamp,
             }),
@@ -2058,6 +2602,19 @@ export function createPostService(
           );
         } else {
           await db.transaction(async (tx) => {
+            if (sourceTranslationPostId && translationGroupId) {
+              await tx
+                .update(posts)
+                .set({ translationGroupId, updatedAt: timestamp })
+                .where(
+                  and(
+                    eq(posts.siteId, siteId),
+                    eq(posts.id, sourceTranslationPostId),
+                    isNull(posts.translationGroupId),
+                  ),
+                );
+            }
+
             await tx.insert(posts).values({
               id,
               siteId,
@@ -2077,8 +2634,12 @@ export function createPostService(
               rating,
               replyToId: data.replyToId ?? null,
               threadId,
+              language,
+              translationGroupId,
+              quietReply: isQuietReply,
               publishedAt,
               lastActivityAt: publishedAt ?? timestamp,
+              threadUpdatedAt: publishedAt ?? timestamp,
               createdAt: timestamp,
               updatedAt: timestamp,
             });
@@ -2138,9 +2699,11 @@ export function createPostService(
         throw new ConflictError(`Slug "${slug}" could not be resolved`);
       }
 
-      // Bump thread root's lastActivityAt when creating a published reply
-      if (data.replyToId && status === "published" && !data.quietReply) {
-        await recalculateThreadLastActivity(threadId);
+      // A quiet reply still changes the Thread, it just isn't announced —
+      // the recalculation reads the persisted quiet_reply flag and keeps
+      // lastActivityAt where it was while moving threadUpdatedAt forward.
+      if (data.replyToId && status === "published") {
+        await recalculateThreadActivity(threadId);
       }
 
       return post;
@@ -2202,11 +2765,22 @@ export function createPostService(
         if (!item) continue;
         const { data, attachments } = item;
         const prevPost = created[i - 1];
+        // A reply with no date of its own belongs to the root's moment, not to
+        // whenever the request happened to run. Without this, backdating the
+        // root leaves its replies stamped today and the thread reads as if it
+        // spanned years. Thread order is by `createdAt`/`id` (see the thread
+        // queries), so sharing one `publishedAt` cannot reorder anything.
+        const rootPublishedAt = created[0]?.publishedAt ?? undefined;
         const postData: CreatePost = {
           ...data,
           // Chain each post as a reply to the previous one (server-side chaining)
           replyToId: i === 0 ? data.replyToId : prevPost?.id,
+          // Translation groups and languages are Thread-level: the root carries
+          // them and every reply inherits, so later items must not restate them.
+          translationOfId: i === 0 ? data.translationOfId : undefined,
           quietReply: extendsExistingThreadQuietly ? true : data.quietReply,
+          publishedAt:
+            i === 0 ? data.publishedAt : (data.publishedAt ?? rootPublishedAt),
         };
 
         try {
@@ -2235,6 +2809,17 @@ export function createPostService(
     async update(id, data, summaryConfig) {
       const existing = await this.getById(id);
       if (!existing) return null;
+
+      // Thread-wide, so it cannot ride along on the single-row write below.
+      // Runs first: if the language is refused — the Thread's translation group
+      // already holds it — nothing else should have been written either.
+      if (
+        data.language &&
+        !existing.replyToId &&
+        data.language !== existing.language
+      ) {
+        await this.setThreadLanguage(id, data.language);
+      }
 
       const timestamp = now();
       const nextFormat =
@@ -2327,6 +2912,12 @@ export function createPostService(
         updates.featuredAt = data.featuredAt;
       } else if (data.featured !== undefined) {
         updates.featuredAt = data.featured ? timestamp : null;
+      }
+      // Same rule `create` enforces: nothing unpublished can be featured.
+      // Only guards turning it on — an existing flag survives a trip back to
+      // draft and takes effect again when the post is republished.
+      if (nextStatus === "draft" && updates.featuredAt) {
+        throw new ConflictError("Publish this post before featuring it.");
       }
 
       let updatedBody: string | null | undefined;
@@ -2439,7 +3030,7 @@ export function createPostService(
           .where(and(eq(posts.siteId, siteId), eq(posts.id, id)))
           .returning();
         if (needsThreadActivityRecalc) {
-          await recalculateThreadLastActivity(existing.threadId);
+          await recalculateThreadActivity(existing.threadId);
           return this.getById(id);
         }
         return hydratePost(result[0]);
@@ -2594,8 +3185,7 @@ export function createPostService(
           ],
         );
         updateResult = results[updateIdx] as
-          | (typeof posts.$inferSelect)[]
-          | undefined;
+          (typeof posts.$inferSelect)[] | undefined;
       } else {
         await db.transaction(async (tx) => {
           if (needsCascade) {
@@ -2674,7 +3264,7 @@ export function createPostService(
       }
 
       if (needsThreadActivityRecalc) {
-        await recalculateThreadLastActivity(existing.threadId);
+        await recalculateThreadActivity(existing.threadId);
         return this.getById(id);
       }
       return hydratePost(updateResult?.[0]);
@@ -2862,7 +3452,7 @@ export function createPostService(
         await db
           .delete(posts)
           .where(and(eq(posts.siteId, siteId), eq(posts.id, id)));
-        await recalculateThreadLastActivity(existing.threadId);
+        await recalculateThreadActivity(existing.threadId);
       }
 
       return true;
@@ -2880,6 +3470,44 @@ export function createPostService(
         .orderBy(posts.createdAt, posts.id);
 
       return hydratePosts(rows);
+    },
+
+    async getThreadPosition(postId) {
+      const targetRows = await db
+        .select({ replyToId: posts.replyToId, threadId: posts.threadId })
+        .from(posts)
+        .where(and(eq(posts.siteId, siteId), eq(posts.id, postId)))
+        .limit(1);
+
+      const target = targetRows[0];
+      if (!target) return 0;
+      if (!target.replyToId) return 1;
+
+      // One read for the whole Thread, then walk up in memory: a chain of N
+      // Posts would otherwise be N round trips.
+      const threadRows = await db
+        .select({ id: posts.id, replyToId: posts.replyToId })
+        .from(posts)
+        .where(
+          and(eq(posts.siteId, siteId), eq(posts.threadId, target.threadId)),
+        );
+
+      const parentOf = new Map(
+        threadRows.map((row) => [row.id, row.replyToId] as const),
+      );
+
+      let position = 1;
+      let cursor: string | null = target.replyToId;
+      // A cycle is impossible per the schema's CHECK constraints, but walking a
+      // parent chain unguarded turns a bad row into a hung request.
+      const visited = new Set<string>([postId]);
+      while (cursor && !visited.has(cursor)) {
+        visited.add(cursor);
+        position += 1;
+        cursor = parentOf.get(cursor) ?? null;
+      }
+
+      return position;
     },
 
     async updateThreadStatusAndVisibility(rootId, status, visibility) {
@@ -2946,7 +3574,398 @@ export function createPostService(
             );
         });
       }
-      await recalculateThreadLastActivity(rootId);
+      await recalculateThreadActivity(rootId);
+    },
+
+    async setThreadLanguage(postId, language) {
+      const normalized = normalizePostLanguage(language);
+      if (!normalized) {
+        throw new ValidationError("Choose a language for this post.");
+      }
+
+      // A language the site does not publish has no view, no feed and no
+      // switcher entry, so the post would simply vanish. Only checked once the
+      // site actually has a language set to belong to.
+      const { languages } = await readLanguageSettings(
+        db,
+        siteId,
+        databaseSchema,
+      );
+      if (
+        languages.length > 0 &&
+        !languages.some(
+          (tag) => toLanguagePrefix(tag) === toLanguagePrefix(normalized),
+        )
+      ) {
+        throw new ValidationError(
+          "This site does not publish that language. Add it in Settings → Language first.",
+        );
+      }
+
+      const rows = await db
+        .select({
+          threadId: posts.threadId,
+          id: posts.id,
+          translationGroupId: posts.translationGroupId,
+        })
+        .from(posts)
+        .where(and(eq(posts.siteId, siteId), eq(posts.id, postId)))
+        .limit(1);
+      const row = rows[0];
+      if (!row) {
+        throw new NotFoundError("Post");
+      }
+
+      // The group lives on the root, so a reply's Thread has to be resolved
+      // before the translation-group check can run.
+      const rootRows =
+        row.id === row.threadId
+          ? [row]
+          : await db
+              .select({
+                threadId: posts.threadId,
+                id: posts.id,
+                translationGroupId: posts.translationGroupId,
+              })
+              .from(posts)
+              .where(and(eq(posts.siteId, siteId), eq(posts.id, row.threadId)))
+              .limit(1);
+      const root = rootRows[0];
+      if (root?.translationGroupId) {
+        await assertTranslationLanguageFree(
+          root.translationGroupId,
+          normalized,
+          root.id,
+        );
+      }
+
+      const timestamp = now();
+      await db
+        .update(posts)
+        .set({ language: normalized, updatedAt: timestamp })
+        .where(and(eq(posts.siteId, siteId), eq(posts.threadId, row.threadId)));
+    },
+
+    async materializeMissingLanguage(language) {
+      const normalized = normalizePostLanguage(language);
+      if (!normalized) {
+        throw new ValidationError("Choose a primary language for this site.");
+      }
+
+      // Counted before the write rather than read back from it: the three
+      // supported drivers report affected rows differently, and the caller only
+      // needs the number for its confirmation copy.
+      const pending = await this.countMissingLanguage();
+      if (pending === 0) return 0;
+
+      await db
+        .update(posts)
+        .set({ language: normalized })
+        .where(and(eq(posts.siteId, siteId), isNull(posts.language)));
+      return pending;
+    },
+
+    async countMissingLanguage() {
+      const rows = await db
+        .select({ count: sql<number>`CAST(count(*) AS INTEGER)` })
+        .from(posts)
+        .where(and(eq(posts.siteId, siteId), isNull(posts.language)));
+      return Number(rows[0]?.count ?? 0);
+    },
+
+    async countByLanguage(language) {
+      const normalized = normalizePostLanguage(language);
+      if (!normalized) return 0;
+
+      const rows = await db
+        .select({ count: sql<number>`CAST(count(*) AS INTEGER)` })
+        .from(posts)
+        .where(and(eq(posts.siteId, siteId), eq(posts.language, normalized)));
+      return Number(rows[0]?.count ?? 0);
+    },
+
+    async listLanguagesInUse() {
+      const rows = await db
+        .select({
+          language: posts.language,
+          count: sql<number>`CAST(count(*) AS INTEGER)`,
+        })
+        .from(posts)
+        .where(and(eq(posts.siteId, siteId), isNotNull(posts.language)))
+        .groupBy(posts.language);
+      return rows
+        .filter((row): row is { language: string; count: number } =>
+          Boolean(row.language),
+        )
+        .map((row) => ({ language: row.language, count: Number(row.count) }));
+    },
+
+    async listTranslations(postId) {
+      const map = await this.getTranslationsMap([postId]);
+      return map.get(postId) ?? [];
+    },
+
+    async listTranslationCandidates(postId, options) {
+      const term = options.query.trim();
+      if (!term) return [];
+      const limit = options.limit ?? 8;
+
+      const source = await this.getById(postId);
+      if (!source) return [];
+      const root =
+        source.replyToId === null
+          ? source
+          : await this.getById(source.threadId);
+      if (!root?.language) return [];
+
+      // Languages this Thread's group already speaks for, its own included.
+      const taken = new Set([root.language]);
+      if (root.translationGroupId) {
+        for (const sibling of await this.listTranslations(root.id)) {
+          if (sibling.language) taken.add(sibling.language);
+        }
+      }
+
+      // Escaped with an explicit ESCAPE clause: the two dialects disagree on
+      // the default escape character (see `paths.findPathsUnderSegment`).
+      const like = `%${term.replace(/[\\%_]/g, "\\$&")}%`;
+      const conditions: SQL[] = [
+        eq(posts.siteId, siteId),
+        eq(posts.status, "published"),
+        // Thread roots only: a translation links whole Threads.
+        sql`${posts.id} = ${posts.threadId}`,
+        sql`${posts.id} != ${root.id}`,
+        isNotNull(posts.language),
+        notInArray(posts.language, [...taken]),
+        sql`(${posts.title} LIKE ${like} ESCAPE '\\' OR ${posts.bodyText} LIKE ${like} ESCAPE '\\')`,
+      ];
+
+      if (root.translationGroupId) {
+        // Both sides having a group would ask for a merge, which is refused.
+        conditions.push(isNull(posts.translationGroupId));
+      } else {
+        // The candidate may carry a group, as long as joining it would not put
+        // two Posts of this language in it.
+        conditions.push(
+          sql`(${posts.translationGroupId} IS NULL OR NOT EXISTS (
+            SELECT 1
+            FROM post AS group_member
+            WHERE group_member.site_id = ${siteId}
+              AND group_member.translation_group_id = "post"."translation_group_id"
+              AND group_member.language = ${root.language}
+          ))`,
+        );
+      }
+
+      const rows = await db
+        .select()
+        .from(posts)
+        .where(and(...conditions))
+        .orderBy(desc(posts.publishedAt))
+        .limit(limit);
+
+      return hydratePosts(rows);
+    },
+
+    async resolveTranslationCandidate(postId, path) {
+      const source = await this.getById(postId);
+      if (!source) return { status: "not_found" };
+      const root =
+        source.replyToId === null
+          ? source
+          : await this.getById(source.threadId);
+      if (!root?.language) return { status: "not_found" };
+
+      const target = await resolvedPaths.resolveTarget(path);
+      if (!target) return { status: "not_found" };
+      if (target.targetType !== "post" || !target.postId) {
+        return { status: "not_a_post" };
+      }
+
+      const found = await this.getById(target.postId);
+      if (!found) return { status: "not_found" };
+      // Translations link whole Threads, so an address that lands on a reply
+      // is taken as naming the Thread it belongs to.
+      const candidate =
+        found.replyToId === null ? found : await this.getById(found.threadId);
+      if (!candidate) return { status: "not_found" };
+
+      if (candidate.id === root.id) return { status: "same_thread" };
+      if (candidate.status !== "published") return { status: "unpublished" };
+      if (!candidate.language) return { status: "no_language" };
+      if (candidate.language === root.language) {
+        return { status: "same_language" };
+      }
+
+      const siblings = root.translationGroupId
+        ? await this.listTranslations(root.id)
+        : [];
+      if (siblings.some((post) => post.language === candidate.language)) {
+        return { status: "language_taken", language: candidate.language };
+      }
+
+      if (candidate.translationGroupId) {
+        // `linkTranslation` refuses to merge two groups, and refuses to join
+        // one that already speaks for this Thread's language.
+        if (root.translationGroupId) return { status: "group_conflict" };
+
+        const theirGroup = await this.listTranslations(candidate.id);
+        if (theirGroup.some((post) => post.language === root.language)) {
+          return { status: "group_language_taken", language: root.language };
+        }
+      }
+
+      return { status: "ok", post: candidate };
+    },
+
+    async getTranslationsMap(postIds) {
+      const result = new Map<string, Post[]>();
+      const uniqueIds = [...new Set(postIds)].filter(Boolean);
+      if (uniqueIds.length === 0) return result;
+
+      const seedRows = await db
+        .select({ id: posts.id, translationGroupId: posts.translationGroupId })
+        .from(posts)
+        .where(
+          and(
+            eq(posts.siteId, siteId),
+            inArray(posts.id, uniqueIds),
+            isNotNull(posts.translationGroupId),
+          ),
+        );
+      if (seedRows.length === 0) return result;
+
+      const groupIds = [
+        ...new Set(
+          seedRows
+            .map((row) => row.translationGroupId)
+            .filter((groupId): groupId is string => groupId !== null),
+        ),
+      ];
+      const memberRows = await db
+        .select()
+        .from(posts)
+        .where(
+          and(
+            eq(posts.siteId, siteId),
+            inArray(posts.translationGroupId, groupIds),
+          ),
+        );
+      const members = await hydratePosts(memberRows);
+      const byGroup = new Map<string, Post[]>();
+      for (const member of members) {
+        const groupId = member.translationGroupId;
+        if (!groupId) continue;
+        const bucket = byGroup.get(groupId);
+        if (bucket) bucket.push(member);
+        else byGroup.set(groupId, [member]);
+      }
+
+      for (const seed of seedRows) {
+        const groupId = seed.translationGroupId;
+        if (!groupId) continue;
+        const siblings = (byGroup.get(groupId) ?? []).filter(
+          (member) => member.id !== seed.id,
+        );
+        if (siblings.length > 0) result.set(seed.id, siblings);
+      }
+      return result;
+    },
+
+    async linkTranslation(postId, otherPostId) {
+      if (postId === otherPostId) {
+        throw new ValidationError("Pick a different post to link.");
+      }
+
+      const [post, other] = await Promise.all([
+        requireTranslatableRoot(postId),
+        requireTranslatableRoot(otherPostId),
+      ]);
+
+      if (!post.language || !other.language) {
+        throw new ValidationError(
+          "Both posts need a language before they can be linked as translations.",
+        );
+      }
+      if (post.language === other.language) {
+        throw new ConflictError(
+          "These two posts are written in the same language. Translations need different languages.",
+        );
+      }
+      if (post.translationGroupId && other.translationGroupId) {
+        if (post.translationGroupId === other.translationGroupId) return;
+        throw new ConflictError(
+          "Both posts already belong to translation groups. Unlink one of them first.",
+        );
+      }
+
+      const timestamp = now();
+      if (post.translationGroupId ?? other.translationGroupId) {
+        const groupId = (post.translationGroupId ??
+          other.translationGroupId) as string;
+        const joiningId = post.translationGroupId ? other.id : post.id;
+        const joiningLanguage = post.translationGroupId
+          ? other.language
+          : post.language;
+        await assertTranslationLanguageFree(groupId, joiningLanguage);
+        await db
+          .update(posts)
+          .set({ translationGroupId: groupId, updatedAt: timestamp })
+          .where(and(eq(posts.siteId, siteId), eq(posts.id, joiningId)));
+        return;
+      }
+
+      const groupId = createEntityId("translationGroup");
+      const setGroup = (targetId: string) =>
+        db
+          .update(posts)
+          .set({ translationGroupId: groupId, updatedAt: timestamp })
+          .where(and(eq(posts.siteId, siteId), eq(posts.id, targetId)));
+
+      if (usesBatchWrites) {
+        await db.batch([setGroup(post.id), setGroup(other.id)]);
+      } else {
+        await db.transaction(async (tx) => {
+          await tx
+            .update(posts)
+            .set({ translationGroupId: groupId, updatedAt: timestamp })
+            .where(and(eq(posts.siteId, siteId), eq(posts.id, post.id)));
+          await tx
+            .update(posts)
+            .set({ translationGroupId: groupId, updatedAt: timestamp })
+            .where(and(eq(posts.siteId, siteId), eq(posts.id, other.id)));
+        });
+      }
+    },
+
+    async unlinkTranslation(postId) {
+      const post = await requireTranslatableRoot(postId);
+      const groupId = post.translationGroupId;
+      if (!groupId) return;
+
+      const timestamp = now();
+      await db
+        .update(posts)
+        .set({ translationGroupId: null, updatedAt: timestamp })
+        .where(and(eq(posts.siteId, siteId), eq(posts.id, post.id)));
+
+      // A group of one is indistinguishable from no group and would linger as
+      // a dangling key, so collapse it as soon as the second-to-last member
+      // leaves.
+      const remaining = await db
+        .select({ id: posts.id })
+        .from(posts)
+        .where(
+          and(eq(posts.siteId, siteId), eq(posts.translationGroupId, groupId)),
+        )
+        .limit(2);
+      const lastMember = remaining.length === 1 ? remaining[0] : undefined;
+      if (lastMember) {
+        await db
+          .update(posts)
+          .set({ translationGroupId: null, updatedAt: timestamp })
+          .where(and(eq(posts.siteId, siteId), eq(posts.id, lastMember.id)));
+      }
     },
 
     async getReplyCounts(postIds) {
@@ -3550,7 +4569,7 @@ export function createPostService(
       return result;
     },
 
-    async getLastPostIdsByThread(threadIds) {
+    async getThreadTailIds(threadIds, options) {
       const result = new Map<string, string>();
       if (threadIds.length === 0) return result;
 
@@ -3565,7 +4584,7 @@ export function createPostService(
           and(
             eq(posts.siteId, siteId),
             inArray(posts.threadId, unique),
-            eq(posts.status, "published"),
+            ...(options?.includeDrafts ? [] : [eq(posts.status, "published")]),
           ),
         )
         .orderBy(posts.threadId, desc(posts.createdAt), desc(posts.id));
@@ -3579,11 +4598,9 @@ export function createPostService(
     },
 
     async getDistinctYears(filters = {}) {
-      const conditions = [
-        ...buildFilterConditions(filters),
-        isNotNull(posts.publishedAt),
-      ];
-      const publishedYearExpr = buildPublishedYearExpr();
+      const axis = timeAxisColumn(filters);
+      const conditions = [...buildFilterConditions(filters), isNotNull(axis)];
+      const publishedYearExpr = buildYearExpr(axis);
 
       const rows = await db
         .select({

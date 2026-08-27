@@ -13,7 +13,8 @@ import { classMap } from "lit/directives/class-map.js";
 import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import { NAVIGATION_SETTINGS_PATH } from "../../lib/settings-paths.js";
 import { openNewCompose } from "../compose-launch.js";
-import { publicPath } from "../runtime-paths.js";
+import { isFullUrl, toInternalPath } from "../../lib/url.js";
+import { navPath, sitePathPrefix } from "../runtime-paths.js";
 import { getBestFieldSearchRank, normalizeSearch } from "../search-rank.js";
 
 // ---------------------------------------------------------------------------
@@ -23,7 +24,7 @@ import { getBestFieldSearchRank, normalizeSearch } from "../search-rank.js";
 interface PaletteItem {
   title: string;
   path: string;
-  type: "post" | "collection" | "system";
+  type: "post" | "collection" | "smart_collection" | "system";
   status?: "draft" | "published";
 }
 
@@ -58,6 +59,9 @@ const ICONS = {
   post: `<svg ${ICON_ATTRS}><path d="M8 2v4"/><path d="M12 2v4"/><path d="M16 2v4"/><rect width="16" height="18" x="4" y="4" rx="2"/><path d="M8 10h6"/><path d="M8 14h8"/><path d="M8 18h5"/></svg>`,
   // clipboard/collection icon from PostFooter
   collection: `<svg ${ICON_ATTRS} viewBox="0 0 16 16" stroke-width="1.35"><rect x="3" y="5.05" width="10" height="8.15" rx="2.2"/><path d="M5.1 5.05V4.2a1.1 1.1 0 0 1 1.1-1.1h3.6a1.1 1.1 0 0 1 1.1 1.1v.85"/></svg>`,
+  // funnel — the same icon the directory and the page use, so a smart
+  // collection reads as a collection with a rule behind it everywhere at once.
+  smart_collection: `<svg ${ICON_ATTRS}><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg>`,
   // settings gear from SettingsRootContent
   system: `<svg ${ICON_ATTRS}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`,
   // zap/lightning for commands
@@ -71,6 +75,29 @@ const ICONS = {
 export function getPathCommandTarget(query: string): string {
   const stripped = query.trim().replace(/^[/／]+/, "");
   return stripped ? `/${stripped}` : "/";
+}
+
+/**
+ * The local path a pasted full URL points at, when it points at this site.
+ *
+ * Copying an address out of the browser bar and dropping it in the palette
+ * should go there, the same as typing `/`. Someone else's URL is left to
+ * navigate mode, where it falls through to a full-text search — looking for
+ * the post where you linked something is the likelier intent.
+ *
+ * @param query - Raw palette query
+ * @returns Internal path with its query string, or null when not our URL
+ */
+export function getPastedAddressTarget(query: string): string | null {
+  const trimmed = query.trim();
+  if (!isFullUrl(trimmed)) return null;
+
+  return toInternalPath(trimmed, {
+    siteOrigins: [window.location.origin],
+    sitePathPrefix: sitePathPrefix(),
+    // A pasted `/en/about` was copied from that view and belongs there.
+    keepQuery: true,
+  });
 }
 
 export function getPathCommandSearchQuery(query: string): string {
@@ -246,6 +273,7 @@ export class JantCommandPalette extends LitElement {
     if (first === ">" || first === "＞") return "command";
     if (first === "?" || first === "？") return "search";
     if (first === "/" || first === "／") return "path";
+    if (getPastedAddressTarget(this._query)) return "path";
     return "navigate";
   }
 
@@ -326,8 +354,11 @@ export class JantCommandPalette extends LitElement {
     }
 
     if (mode === "path") {
-      const target = getPathCommandTarget(this._query);
-      const searchQuery = getPathCommandSearchQuery(this._query);
+      const pasted = getPastedAddressTarget(this._query);
+      const target = pasted ?? getPathCommandTarget(this._query);
+      // A pasted URL is already an answer; only a typed path is also plausible
+      // as search words.
+      const searchQuery = pasted ? "" : getPathCommandSearchQuery(this._query);
       const items: DisplayItem[] = [
         {
           label: `Go to ${target}`,
@@ -380,7 +411,11 @@ export class JantCommandPalette extends LitElement {
   #executeSearch(query: string) {
     saveHistory(SEARCH_HISTORY_KEY, query);
     this.close();
-    window.location.href = publicPath(`/search?q=${encodeURIComponent(query)}`);
+    // navPath, not publicPath: a search run from inside /en belongs in /en.
+    // The palette jumps to settings pages and posts through this same code
+    // path, so it cannot assert the kind of any one target — navPath decides
+    // per target and leaves the site-wide ones alone.
+    window.location.href = navPath(`/search?q=${encodeURIComponent(query)}`);
   }
 
   #executeItem(index: number) {
@@ -409,7 +444,7 @@ export class JantCommandPalette extends LitElement {
       if (displayItem?.pathTarget) {
         saveHistory(NAV_HISTORY_KEY, displayItem.pathTarget);
         this.close();
-        window.location.href = publicPath(displayItem.pathTarget);
+        window.location.href = navPath(displayItem.pathTarget);
         return;
       }
 
@@ -431,11 +466,15 @@ export class JantCommandPalette extends LitElement {
       saveHistory(NAV_HISTORY_KEY, item.path);
       this.close();
       if (item.type === "system") {
-        window.location.href = publicPath(item.path);
+        window.location.href = navPath(item.path);
       } else if (item.type === "collection") {
-        window.location.href = publicPath(`/collections/${item.path}`);
+        window.location.href = navPath(`/collections/${item.path}`);
+      } else if (item.type === "smart_collection") {
+        // Straight to its address. `/collections/{slug}` redirects for a
+        // collection but names nothing for a smart collection.
+        window.location.href = navPath(`/${item.path}`);
       } else {
-        window.location.href = publicPath(
+        window.location.href = navPath(
           item.status === "draft"
             ? `/preview/${item.path}?edit=1`
             : `/${item.path}`,

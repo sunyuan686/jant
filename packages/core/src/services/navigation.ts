@@ -13,14 +13,10 @@ import {
   type DatabaseSchema,
 } from "../db/schema-bundle.js";
 import { createEntityId } from "../lib/ids.js";
-import { ValidationError } from "../lib/errors.js";
+import { getCollectionPagePath } from "../lib/collection-paths.js";
+import { NotFoundError, ValidationError } from "../lib/errors.js";
 import { now } from "../lib/time.js";
-import {
-  normalizePath,
-  normalizeSitePathPrefix,
-  stripSitePathPrefix,
-  toSameSitePath,
-} from "../lib/url.js";
+import { normalizePath, toInternalPath } from "../lib/url.js";
 import {
   COLLECTION_FRESHNESS_WINDOW_SECONDS,
   DEFAULT_NAVIGATION_PROFILE,
@@ -50,13 +46,69 @@ export interface ListSuggestedLinksOptions {
 
 // Re-export shared constraint detection — see db/dialect.ts
 import { isUniqueConstraintError } from "../db/dialect.js";
+import { createPathService, type PathService } from "./path.js";
+
+export interface ListNavItemsOptions {
+  /**
+   * Content language whose view is being rendered, when it is not the site's
+   * primary one. Page items then resolve to the version of their target
+   * written in that language, so a reader browsing `/en` reaches the English
+   * About page. Items whose target has no version in that language are left
+   * pointing at the original — an asymmetric site is the normal case, and a
+   * link to the one About that exists beats no link at all.
+   */
+  language?: string | null;
+}
+
+/**
+ * What an address the author pasted can become in navigation.
+ *
+ * An address that names something on this site should become an item that
+ * *follows* it — a page item tracks its post's title and slug, where a link
+ * item freezes both — so resolution is what turns a pasted URL into the right
+ * kind of item instead of a string that rots.
+ */
+export type NavTargetResolution =
+  /** A post navigation can point at, with the name it will show. */
+  | { status: "page"; page: NavigationPageCandidate }
+  | { status: "collection"; collection: NavTargetCollection }
+  /** A smart collection, which navigation follows exactly like a collection. */
+  | { status: "smart_collection"; smartCollection: NavTargetCollection }
+  /** A page on this site that navigation can only hold as a link. */
+  | { status: "link_only" }
+  /** Nothing to show in a menu until it has a title. */
+  | { status: "untitled" }
+  | { status: "unpublished" }
+  /** Published but private: a menu entry nobody could open. */
+  | { status: "private" }
+  | { status: "not_found" };
+
+export interface NavTargetCollection {
+  id: string;
+  title: string;
+  slug: string;
+}
 
 export interface NavItemService {
-  list(): Promise<NavItem[]>;
+  list(options?: ListNavItemsOptions): Promise<NavItem[]>;
   listPageCandidates(options?: {
     query?: string;
     limit?: number;
   }): Promise<NavigationPageCandidate[]>;
+  /**
+   * Resolve an address the author pasted into the navigation item it could
+   * become.
+   *
+   * The picker searches titles, which is no help when the author is holding
+   * the URL rather than the name. Every "no" is specific, because the page is
+   * one they can see in another tab: a draft, a private post, an untitled one.
+   *
+   * @param path - Internal path, as produced by `toInternalPath()`
+   * @returns The target to add, or why it cannot be added
+   * @example
+   * await navItems.resolveNavTarget("/about"); // { status: "page", page: … }
+   */
+  resolveNavTarget(path: string): Promise<NavTargetResolution>;
   getById(id: string): Promise<NavItem | null>;
   create(data: CreateNavItem): Promise<NavItem>;
   /**
@@ -82,25 +134,161 @@ export function createNavItemService(
   db: Database,
   siteId: string,
   databaseSchema: DatabaseSchema = sqliteSchemaBundle,
+  paths?: PathService,
 ): NavItemService {
-  const { navItems, threadCollections, posts, pathRegistry, collections } =
-    databaseSchema;
+  const {
+    navItems,
+    threadCollections,
+    posts,
+    pathRegistry,
+    collections,
+    smartCollections,
+  } = databaseSchema;
+  const resolvedPaths = paths ?? createPathService(db, siteId, databaseSchema);
 
-  function toNavItem(row: typeof navItems.$inferSelect): NavItem {
+  function toNavItem(
+    row: typeof navItems.$inferSelect,
+    targetTitle?: string | null,
+  ): NavItem {
+    const title = targetTitle?.trim();
     return {
       id: row.id,
       siteId: row.siteId,
       type: row.type as NavItemType,
       systemKey: (row.systemKey as SystemNavKey | null) ?? undefined,
       collectionId: row.collectionId ?? undefined,
+      smartCollectionId: row.smartCollectionId ?? undefined,
       postId: row.postId ?? undefined,
       label: row.label,
       url: row.url,
+      ...(title ? { targetTitle: title } : {}),
       placement: (row.placement ?? "header") as NavItemPlacement,
       position: row.position,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
+  }
+
+  /**
+   * Read nav rows together with the current title of whatever each one points
+   * at.
+   *
+   * The title is joined rather than stored so renaming a page or a collection
+   * moves its nav entry with it. Two left joins on primary keys, on a table
+   * that holds a handful of rows — the alternative, a denormalized copy, costs
+   * a sync branch in every write path that can rename a target, including the
+   * ones that bypass the service entirely (import, GitHub sync, backfills).
+   */
+  function selectNavItemsWithTargets() {
+    return db
+      .select({
+        nav: navItems,
+        postTitle: posts.title,
+        postTranslationGroupId: posts.translationGroupId,
+        collectionTitle: collections.title,
+        smartCollectionTitle: smartCollections.title,
+      })
+      .from(navItems)
+      .leftJoin(
+        posts,
+        and(eq(posts.siteId, siteId), eq(posts.id, navItems.postId)),
+      )
+      .leftJoin(
+        collections,
+        and(
+          eq(collections.siteId, siteId),
+          eq(collections.id, navItems.collectionId),
+        ),
+      )
+      .leftJoin(
+        smartCollections,
+        and(
+          eq(smartCollections.siteId, siteId),
+          eq(smartCollections.id, navItems.smartCollectionId),
+        ),
+      );
+  }
+
+  type NavItemWithTargetRow = Awaited<
+    ReturnType<ReturnType<typeof selectNavItemsWithTargets>["where"]>
+  >[number];
+
+  function targetTitleOf(row: NavItemWithTargetRow): string | null {
+    if (row.nav.type === "page") return row.postTitle;
+    if (row.nav.type === "collection") return row.collectionTitle;
+    if (row.nav.type === "smart_collection") return row.smartCollectionTitle;
+    return null;
+  }
+
+  /**
+   * Re-point page items at the version of their target written in `language`.
+   *
+   * A translated post is a different post at its own address, so following a
+   * nav entry into another language means swapping the destination, not
+   * prefixing the URL. Both the address and the title move together: a link
+   * that lands on Chinese content should be labelled in Chinese, whichever
+   * view the reader came from.
+   *
+   * Runs only in non-primary language views — the primary view's targets are
+   * already the ones stored — and only when a page item's target actually
+   * belongs to a translation group.
+   */
+  async function resolvePageTranslations(
+    rows: NavItemWithTargetRow[],
+    language: string,
+  ): Promise<Map<string, { url: string; title: string }>> {
+    const groupIds = [
+      ...new Set(
+        rows.flatMap((row) =>
+          row.nav.type === "page" && row.postTranslationGroupId
+            ? [row.postTranslationGroupId]
+            : [],
+        ),
+      ),
+    ];
+    if (groupIds.length === 0) return new Map();
+
+    // Same bar the item had to clear to be added: a nav link must never lead
+    // to a draft, a private post, or an untitled one.
+    const siblings = await db
+      .select({
+        groupId: posts.translationGroupId,
+        title: posts.title,
+        path: pathRegistry.path,
+      })
+      .from(posts)
+      .innerJoin(
+        pathRegistry,
+        and(
+          eq(pathRegistry.siteId, siteId),
+          eq(pathRegistry.postId, posts.id),
+          eq(pathRegistry.kind, "slug"),
+        ),
+      )
+      .where(
+        and(
+          eq(posts.siteId, siteId),
+          inArray(posts.translationGroupId, groupIds),
+          eq(posts.language, language),
+          eq(posts.status, "published"),
+          sql`${posts.visibility} != 'private'`,
+          isNull(posts.replyToId),
+          sql`trim(${posts.title}) != ''`,
+        ),
+      );
+
+    return new Map(
+      siblings.flatMap((sibling) =>
+        sibling.groupId && sibling.title
+          ? [
+              [
+                sibling.groupId,
+                { url: withLeadingSlash(sibling.path), title: sibling.title },
+              ] as const,
+            ]
+          : [],
+      ),
+    );
   }
 
   async function normalizeCreateData(data: CreateNavItem) {
@@ -114,22 +302,93 @@ export function createNavItemService(
         type: data.type,
         systemKey: data.systemKey,
         collectionId: null,
+        smartCollectionId: null,
         postId: null,
         label: "",
         url: config.url,
+        targetTitle: null,
         placement: data.placement ?? config.defaultPlacement,
         position: data.position,
       };
     }
 
     if (data.type === "collection") {
+      // The slug lives in `path_registry`, the same place the page branch
+      // below reads it from — collections have no slug column of their own.
+      const rows = await db
+        .select({ title: collections.title, slug: pathRegistry.path })
+        .from(collections)
+        .innerJoin(
+          pathRegistry,
+          and(
+            eq(pathRegistry.siteId, siteId),
+            eq(pathRegistry.collectionId, collections.id),
+            eq(pathRegistry.kind, "slug"),
+          ),
+        )
+        .where(
+          and(
+            eq(collections.siteId, siteId),
+            eq(collections.id, data.collectionId),
+          ),
+        )
+        .limit(1);
+      const collection = rows[0];
+      if (!collection) {
+        throw new NotFoundError("Collection");
+      }
+
       return {
         type: data.type,
         systemKey: null,
         collectionId: data.collectionId,
+        smartCollectionId: null,
         postId: null,
-        label: data.label,
-        url: data.url,
+        // Stored empty unless the author typed something: the item then shows
+        // the collection's current title, and follows it when renamed.
+        label: (data.label?.trim() ?? "").slice(0, 100),
+        url: getCollectionPagePath(collection.slug),
+        targetTitle: collection.title,
+        placement: data.placement ?? "header",
+        position: data.position,
+      };
+    }
+
+    if (data.type === "smart_collection") {
+      // Same shape as the collection branch: the slug lives in `path_registry`,
+      // and an omitted label means the item follows the title.
+      const rows = await db
+        .select({ title: smartCollections.title, slug: pathRegistry.path })
+        .from(smartCollections)
+        .innerJoin(
+          pathRegistry,
+          and(
+            eq(pathRegistry.siteId, siteId),
+            eq(pathRegistry.smartCollectionId, smartCollections.id),
+            eq(pathRegistry.kind, "slug"),
+          ),
+        )
+        .where(
+          and(
+            eq(smartCollections.siteId, siteId),
+            eq(smartCollections.id, data.smartCollectionId),
+          ),
+        )
+        .limit(1);
+      const smartCollection = rows[0];
+      if (!smartCollection) {
+        throw new NotFoundError("Smart collection");
+      }
+
+      return {
+        type: data.type,
+        systemKey: null,
+        collectionId: null,
+        smartCollectionId: data.smartCollectionId,
+        postId: null,
+        label: (data.label?.trim() ?? "").slice(0, 100),
+        url: getCollectionPagePath(smartCollection.slug),
+        targetTitle: smartCollection.title,
         placement: data.placement ?? "header",
         position: data.position,
       };
@@ -173,9 +432,13 @@ export function createNavItemService(
         type: data.type,
         systemKey: null,
         collectionId: null,
+        smartCollectionId: null,
         postId: data.postId,
-        label: (data.label?.trim() || page.title.trim()).slice(0, 100),
+        // Stored empty unless the author typed something: the item then shows
+        // the page's current title, and follows it when renamed.
+        label: (data.label?.trim() ?? "").slice(0, 100),
         url: withLeadingSlash(page.slug),
+        targetTitle: page.title,
         placement: data.placement ?? "header",
         position: data.position,
       };
@@ -185,12 +448,23 @@ export function createNavItemService(
       type: data.type,
       systemKey: null,
       collectionId: null,
+      smartCollectionId: null,
       postId: null,
       label: data.label,
       url: data.url,
+      targetTitle: null,
       placement: data.placement ?? "header",
       position: data.position,
     };
+  }
+
+  /** Read one nav item with its target's current title. */
+  async function readNavItem(id: string): Promise<NavItem | null> {
+    const result = await selectNavItemsWithTargets()
+      .where(and(eq(navItems.siteId, siteId), eq(navItems.id, id)))
+      .limit(1);
+    const row = result[0];
+    return row ? toNavItem(row.nav, targetTitleOf(row)) : null;
   }
 
   function withLeadingSlash(path: string): string {
@@ -202,39 +476,11 @@ export function createNavItemService(
     url: string,
     options: ListSuggestedLinksOptions = {},
   ): string | null {
-    const value = url.trim();
-    const sitePathPrefix = normalizeSitePathPrefix(
-      options.sitePathPrefix ?? "",
-    );
-    const sameSitePath = toSameSitePath(value, options.siteOrigin ?? "");
-    if (sameSitePath !== null) {
-      try {
-        const pathname = new URL(sameSitePath, "https://jant.invalid").pathname;
-        const internalPath = stripSitePathPrefix(pathname, sitePathPrefix);
-        return internalPath ? withLeadingSlash(internalPath) : null;
-      } catch {
-        return null;
-      }
-    }
-
-    if (
-      value.startsWith("http://") ||
-      value.startsWith("https://") ||
-      value.startsWith("//") ||
-      value.startsWith("mailto:") ||
-      value.startsWith("tel:") ||
-      value.startsWith("#")
-    ) {
-      return null;
-    }
-
-    try {
-      const pathname = new URL(value, "https://jant.invalid").pathname;
-      const internalPath = stripSitePathPrefix(pathname, sitePathPrefix);
-      return internalPath ? withLeadingSlash(internalPath) : null;
-    } catch {
-      return null;
-    }
+    const internalPath = toInternalPath(url, {
+      siteOrigins: options.siteOrigin ? [options.siteOrigin] : [],
+      sitePathPrefix: options.sitePathPrefix ?? "",
+    });
+    return internalPath ? withLeadingSlash(internalPath) : null;
   }
 
   function normalizeSuggestedLabel(
@@ -299,13 +545,26 @@ export function createNavItemService(
   }
 
   return {
-    async list() {
-      const rows = await db
-        .select()
-        .from(navItems)
+    async list(options = {}) {
+      const rows = await selectNavItemsWithTargets()
         .where(eq(navItems.siteId, siteId))
         .orderBy(asc(navItems.position));
-      return rows.map(toNavItem);
+
+      const translations = options.language
+        ? await resolvePageTranslations(rows, options.language)
+        : null;
+
+      return rows.map((row) => {
+        const translated =
+          translations && row.nav.type === "page" && row.postTranslationGroupId
+            ? translations.get(row.postTranslationGroupId)
+            : undefined;
+        if (!translated) return toNavItem(row.nav, targetTitleOf(row));
+        // `postId` keeps naming the item's configured target: it is what the
+        // settings UI edits and what "already in navigation" checks against.
+        // Only where the reader lands, and what it is called, follow the view.
+        return toNavItem({ ...row.nav, url: translated.url }, translated.title);
+      });
     },
 
     async listPageCandidates(options = {}) {
@@ -365,13 +624,93 @@ export function createNavItemService(
       );
     },
 
-    async getById(id) {
-      const result = await db
-        .select()
-        .from(navItems)
-        .where(and(eq(navItems.siteId, siteId), eq(navItems.id, id)))
+    async resolveNavTarget(path) {
+      const target = await resolvedPaths.resolveTarget(path);
+      if (!target) return { status: "not_found" };
+
+      if (target.targetType === "collection" && target.collectionId) {
+        const rows = await db
+          .select({ id: collections.id, title: collections.title })
+          .from(collections)
+          .where(
+            and(
+              eq(collections.siteId, siteId),
+              eq(collections.id, target.collectionId),
+            ),
+          )
+          .limit(1);
+        const row = rows[0];
+        if (!row) return { status: "not_found" };
+
+        const slug = await resolvedPaths.getCollectionSlug(row.id);
+        return {
+          status: "collection",
+          collection: { id: row.id, title: row.title, slug: slug ?? "" },
+        };
+      }
+
+      if (
+        target.targetType === "smart_collection" &&
+        target.smartCollectionId
+      ) {
+        const rows = await db
+          .select({ id: smartCollections.id, title: smartCollections.title })
+          .from(smartCollections)
+          .where(
+            and(
+              eq(smartCollections.siteId, siteId),
+              eq(smartCollections.id, target.smartCollectionId),
+            ),
+          )
+          .limit(1);
+        const row = rows[0];
+        if (!row) return { status: "not_found" };
+
+        const slug = await resolvedPaths.getSmartCollectionSlug(row.id);
+        return {
+          status: "smart_collection",
+          smartCollection: { id: row.id, title: row.title, slug: slug ?? "" },
+        };
+      }
+
+      if (target.targetType !== "post" || !target.postId) {
+        // A real address — an archive URL, say — that no navigation item can
+        // track. It can still be held as a plain link.
+        return { status: "link_only" };
+      }
+
+      const rows = await db
+        .select({
+          id: posts.id,
+          title: posts.title,
+          status: posts.status,
+          visibility: posts.visibility,
+          updatedAt: posts.updatedAt,
+        })
+        .from(posts)
+        .where(and(eq(posts.siteId, siteId), eq(posts.id, target.postId)))
         .limit(1);
-      return result[0] ? toNavItem(result[0]) : null;
+      const row = rows[0];
+      if (!row) return { status: "not_found" };
+
+      if (row.status !== "published") return { status: "unpublished" };
+      if (row.visibility === "private") return { status: "private" };
+      const title = row.title?.trim() ?? "";
+      if (!title) return { status: "untitled" };
+
+      // The canonical slug rather than the address that was pasted: an alias
+      // resolves here too, and the item should show where the page lives.
+      const slug = await resolvedPaths.getPostSlug(row.id);
+      if (!slug) return { status: "not_found" };
+
+      return {
+        status: "page",
+        page: { id: row.id, title, slug, updatedAt: row.updatedAt },
+      };
+    },
+
+    async getById(id) {
+      return readNavItem(id);
     },
 
     async create(data) {
@@ -413,6 +752,25 @@ export function createNavItemService(
         }
       }
 
+      if (normalized.smartCollectionId) {
+        const existingSmartCollectionItem = await db
+          .select({ id: navItems.id })
+          .from(navItems)
+          .where(
+            and(
+              eq(navItems.siteId, siteId),
+              eq(navItems.smartCollectionId, normalized.smartCollectionId),
+            ),
+          )
+          .limit(1);
+
+        if (existingSmartCollectionItem[0]) {
+          throw new ValidationError(
+            "Smart collection already added to navigation",
+          );
+        }
+      }
+
       if (normalized.postId) {
         const existingPageItem = await db
           .select({ id: navItems.id })
@@ -439,6 +797,7 @@ export function createNavItemService(
             type: normalized.type,
             systemKey: normalized.systemKey,
             collectionId: normalized.collectionId,
+            smartCollectionId: normalized.smartCollectionId,
             postId: normalized.postId,
             label: normalized.label,
             url: normalized.url,
@@ -450,7 +809,7 @@ export function createNavItemService(
           .returning();
 
         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- DB insert with .returning() always returns inserted row
-        return toNavItem(result[0]!);
+        return toNavItem(result[0]!, normalized.targetTitle);
       }
 
       for (let attempt = 0; attempt < POSITION_RETRY_ATTEMPTS; attempt += 1) {
@@ -463,6 +822,7 @@ export function createNavItemService(
               type: normalized.type,
               systemKey: normalized.systemKey,
               collectionId: normalized.collectionId,
+              smartCollectionId: normalized.smartCollectionId,
               postId: normalized.postId,
               label: normalized.label,
               url: normalized.url,
@@ -474,7 +834,7 @@ export function createNavItemService(
             .returning();
 
           // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- DB insert with .returning() always returns inserted row
-          return toNavItem(result[0]!);
+          return toNavItem(result[0]!, normalized.targetTitle);
         } catch (err) {
           if (
             !isUniqueConstraintError(err) ||
@@ -552,11 +912,13 @@ export function createNavItemService(
         }
       }
 
-      // Non-system items require a non-empty label
+      // Clearing the label is how an item goes back to following what it
+      // points at, so only free-form links — which have no target to follow —
+      // still require one.
       if (
         data.label !== undefined &&
-        !data.label &&
-        existing[0].type !== "system"
+        !data.label.trim() &&
+        existing[0].type === "link"
       ) {
         throw new ValidationError("Label is required");
       }
@@ -565,7 +927,7 @@ export function createNavItemService(
       const result = await db
         .update(navItems)
         .set({
-          ...(data.label !== undefined && { label: data.label }),
+          ...(data.label !== undefined && { label: data.label.trim() }),
           ...(data.url !== undefined && { url: data.url }),
           ...(data.placement !== undefined && { placement: data.placement }),
           ...(data.position !== undefined && { position: data.position }),
@@ -574,7 +936,7 @@ export function createNavItemService(
         .where(and(eq(navItems.siteId, siteId), eq(navItems.id, id)))
         .returning();
 
-      return result[0] ? toNavItem(result[0]) : null;
+      return result[0] ? readNavItem(id) : null;
     },
 
     async delete(id) {
@@ -606,7 +968,7 @@ export function createNavItemService(
             .where(and(eq(navItems.siteId, siteId), eq(navItems.id, id)))
             .returning();
 
-          return result[0] ? toNavItem(result[0]) : null;
+          return result[0] ? readNavItem(id) : null;
         } catch (err) {
           if (
             !isUniqueConstraintError(err) ||

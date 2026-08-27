@@ -1,9 +1,22 @@
 /**
  * Custom URL action menus on the settings page.
  *
- * Keeps row menus mutually exclusive and dismisses them on outside click
- * and Escape.
+ * Keeps row menus mutually exclusive and dismisses them on any click
+ * outside the trigger and the menu — including the rest of their own row —
+ * and on Escape.
+ *
+ * The row list rounds its corners with `overflow: hidden`, and no stacking
+ * order escapes an ancestor's clip. So an open menu is promoted to the top
+ * layer, which takes it out of the clip entirely and leaves it positioned
+ * against the viewport — hence the anchoring done here in script. Browsers
+ * without the popover API fall back to the absolutely positioned menu, which
+ * is clipped but still usable.
  */
+
+/** Space between the trigger and the menu, in pixels. */
+const MENU_GAP = 6;
+/** Closest the menu may sit to a viewport edge, in pixels. */
+const VIEWPORT_MARGIN = 8;
 
 /**
  * Initialize custom URL action menus within a root.
@@ -30,8 +43,39 @@ export function initCustomUrlMenus(
 
       if (!(trigger instanceof HTMLButtonElement) || !menu) return;
 
+      const topLayer =
+        typeof menu.showPopover === "function" && menu.hasAttribute("popover");
+
+      /** Anchor the top-layer menu under the trigger, flipping above it when
+       *  the viewport bottom is closer than the menu is tall. */
+      const anchorToTrigger = () => {
+        const anchor = trigger.getBoundingClientRect();
+        const { width, height } = menu.getBoundingClientRect();
+        const below = anchor.bottom + MENU_GAP;
+        const above = anchor.top - MENU_GAP - height;
+        const top =
+          below + height <= window.innerHeight - VIEWPORT_MARGIN ||
+          above < VIEWPORT_MARGIN
+            ? below
+            : above;
+
+        menu.style.top = `${top}px`;
+        menu.style.left = `${Math.max(
+          VIEWPORT_MARGIN,
+          Math.min(
+            anchor.right - width,
+            window.innerWidth - VIEWPORT_MARGIN - width,
+          ),
+        )}px`;
+      };
+
       const close = (focusTrigger = false) => {
         if (menu.hidden) return;
+        if (topLayer) {
+          window.removeEventListener("resize", anchorToTrigger);
+          window.removeEventListener("scroll", anchorToTrigger, true);
+          if (menu.matches(":popover-open")) menu.hidePopover();
+        }
         menu.hidden = true;
         trigger.setAttribute("aria-expanded", "false");
         if (focusTrigger) trigger.focus();
@@ -44,6 +88,14 @@ export function initCustomUrlMenus(
           }),
         );
         menu.hidden = false;
+        if (topLayer) {
+          if (!menu.matches(":popover-open")) menu.showPopover();
+          anchorToTrigger();
+          window.addEventListener("resize", anchorToTrigger);
+          // Capture phase: the menu follows a scroll of any ancestor, not
+          // only the document.
+          window.addEventListener("scroll", anchorToTrigger, true);
+        }
         trigger.setAttribute("aria-expanded", "true");
         if (focusFirstItem) {
           const firstItem =
@@ -105,11 +157,15 @@ export function initCustomUrlMenus(
         }
       });
 
+      // The row is the action root, but it is not the menu's dismiss region:
+      // the rest of the row is blank space like any other, so only the
+      // trigger and the menu itself count as a click inside.
       document.addEventListener("click", (event) => {
         if (!(event.target instanceof Node)) return;
-        if (!menuRoot.contains(event.target)) {
-          close(false);
+        if (trigger.contains(event.target) || menu.contains(event.target)) {
+          return;
         }
+        close(false);
       });
 
       document.addEventListener("jant:custom-url-menu", (event) => {

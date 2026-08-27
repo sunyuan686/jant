@@ -82,6 +82,141 @@ describe("Nav Items API Routes", () => {
     });
   });
 
+  describe("GET /api/nav-items/resolve", () => {
+    it("requires authentication", async () => {
+      const { app } = createTestApp({ authenticated: false });
+      app.route("/api/nav-items", navItemsApiRoutes);
+
+      const res = await app.request("/api/nav-items/resolve?url=/about");
+
+      expect(res.status).toBe(401);
+    });
+
+    async function resolve(
+      app: ReturnType<typeof createTestApp>["app"],
+      url: string,
+    ) {
+      const res = await app.request(
+        `/api/nav-items/resolve?url=${encodeURIComponent(url)}`,
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        resolution: {
+          kind: string;
+          address: string;
+          page?: { id: string; title: string };
+          collection?: { id: string };
+        };
+      };
+      return body.resolution;
+    }
+
+    it("finds the page at a pasted address, however it was written", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+      const page = await services.posts.create({
+        format: "note",
+        title: "About this site",
+        slug: "about-this-site",
+        visibility: "latest_hidden",
+      });
+
+      for (const address of [
+        "/about-this-site",
+        "about-this-site",
+        "http://localhost:8787/about-this-site",
+        "/about-this-site?ref=twitter",
+      ]) {
+        expect(await resolve(app, address)).toEqual({
+          kind: "page",
+          address: "/about-this-site",
+          page: expect.objectContaining({
+            id: page.id,
+            title: "About this site",
+          }),
+        });
+      }
+    });
+
+    it("resolves a collection address to a collection item", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+      const collection = await services.collections.create({
+        title: "Reading",
+        slug: "reading",
+      });
+
+      expect(await resolve(app, "/reading")).toEqual({
+        kind: "collection",
+        address: "/reading",
+        collection: { id: collection.id, title: "Reading", slug: "reading" },
+      });
+    });
+
+    it("resolves a smart collection address to a smart collection item", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+      const smartCollection = await services.smartCollections.create({
+        title: "Quotes",
+        slug: "quotes",
+        selection: { format: "quote" },
+      });
+
+      expect(await resolve(app, "/quotes")).toEqual({
+        kind: "smart_collection",
+        address: "/quotes",
+        smartCollection: {
+          id: smartCollection.id,
+          title: "Quotes",
+          slug: "quotes",
+        },
+      });
+    });
+
+    it("says what is wrong rather than coming back empty", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+      const draft = await services.posts.create({
+        format: "note",
+        title: "Draft page",
+        slug: "draft-page",
+        status: "draft",
+      });
+      const secret = await services.posts.create({
+        format: "note",
+        title: "Secret page",
+        slug: "secret-page",
+        visibility: "private",
+      });
+      const untitled = await services.posts.create({
+        format: "note",
+        slug: "untitled-page",
+        body: JSON.stringify({
+          type: "doc",
+          content: [{ type: "paragraph" }],
+        }),
+      });
+
+      expect((await resolve(app, `/${draft.slug}`)).kind).toBe("unpublished");
+      expect((await resolve(app, `/${secret.slug}`)).kind).toBe("private");
+      expect((await resolve(app, `/${untitled.slug}`)).kind).toBe("untitled");
+      expect(await resolve(app, "/no-such-page")).toEqual({
+        kind: "not_found",
+        address: "/no-such-page",
+      });
+    });
+
+    it("hands an off-site address back for the link form", async () => {
+      const { app } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+
+      expect(await resolve(app, "https://example.com/hello")).toEqual({
+        kind: "external",
+        address: "https://example.com/hello",
+      });
+    });
+  });
+
   describe("POST /api/nav-items", () => {
     it("returns 401 when not authenticated", async () => {
       const { app } = createTestApp({ authenticated: false });
@@ -402,7 +537,9 @@ describe("Nav Items API Routes", () => {
       const body = await res.json();
       expect(body.type).toBe("collection");
       expect(body.collectionId).toBe(collection.id);
-      expect(body.label).toBe("Design Notes");
+      // No label of its own: the item follows the collection's title.
+      expect(body.label).toBe("");
+      expect(body.targetTitle).toBe("Design Notes");
       expect(body.url).toBe("/design-notes");
     });
 
@@ -477,6 +614,76 @@ describe("Nav Items API Routes", () => {
     });
   });
 
+  describe("POST /api/nav-items (smart collection)", () => {
+    it("creates a smart collection nav item with auto-resolved label and URL", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+
+      const smartCollection = await services.smartCollections.create({
+        title: "Quotes",
+        slug: "quotes",
+        selection: { format: "quote" },
+      });
+
+      const res = await app.request("/api/nav-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "smart_collection",
+          smartCollectionId: smartCollection.id,
+          placement: "header",
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.type).toBe("smart_collection");
+      expect(body.smartCollectionId).toBe(smartCollection.id);
+      // No label of its own: the item follows the smart collection's title.
+      expect(body.label).toBe("");
+      expect(body.targetTitle).toBe("Quotes");
+      expect(body.url).toBe("/quotes");
+    });
+
+    it("returns 400 for duplicate smart collection nav items", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+
+      const smartCollection = await services.smartCollections.create({
+        title: "Quotes",
+        slug: "quotes",
+      });
+      const add = () =>
+        app.request("/api/nav-items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "smart_collection",
+            smartCollectionId: smartCollection.id,
+          }),
+        });
+
+      expect((await add()).status).toBe(201);
+      expect((await add()).status).toBe(400);
+    });
+
+    it("returns 404 for non-existent smart collection", async () => {
+      const { app } = createTestApp({ authenticated: true });
+      app.route("/api/nav-items", navItemsApiRoutes);
+
+      const res = await app.request("/api/nav-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "smart_collection",
+          smartCollectionId: createEntityId("smartCollection"),
+        }),
+      });
+
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe("POST /api/nav-items (page)", () => {
     it("derives the page label and URL from the selected post", async () => {
       const { app, services } = createTestApp({ authenticated: true });
@@ -501,7 +708,10 @@ describe("Nav Items API Routes", () => {
       expect(await res.json()).toMatchObject({
         type: "page",
         postId: page.id,
-        label: "About me",
+        // No label of its own: the item follows the page's title, which is
+        // what the rendered header shows.
+        label: "",
+        targetTitle: "About me",
         url: "/about-me",
         headerHtml: expect.stringContaining("About me"),
       });

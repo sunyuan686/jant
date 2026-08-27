@@ -9,7 +9,6 @@ import type { FC } from "hono/jsx";
 import { useLingui } from "../../i18n/context.js";
 import type { CollectionPageProps } from "../../types.js";
 import {
-  getCollectionEditPath,
   getCollectionSelectionPath,
   getCollectionsDirectoryPath,
 } from "../../lib/collection-paths.js";
@@ -17,8 +16,12 @@ import { render as renderMarkdown } from "../../lib/markdown.js";
 import { formatPageLabel } from "../../lib/pagination.js";
 import { toPublicPath } from "../../lib/url.js";
 import { TimelineFeed } from "../feed/TimelineFeed.js";
-import { getCollectionMutationLabels } from "../shared/collection-management-labels.js";
+import {
+  getCollectionDialogLabels,
+  getCollectionMutationLabels,
+} from "../shared/collection-management-labels.js";
 import { getIconSvg } from "../../lib/icons.js";
+import { Icon } from "../shared/Icon.js";
 import { NAVIGATION_SETTINGS_PATH } from "../../lib/settings-paths.js";
 
 const escapeJson = (data: unknown) =>
@@ -38,6 +41,8 @@ export const CollectionPage: FC<CollectionPageProps> = ({
   isAuthenticated,
   isInNavigation = false,
   sitePathPrefix = "",
+  basePath = sitePathPrefix,
+  emptyInLanguage,
   feedHref,
 }) => {
   const primaryCollection = collections[0];
@@ -54,13 +59,7 @@ export const CollectionPage: FC<CollectionPageProps> = ({
         }),
       )
     : collections.map((collection) => collection.title).join(" + ");
-  const collectionUrl = toPublicPath(pagePath, sitePathPrefix);
-  const editCollectionUrl = toPublicPath(
-    `${getCollectionEditPath(primaryCollection.slug)}?returnTo=${encodeURIComponent(
-      collectionUrl,
-    )}`,
-    sitePathPrefix,
-  );
+  const collectionUrl = toPublicPath(pagePath, basePath);
   const navigationSettingsUrl = toPublicPath(
     NAVIGATION_SETTINGS_PATH,
     sitePathPrefix,
@@ -178,51 +177,22 @@ export const CollectionPage: FC<CollectionPageProps> = ({
     >
       <header class="collection-page-header">
         <div class="collection-page-topbar">
-          <nav
-            class="collection-breadcrumb"
-            aria-label={i18n._(
+          {/* Only the return trip is left. A breadcrumb's last crumb named this
+              page, which the title one line below already does, word for
+              word — so the trail was two thirds repetition. */}
+          <a
+            class="collection-page-back"
+            href={toPublicPath(getCollectionsDirectoryPath(), basePath)}
+          >
+            <Icon name="arrow-left" class="collection-page-back-icon" />
+            {i18n._(
               msg({
-                message: "Breadcrumb",
-                comment: "@context: Breadcrumb label on collection detail page",
+                message: "Collections",
+                comment:
+                  "@context: Link back to the collections directory from a collection page",
               }),
             )}
-          >
-            <ol>
-              <li>
-                <a
-                  href={toPublicPath(
-                    getCollectionsDirectoryPath(),
-                    sitePathPrefix,
-                  )}
-                >
-                  {i18n._(
-                    msg({
-                      message: "Collections",
-                      comment: "@context: Breadcrumb link to collections page",
-                    }),
-                  )}
-                </a>
-              </li>
-              <li aria-hidden="true">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="m9 18 6-6-6-6" />
-                </svg>
-              </li>
-              <li>
-                <span>{selectionTitle}</span>
-              </li>
-            </ol>
-          </nav>
+          </a>
         </div>
 
         <div class="collection-page-title-block">
@@ -256,7 +226,7 @@ export const CollectionPage: FC<CollectionPageProps> = ({
                   <a
                     href={toPublicPath(
                       getCollectionSelectionPath(collection.slug),
-                      sitePathPrefix,
+                      basePath,
                     )}
                   >
                     {collection.title}
@@ -312,7 +282,7 @@ export const CollectionPage: FC<CollectionPageProps> = ({
                 <>
                   {" "}
                   <a
-                    href={toPublicPath(feedHref, sitePathPrefix)}
+                    href={toPublicPath(feedHref, basePath)}
                     class="feed-link"
                     title={i18n._(
                       msg({
@@ -459,6 +429,14 @@ export const CollectionPage: FC<CollectionPageProps> = ({
                 </svg>
               </button>
 
+              {/* The dialog is a Lit component and cannot reach the i18n
+                  catalogs, so the page that can open it carries its strings. */}
+              <div
+                hidden
+                data-collection-dialog-labels={escapeJson(
+                  getCollectionDialogLabels(i18n),
+                )}
+              />
               <div
                 class="collection-page-manage"
                 data-collection-page-actions
@@ -467,7 +445,7 @@ export const CollectionPage: FC<CollectionPageProps> = ({
                 data-collection-in-navigation={String(isInNavigation)}
                 data-collection-page-redirect-url={toPublicPath(
                   getCollectionsDirectoryPath(),
-                  sitePathPrefix,
+                  basePath,
                 )}
               >
                 <button
@@ -497,10 +475,13 @@ export const CollectionPage: FC<CollectionPageProps> = ({
                   data-collection-page-menu
                   hidden
                 >
-                  <a
-                    href={editCollectionUrl}
+                  {/* Opens the dialog, not an editor page: creating and
+                      editing a collection are one surface. */}
+                  <button
+                    type="button"
                     class="collections-page-menu-item"
                     role="menuitem"
+                    data-collection-page-action="edit"
                   >
                     <span
                       class="collections-page-menu-item-icon"
@@ -524,7 +505,7 @@ export const CollectionPage: FC<CollectionPageProps> = ({
                     <span class="collections-page-menu-item-label">
                       {mutationLabels.edit}
                     </span>
-                  </a>
+                  </button>
                   <button
                     type="button"
                     class="collections-page-menu-item"
@@ -630,24 +611,52 @@ export const CollectionPage: FC<CollectionPageProps> = ({
 
       <main>
         {items.length === 0 ? (
-          <p class="text-muted-foreground">
-            {isAggregate
-              ? i18n._(
-                  msg({
-                    message:
-                      "Nothing here yet. Add threads to one of these collections to fill this view.",
-                    comment:
-                      "@context: Empty state message on an aggregate collection page",
-                  }),
-                )
-              : i18n._(
-                  msg({
-                    message:
-                      "This collection is empty. Add threads from the editor.",
-                    comment: "@context: Empty state message",
-                  }),
-                )}
-          </p>
+          emptyInLanguage ? (
+            <p class="text-muted-foreground">
+              {i18n._(
+                msg({
+                  message: "Nothing in {language} here yet.",
+                  comment:
+                    "@context: Empty state when a collection has no posts in the language being browsed",
+                }),
+                { language: emptyInLanguage.languageLabel },
+              )}{" "}
+              {emptyInLanguage.alternatives.map((alternative, index) => (
+                <span key={alternative.lang}>
+                  {index > 0 ? <span> · </span> : null}
+                  <a href={alternative.href} hreflang={alternative.lang}>
+                    {i18n._(
+                      msg({
+                        message: "Read it in {language}",
+                        comment:
+                          "@context: Link out of an empty language view of a collection",
+                      }),
+                      { language: alternative.label },
+                    )}
+                  </a>
+                </span>
+              ))}
+            </p>
+          ) : (
+            <p class="text-muted-foreground">
+              {isAggregate
+                ? i18n._(
+                    msg({
+                      message:
+                        "Nothing here yet. Add threads to one of these collections to fill this view.",
+                      comment:
+                        "@context: Empty state message on an aggregate collection page",
+                    }),
+                  )
+                : i18n._(
+                    msg({
+                      message:
+                        "This collection is empty. Add threads from the editor.",
+                      comment: "@context: Empty state message",
+                    }),
+                  )}
+            </p>
+          )
         ) : (
           <TimelineFeed
             items={items}

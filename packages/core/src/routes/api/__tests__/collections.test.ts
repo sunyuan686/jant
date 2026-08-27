@@ -45,6 +45,30 @@ describe("Collections API Routes", () => {
       expect(body.directoryItems[0].collectionId).toBe(col.id);
     });
 
+    it("returns smart collections with the same two measures", async () => {
+      const { app, services } = createTestApp();
+      app.route("/api/collections", collectionsApiRoutes);
+
+      await services.smartCollections.create({
+        slug: "quotes",
+        title: "Quotes",
+        selection: { format: "quote" },
+      });
+      const quote = await services.posts.create({
+        format: "quote",
+        quoteText: "Worth keeping",
+      });
+
+      const res = await app.request("/api/collections");
+      const body = await res.json();
+
+      expect(body.smartCollections).toHaveLength(1);
+      expect(body.smartCollections[0].threadCount).toBe(1);
+      expect(body.smartCollections[0].recentActivityAt).toBe(
+        quote.lastActivityAt,
+      );
+    });
+
     it("returns divider labels", async () => {
       const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/collections", collectionsApiRoutes);
@@ -140,6 +164,61 @@ describe("Collections API Routes", () => {
 
       const res = await app.request(`/api/collections/${missingId}`);
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe("GET /api/collections/slug", () => {
+    it("answers whether an address is free", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/collections", collectionsApiRoutes);
+
+      await services.collections.create({ slug: "tech", title: "Tech" });
+
+      const taken = await app.request(
+        "/api/collections/slug?mode=check&slug=tech",
+      );
+      expect(taken.status).toBe(200);
+      expect(await taken.json()).toEqual({ slug: "tech", available: false });
+
+      const free = await app.request(
+        "/api/collections/slug?mode=check&slug=reading",
+      );
+      expect(await free.json()).toEqual({ slug: "reading", available: true });
+    });
+
+    it("ignores the address the named collection already holds", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/collections", collectionsApiRoutes);
+
+      const collection = await services.collections.create({
+        slug: "tech",
+        title: "Tech",
+      });
+
+      const res = await app.request(
+        `/api/collections/slug?mode=check&slug=tech&collectionId=${collection.id}`,
+      );
+      expect(await res.json()).toEqual({ slug: "tech", available: true });
+    });
+
+    it("refuses a reserved address rather than calling it taken", async () => {
+      const { app } = createTestApp({ authenticated: true });
+      app.route("/api/collections", collectionsApiRoutes);
+
+      const res = await app.request(
+        "/api/collections/slug?mode=check&slug=settings",
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 401 when not authenticated", async () => {
+      const { app } = createTestApp({ authenticated: false });
+      app.route("/api/collections", collectionsApiRoutes);
+
+      const res = await app.request(
+        "/api/collections/slug?mode=check&slug=tech",
+      );
+      expect(res.status).toBe(401);
     });
   });
 
@@ -457,6 +536,41 @@ describe("Collections API Routes", () => {
       expect(reordered[0]?.id).toBe(itemA?.id);
       expect(reordered[1]?.id).toBe(itemC?.id);
       expect(reordered[2]?.id).toBe(itemB?.id);
+    });
+
+    it("moves a smart collection, which the directory names by its own id", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/collections", collectionsApiRoutes);
+
+      const a = await services.collections.create({ slug: "a", title: "A" });
+      const b = await services.collections.create({ slug: "b", title: "B" });
+      const quotes = await services.smartCollections.create({
+        slug: "quotes",
+        title: "Quotes",
+      });
+
+      const items = await services.collections.listDirectoryItems();
+
+      // The shape the drag surface sends: a smart collection id beside a
+      // directory row id.
+      const res = await app.request(
+        `/api/collections/directory-items/${quotes.id}/move`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            after: items[0]?.id ?? "",
+            before: items[1]?.id ?? "",
+          }),
+        },
+      );
+
+      expect(res.status).toBe(200);
+
+      const reordered = await services.collections.listDirectoryItems();
+      expect(
+        reordered.map((item) => item.collectionId ?? item.smartCollectionId),
+      ).toEqual([a.id, quotes.id, b.id]);
     });
   });
 

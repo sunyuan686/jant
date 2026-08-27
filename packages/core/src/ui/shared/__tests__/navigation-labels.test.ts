@@ -48,7 +48,7 @@ describe("getNavItemDisplayLabel", () => {
         { type: "system", systemKey: "rss", label: "", url: "/feed" },
         i18n,
       ),
-    ).toBe("translated:Feed");
+    ).toBe("translated:RSS");
   });
 
   it("translates prefixed public archive system items", () => {
@@ -63,7 +63,7 @@ describe("getNavItemDisplayLabel", () => {
         i18n,
         "/blog",
       ),
-    ).toBe("translated:Archive");
+    ).toBe("translated:All");
   });
 
   it("uses custom label for system item when label is non-empty", () => {
@@ -131,10 +131,8 @@ describe("system nav labels", () => {
     expect(getSystemNavDisplayLabel("collections", i18n)).toBe(
       "translated:Collections",
     );
-    expect(getSystemNavDisplayLabel("archive", i18n)).toBe(
-      "translated:Archive",
-    );
-    expect(getSystemNavDisplayLabel("rss", i18n)).toBe("translated:Feed");
+    expect(getSystemNavDisplayLabel("archive", i18n)).toBe("translated:All");
+    expect(getSystemNavDisplayLabel("rss", i18n)).toBe("translated:RSS");
   });
 
   it("translates system nav descriptions", () => {

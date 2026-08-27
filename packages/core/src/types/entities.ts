@@ -3,10 +3,13 @@
  */
 
 import type {
+  CollectionDirectoryEntryType,
   Format,
   Status,
   Visibility,
   CollectionSortOrder,
+  SmartCollectionSortOrder,
+  ArchiveLayout,
   NavItemType,
   NavItemPlacement,
   SystemNavKey,
@@ -16,6 +19,10 @@ import type {
   SiteDomainKind,
   SiteMemberRole,
 } from "./constants.js";
+
+import type { PostFilterSelection } from "../lib/filter-dimensions.js";
+
+export type { CollectionDirectoryEntryType };
 
 export interface Site {
   id: string;
@@ -66,8 +73,22 @@ export interface Post {
   previewProvider: string | null;
   replyToId: string | null;
   threadId: string;
+  /**
+   * BCP 47 content language, canonical form. Uniform across a Thread. `null`
+   * only until the site first enables multilingual content.
+   */
+  language: string | null;
+  /**
+   * Shared key for Posts that are translations of one another. Roots only.
+   */
+  translationGroupId: string | null;
+  /** Reply published without announcing it on Latest. Always false on roots. */
+  quietReply: boolean;
   publishedAt: number | null;
+  /** Root only: newest published post in the Thread, quiet replies excluded. */
   lastActivityAt: number;
+  /** Root only: newest published post in the Thread, quiet replies included. */
+  threadUpdatedAt: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -136,13 +157,60 @@ export interface CollectionDirectoryCollection extends Collection {
   recentActivityAt: number;
 }
 
-export type CollectionDirectoryEntryType = "collection" | "divider" | "link";
+/**
+ * A collection whose members are decided by conditions rather than by tagging.
+ *
+ * To a reader this is a collection: a root-level address, a title, a
+ * description, a list of posts, a feed. The asymmetries are permanent and
+ * deliberate — nothing can be added to it by hand, nothing pinned, nothing
+ * reordered — so every "add this post to a collection" surface has to leave it
+ * out. See `selection` for what decides membership.
+ */
+export interface SmartCollection {
+  id: string;
+  siteId: string;
+  slug: string;
+  title: string;
+  description: string | null;
+  /** The conditions, in the shared dimension vocabulary. Empty = every post. */
+  selection: PostFilterSelection;
+  sort: SmartCollectionSortOrder;
+  /** `null` follows the site's configured archive layout. */
+  layout: ArchiveLayout | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SmartCollectionDirectoryEntry extends SmartCollection {
+  threadCount: number;
+  /**
+   * Newest activity among the threads the conditions match, or the smart
+   * collection's own `updatedAt` when they match nothing.
+   *
+   * The same measure `CollectionDirectoryCollection` carries, on the same
+   * definition, because the two sit in one list and a reader compares them.
+   */
+  recentActivityAt: number;
+}
+
+/**
+ * One entry in the collections directory, either kind.
+ *
+ * The two are told apart by `kind`, not by which optional field happens to be
+ * present. Surfaces that treat them alike — the directory, the navigation
+ * picker, the command palette — take this; surfaces where the difference
+ * matters take one or the other.
+ */
+export type AnyCollectionEntry =
+  | { kind: "manual"; collection: CollectionDirectoryCollection }
+  | { kind: "smart"; smartCollection: SmartCollectionDirectoryEntry };
 
 export interface CollectionDirectoryEntry {
   id: string;
   siteId: string;
   type: CollectionDirectoryEntryType;
   collectionId: string | null;
+  smartCollectionId: string | null;
   label: string | null;
   url: string | null;
   description: string | null;
@@ -158,10 +226,12 @@ export interface CollectionDirectoryItem {
   url?: string | null;
   description?: string | null;
   collection?: CollectionDirectoryCollection;
+  smartCollection?: SmartCollectionDirectoryEntry;
 }
 
 export interface CollectionsDirectoryData {
   collections: CollectionDirectoryCollection[];
+  smartCollections: SmartCollectionDirectoryEntry[];
   items: CollectionDirectoryItem[];
   directoryItems: CollectionDirectoryEntry[];
 }
@@ -178,9 +248,24 @@ export interface NavItem {
   type: NavItemType;
   systemKey?: SystemNavKey;
   collectionId?: string;
+  smartCollectionId?: string;
   postId?: string;
+  /**
+   * Author's override, or `""` when the item follows whatever it points at.
+   *
+   * Empty is the normal state: a page or collection item shows its target's
+   * current title, a built-in item shows its translated default. Only a label
+   * the author typed is stored here, and it then wins in every language view.
+   */
   label: string;
   url: string;
+  /**
+   * Current title of the post or collection this item points at, resolved at
+   * read time. The display label when `label` is empty — see
+   * `getNavItemDisplayLabel`. Absent for `link` and `system` items, which have
+   * no target row to follow.
+   */
+  targetTitle?: string;
   placement: NavItemPlacement;
   position: string;
   createdAt: number;
@@ -205,6 +290,7 @@ export interface PathRecord {
   kind: PathKind;
   postId: string | null;
   collectionId: string | null;
+  smartCollectionId: string | null;
   redirectToPath: string | null;
   redirectType: 301 | 302 | null;
   archiveQuery: string | null;

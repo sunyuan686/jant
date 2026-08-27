@@ -13,19 +13,37 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import type {
   Bindings,
+  Collection,
   FeedData,
-  Format,
-  MediaKind,
   PostWithMedia,
 } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import type {
   ArchiveFilters,
-  ArchiveView,
-  ArchiveVisibility,
+  ArchiveLayout,
+  ArchiveSort,
 } from "../../types/props.js";
-import { FORMATS, MEDIA_KINDS } from "../../types.js";
+import { PUBLIC_ARCHIVE_VISIBILITIES } from "../../types.js";
 import { ArchivePage } from "../../ui/pages/ArchivePage.js";
+import {
+  describeArchiveFilters,
+  getArchiveViewTitle,
+  hasActiveArchiveFilter,
+} from "../../ui/shared/archive-labels.js";
+import type {
+  DimensionContext,
+  ParamReader,
+  PostFilterSelection,
+} from "../../lib/filter-dimensions.js";
+import {
+  buildCollectionVocabulary,
+  EMPTY_COLLECTION_VOCABULARY,
+  hasFilterSelection,
+  parsePostFilterSelection,
+  readCollectionSlugs,
+  serializePostFilterSelection,
+  toPostFilters,
+} from "../../lib/filter-dimensions.js";
 import { defaultFeedRenderer } from "../../lib/feed.js";
 import {
   getFeedEntryUpdatedAt,
@@ -36,7 +54,13 @@ import { getNavigationData } from "../../lib/navigation.js";
 import { buildPageTitle } from "../../lib/page-title.js";
 import { renderPublicPage } from "../../lib/render.js";
 import { formatYearMonth } from "../../lib/time.js";
-import { toAbsoluteSiteUrl, toPublicPath } from "../../lib/url.js";
+import { toAbsoluteSiteUrl } from "../../lib/url.js";
+import {
+  buildSurfaceAlternates,
+  getViewLang,
+  toViewPath,
+  viewBasePath,
+} from "../../lib/view-language.js";
 import {
   createMediaContext,
   toArchiveGroupsWithMedia,
@@ -54,113 +78,165 @@ type Env = { Bindings: Bindings; Variables: AppVariables };
 // Shared filter parsing
 // =============================================================================
 
-/** Parsed archive query parameters (before service-level filter conversion). */
+/**
+ * One archive request, after the query string has been read.
+ *
+ * The filter dimensions live in `selection`, spoken in the shared vocabulary
+ * (`lib/filter-dimensions.ts`); everything beside it shapes the rendering
+ * rather than the result set.
+ */
 interface ParsedArchiveParams {
-  format?: Format;
-  validYear?: number;
-  collectionSlug?: string;
-  mediaKinds?: MediaKind[];
-  hasMedia?: boolean;
-  hasTitle?: boolean;
-  hasReplies?: boolean;
-  visibility?: ArchiveVisibility;
-  visibilityAll: boolean;
-  view?: ArchiveView;
+  selection: PostFilterSelection;
+  /**
+   * Set when `?collection=` named something this site does not have. The whole
+   * request is answered with a 404 rather than rendered — see
+   * {@link readArchiveParams}.
+   */
+  collectionMissing: boolean;
+  layout?: ArchiveLayout;
+  sort: ArchiveSort;
   currentPage: number;
 }
 
-/**
- * Parse archive filter query parameters.
- *
- * @param c - Hono context
- * @param queryOverrides - Optional map of query param overrides (used by custom archive URLs)
- * @returns Parsed and validated query parameters
- */
-function parseArchiveParams(
+/** Reads this request's query string, or the stored one a custom path carries. */
+function archiveParamReader(
   c: Context<Env>,
   queryOverrides?: Record<string, string>,
+): ParamReader {
+  return (key) => (queryOverrides ? queryOverrides[key] : c.req.query(key));
+}
+
+/**
+ * Load the collection vocabulary, but only when this request needs one.
+ *
+ * Resolving `?collection=` costs a round trip, and the archive renders without
+ * one on every request that names no collection — which is most of them, on the
+ * site's widest reader page. So the decision is made from the query string
+ * alone, before anything is parsed.
+ *
+ * @param c - Hono context
+ * @param read - Query parameter reader
+ * @returns Every collection on the site, or null when none was named
+ */
+async function loadArchiveCollections(
+  c: Context<Env>,
+  read: ParamReader,
+): Promise<Collection[] | null> {
+  if (readCollectionSlugs(read).length === 0) return null;
+  return c.var.services.collections.list();
+}
+
+/**
+ * Read the archive's query string into a selection plus rendering options.
+ *
+ * @param c - Hono context
+ * @param read - Query parameter reader
+ * @param collections - Collections to resolve slugs against, when any is named
+ * @returns Parsed and validated query parameters
+ */
+function readArchiveParams(
+  c: Context<Env>,
+  read: ParamReader,
+  collections: Collection[] | null,
 ): ParsedArchiveParams {
-  const q = (key: string): string | undefined =>
-    queryOverrides ? queryOverrides[key] : c.req.query(key);
+  // `layout` is the current spelling; `view` is the pre-rename one, kept
+  // readable indefinitely so old bookmarks and stored custom archive URLs keep
+  // working. Custom archive URLs bypass the canonical redirect below, so this
+  // parser — not the redirect — is what actually keeps them alive. `layout`
+  // wins when a URL somehow carries both.
+  const readLayout = (value: string | undefined): ArchiveLayout | undefined =>
+    value === "grid" || value === "list" ? value : undefined;
+  const layout = readLayout(read("layout")) ?? readLayout(read("view"));
 
-  const formatParam = q("format") as Format | undefined;
-  const format =
-    formatParam && FORMATS.includes(formatParam) ? formatParam : undefined;
+  // sort selects the time axis for ordering, month grouping, and the year
+  // filter alike — they must stay on the same column or the month headers
+  // stop agreeing with the order inside them.
+  const sort: ArchiveSort =
+    read("sort") === "updated" ? "updated" : "published";
 
-  const yearParam = q("year");
-  const year = yearParam ? parseInt(yearParam, 10) : undefined;
-  const validYear = year && !isNaN(year) && year > 1970 ? year : undefined;
-
-  const collectionSlug = q("collection") || undefined;
-
-  // Presence filters use single-word params with any/none values
-  // (media=any|none|<kinds>, title=any|none, replies=any|none). The legacy
-  // hasMedia/hasTitle/hasReplies=1/0 params are still accepted so old
-  // bookmarks, feed subscriptions, and stored custom archive URLs keep
-  // working; new URLs are always generated in the new style.
-  const parsePresence = (
-    param: string | undefined,
-    legacy: string | undefined,
-  ): boolean | undefined => {
-    if (param === "any") return true;
-    if (param === "none") return false;
-    if (legacy === "1") return true;
-    if (legacy === "0") return false;
-    return undefined;
-  };
-
-  const mediaParam = q("media") || undefined;
-  const mediaIsPresence = mediaParam === "any" || mediaParam === "none";
-  const mediaKinds =
-    mediaParam && !mediaIsPresence
-      ? (mediaParam
-          .split(",")
-          .filter((m): m is MediaKind =>
-            (MEDIA_KINDS as readonly string[]).includes(m),
-          ) as MediaKind[])
-      : undefined;
-  const hasMedia = parsePresence(
-    mediaIsPresence ? mediaParam : undefined,
-    q("hasMedia"),
-  );
-
-  const hasTitle = parsePresence(q("title"), q("hasTitle"));
-  const hasReplies = parsePresence(q("replies"), q("hasReplies"));
-
-  const VALID_VISIBILITIES = ["public", "latest_hidden", "private", "featured"];
-  const rawVisibilityParam = q("visibility");
-  // "hidden" is the URL spelling of the internal latest_hidden value
-  const visibilityParam =
-    rawVisibilityParam === "hidden" ? "latest_hidden" : rawVisibilityParam;
-  const visibilityAll = visibilityParam === "all";
-  const visibility =
-    visibilityParam && VALID_VISIBILITIES.includes(visibilityParam)
-      ? (visibilityParam as ArchiveVisibility)
-      : undefined;
-
-  const viewParam = q("view") as ArchiveView | undefined;
-  const view =
-    viewParam && (viewParam === "grid" || viewParam === "list")
-      ? viewParam
-      : undefined;
+  const { selection, issues } = parsePostFilterSelection(read, {
+    collections: collections
+      ? buildCollectionVocabulary(collections)
+      : EMPTY_COLLECTION_VOCABULARY,
+    yearAxis: sort === "updated" ? "sort" : "published",
+  });
 
   // Page always comes from the actual request URL (pagination links use ?page=N)
   const pageParam = c.req.query("page");
   const currentPage = Math.max(1, parseInt(pageParam || "1", 10) || 1);
 
   return {
-    format,
-    validYear,
-    collectionSlug,
-    mediaKinds: mediaKinds && mediaKinds.length > 0 ? mediaKinds : undefined,
-    hasMedia,
-    hasTitle,
-    hasReplies,
-    visibility,
-    visibilityAll,
-    view,
+    selection,
+    // A slug that resolves to nothing must never fall through as "no collection
+    // filter": that renders the whole archive under a name the reader chose,
+    // with the heading, the chip bar, and the feed title all pretending the word
+    // was never typed. The same rule `visibility=private` follows — a selection
+    // that cannot be honored is answered, not erased. `/collections/{slug}`
+    // already answers this exact question with a 404, and so does every caller
+    // here.
+    collectionMissing: issues.some((issue) => issue.param === "collection"),
+    layout,
+    sort,
     currentPage,
   };
+}
+
+/** Read the query string and resolve anything in it that needs the database. */
+async function parseArchiveParams(
+  c: Context<Env>,
+  queryOverrides?: Record<string, string>,
+): Promise<{ params: ParsedArchiveParams; collections: Collection[] | null }> {
+  const read = archiveParamReader(c, queryOverrides);
+  const collections = await loadArchiveCollections(c, read);
+  return { params: readArchiveParams(c, read, collections), collections };
+}
+
+/**
+ * Whether an archive query names a result set only a signed-in reader can see.
+ *
+ * Answered from the query alone, never from what the database happens to hold.
+ * A check that fired only when private posts existed would answer "does this
+ * site keep anything private?" to whoever asked.
+ *
+ * @param params - Parsed query params
+ * @returns `true` when rendering this query requires an authenticated reader
+ * @example
+ * archiveQueryRequiresAuth({ selection: { visibility: "private" }, ... }); // true
+ */
+function archiveQueryRequiresAuth(params: ParsedArchiveParams): boolean {
+  const visibility = params.selection.visibility;
+  if (visibility === undefined) return false;
+  return !(PUBLIC_ARCHIVE_VISIBILITIES as readonly string[]).includes(
+    visibility,
+  );
+}
+
+/**
+ * Whether this URL is a selection a reader assembled rather than a page the
+ * site publishes.
+ *
+ * Deliberately not `hasActiveArchiveFilter`, which answers a different
+ * question: whether to run the baseline count and render `42 of 1,240`. `sort`
+ * does not change that count, so folding it in there would buy a wasted query
+ * and the label `1,240 of 1,240`. But `sort` does change which posts land on
+ * the first page, and together with `year` it changes the set outright — the
+ * year filter follows the sort axis. Two questions, two predicates.
+ *
+ * A stored query is never reader-assembled: the author declared that path, so
+ * it is a page like any other. Same `queryOverrides` seam the auth guard uses.
+ *
+ * @param params - Parsed query params
+ * @param queryOverrides - Stored query from the path registry, when there is one
+ * @returns `true` when the URL is one facet of a combinatorial family
+ * @example
+ * isReaderAssembledArchive({ selection: { format: "note" }, ... }, undefined); // true
+ */
+function isReaderAssembledArchive(
+  params: ParsedArchiveParams,
+  queryOverrides: Record<string, string> | undefined,
+): boolean {
+  if (queryOverrides) return false;
+  return hasFilterSelection(params.selection) || params.sort === "updated";
 }
 
 /**
@@ -174,69 +250,51 @@ function buildArchivePostFilters(
   params: ParsedArchiveParams,
   opts: {
     isAuthenticated: boolean;
-    collectionId?: string;
+    lang?: string;
+    /** Overrides the request's own selection, for the unfiltered baseline. */
+    selection?: PostFilterSelection;
   },
 ): PostFilters {
-  const { isAuthenticated, collectionId } = opts;
+  const { isAuthenticated, lang } = opts;
+  const selection = opts.selection ?? params.selection;
+  const sortsByActivity = params.sort === "updated";
 
-  // Map visibility: feed routes force public; page respects auth
-  // Authenticated users default to showing all visibilities
-  const effectiveVisibility = isAuthenticated
-    ? params.visibilityAll
-      ? undefined
-      : (params.visibility ?? undefined)
-    : undefined;
-
-  let publishedAfter: number | undefined;
-  let publishedBefore: number | undefined;
-  if (params.validYear) {
-    publishedAfter = Date.UTC(params.validYear, 0, 1) / 1000;
-    publishedBefore = Date.UTC(params.validYear + 1, 0, 1) / 1000;
-  }
-
+  // The visibility clause is applied as selected, with no auth-dependent
+  // degrade: a query naming `private` has already been redirected or 404'd by
+  // the time it reaches here (see `archiveQueryRequiresAuth`). Silently
+  // dropping the clause instead would render a different set under the same
+  // name. `excludePrivate` below stays the unconditional floor regardless.
   return {
-    format: params.format,
+    lang,
     status: "published",
     excludeReplies: true,
     excludePrivate: !isAuthenticated,
     excludeLatestHidden: false,
-    ...(effectiveVisibility === "featured"
-      ? { featured: true }
-      : effectiveVisibility
-        ? { visibility: effectiveVisibility }
-        : {}),
-    collectionId,
-    publishedAfter,
-    publishedBefore,
-    mediaKinds: params.mediaKinds,
-    hasMedia: params.hasMedia,
-    hasTitle: params.hasTitle,
-    hasReplies: params.hasReplies,
-    sortBy: "published",
+    // The year filter follows the active axis, so every month bucket shown
+    // under `year=N` really belongs to that year.
+    ...toPostFilters(selection, {
+      yearAxis: sortsByActivity ? "sort" : "published",
+    }),
+    // "thread_updated", not "activity": the archive is the canonical all-posts
+    // view, and the quiet-reply switch only promises not to move a Thread on
+    // Latest. Here the honest answer is when the Thread last changed.
+    sortBy: sortsByActivity ? "thread_updated" : "published",
     ignorePinnedSort: true,
   };
 }
 
 /**
  * Build a query string from parsed archive params (for feed self-URL and
- * archive page feed link). Omits page-only params (view, page).
+ * archive page feed link). Omits layout and page — those shape the rendered
+ * page, not the result set — but carries `sort`, so the feed button on an
+ * updated-sorted page hands back the matching feed.
  */
-function buildArchiveFeedQuery(params: ParsedArchiveParams): string {
-  const qs = new URLSearchParams();
-  if (params.format) qs.set("format", params.format);
-  if (params.validYear) qs.set("year", String(params.validYear));
-  if (params.collectionSlug) qs.set("collection", params.collectionSlug);
-  if (params.mediaKinds && params.mediaKinds.length > 0) {
-    qs.set("media", params.mediaKinds.join(","));
-  } else if (params.hasMedia !== undefined) {
-    qs.set("media", params.hasMedia ? "any" : "none");
-  }
-  if (params.hasTitle !== undefined) {
-    qs.set("title", params.hasTitle ? "any" : "none");
-  }
-  if (params.hasReplies !== undefined) {
-    qs.set("replies", params.hasReplies ? "any" : "none");
-  }
+function buildArchiveFeedQuery(
+  params: ParsedArchiveParams,
+  ctx: DimensionContext,
+): string {
+  const qs = serializePostFilterSelection(params.selection, ctx);
+  if (params.sort === "updated") qs.set("sort", "updated");
   const str = qs.toString();
   return str ? `?${str}` : "";
 }
@@ -244,19 +302,30 @@ function buildArchiveFeedQuery(params: ParsedArchiveParams): string {
 export const archiveRoutes = new Hono<Env>();
 
 /**
- * Build a canonical redirect target when a request uses legacy archive
- * param spellings (hasMedia/hasTitle/hasReplies=1/0, visibility=latest_hidden).
+ * Build a canonical redirect for the archive page when the URL needs one.
  *
- * Only legacy params are rewritten; everything else (including unknown
- * params) is preserved. Returns null when the URL is already canonical.
- * Applies to the /archive page only — feeds and the public API accept
- * legacy spellings silently, and custom archive URLs (path_registry
- * query overrides) never reach this path.
+ * Two kinds of rewrite happen here, and they do not deserve the same status:
+ *
+ * - **Legacy spellings** (`hasMedia`/`hasTitle`/`hasReplies=1/0`,
+ *   `visibility=latest_hidden`, `visibility=all`, `view=`) are unconditional —
+ *   the old spelling is gone for everyone, so 308.
+ * - **`visibility=private` for a signed-out reader** is not. That URL moved
+ *   for *this* reader, *now*, and has to keep working once the author signs
+ *   in, so it is a 302. When both apply, the weaker claim wins and everything
+ *   is still resolved in a single hop.
+ *
+ * Only these params are touched; everything else, including unknown params, is
+ * preserved. Returns null when the URL is already canonical for this reader.
+ * Applies to the /archive page only — feeds and the public API accept legacy
+ * spellings silently, and custom archive URLs (path_registry query overrides)
+ * never reach this path.
  *
  * @param c - Hono context
- * @returns Canonical path + query to redirect to, or null
+ * @returns Redirect target and status code, or null
  */
-function legacyArchiveParamsRedirect(c: Context<Env>): string | null {
+function archiveParamsRedirect(
+  c: Context<Env>,
+): { location: string; status: 302 | 308 } | null {
   const url = new URL(c.req.url);
   const params = url.searchParams;
   let changed = false;
@@ -281,9 +350,48 @@ function legacyArchiveParamsRedirect(c: Context<Env>): string | null {
     changed = true;
   }
 
+  // `visibility=all` was a second spelling of "no visibility selected" — it
+  // filtered nothing, exactly like an absent parameter, and only the parser
+  // knew. Dropped rather than kept alive, on the same reasoning as `view=`.
+  if (params.get("visibility") === "all") {
+    params.delete("visibility");
+    changed = true;
+  }
+
+  // A signed-out reader cannot select `private`, and the one answer that is
+  // never right is to drop the clause and render a different set under the
+  // same URL. Strip it here so the address bar and the page agree on what the
+  // reader is looking at. The decision reads the param and the session only,
+  // so it is identical whether or not this site holds a single private post.
+  let authStripped = false;
+  if (params.get("visibility") === "private" && !c.var.isAuthenticated) {
+    params.delete("visibility");
+    authStripped = true;
+    changed = true;
+  }
+
+  // `view` became `layout` so `view` can name the saved-selection concept.
+  // Only a value this page actually renders is carried across; anything else
+  // is dropped, which lands the reader on the site default rather than on a
+  // URL that keeps a meaningless param alive.
+  const legacyLayout = params.get("view");
+  if (legacyLayout !== null) {
+    if (
+      !params.has("layout") &&
+      (legacyLayout === "grid" || legacyLayout === "list")
+    ) {
+      params.set("layout", legacyLayout);
+    }
+    params.delete("view");
+    changed = true;
+  }
+
   if (!changed) return null;
   const qs = params.toString();
-  return `${url.pathname}${qs ? `?${qs}` : ""}`;
+  return {
+    location: `${url.pathname}${qs ? `?${qs}` : ""}`,
+    status: authStripped ? 302 : 308,
+  };
 }
 
 // =============================================================================
@@ -303,44 +411,91 @@ export async function renderArchivePage(
 ): Promise<Response> {
   const { services, appConfig } = c.var;
   const pageSize = appConfig.archivePageSize;
-  const params = parseArchiveParams(c, queryOverrides);
+  const { params, collections: preloadedCollections } =
+    await parseArchiveParams(c, queryOverrides);
 
-  // --- Resolve collection slug to ID ----------------------------------------
+  // An owner-stored query is the path's own definition, so there is nothing to
+  // redirect to the way the /archive route redirects a reader's own params:
+  // the path names a set this reader cannot see, and the honest answer is that
+  // it does not exist for them. The presence of `queryOverrides` is exactly
+  // what separates the two cases, so every future caller passing a stored
+  // query inherits this guard.
+  if (
+    queryOverrides &&
+    archiveQueryRequiresAuth(params) &&
+    !c.var.isAuthenticated
+  ) {
+    return c.notFound();
+  }
 
-  const collection = params.collectionSlug
-    ? await services.collections.getBySlug(params.collectionSlug)
-    : undefined;
-  const collectionId = collection?.id;
+  if (params.collectionMissing) return c.notFound();
 
   const navData = await getNavigationData(c);
 
   const filters = buildArchivePostFilters(params, {
     isAuthenticated: navData.isAuthenticated,
-    collectionId,
+    lang: getViewLang(c) ?? undefined,
   });
 
   // --- Parallel data fetches ------------------------------------------------
   // List view doesn't need month-based grouping, so skip countByYearMonth.
 
-  const isListView = params.view === "list";
+  // No layout in the URL means the site's configured default, not grid: the
+  // archive is the widest of Featured / Latest / All and the other two are
+  // timelines, so `list` is the default default.
+  const layout: ArchiveLayout = params.layout ?? appConfig.archiveDefaultLayout;
+  const isListView = layout === "list";
 
-  const [totalCount, monthlyCounts, posts, availableYears, allCollections] =
-    await Promise.all([
-      services.posts.count(filters),
-      isListView
-        ? Promise.resolve([] as { yearMonth: string; count: number }[])
-        : services.posts.countByYearMonth(filters),
-      services.posts.list({
-        ...filters,
-        limit: pageSize,
-        offset: (params.currentPage - 1) * pageSize,
-      }),
-      services.posts.getDistinctYears({
-        status: "published",
-        excludeReplies: true,
-      }),
-      services.collections.list(),
-    ]);
+  // The same view with every selection cleared, so the count can say how much
+  // the filter removed. Skipped entirely when nothing is filtered — the two
+  // numbers would be equal — which keeps the plain /archive page at its
+  // current query count. When it does run it is the cheapest of the three
+  // aggregates, since clearing the selections is what drops the collection and
+  // media EXISTS subqueries.
+  const baselineFilters = hasActiveArchiveFilter(params.selection)
+    ? buildArchivePostFilters(params, {
+        isAuthenticated: navData.isAuthenticated,
+        lang: filters.lang,
+        selection: {},
+      })
+    : undefined;
+
+  const [
+    totalCount,
+    baselineCount,
+    monthlyCounts,
+    posts,
+    availableYears,
+    listedCollections,
+  ] = await Promise.all([
+    services.posts.count(filters),
+    baselineFilters
+      ? services.posts.count(baselineFilters)
+      : Promise.resolve(undefined),
+    isListView
+      ? Promise.resolve([] as { yearMonth: string; count: number }[])
+      : services.posts.countByYearMonth(filters),
+    services.posts.list({
+      ...filters,
+      limit: pageSize,
+      offset: (params.currentPage - 1) * pageSize,
+    }),
+    services.posts.getDistinctYears({
+      status: "published",
+      excludeReplies: true,
+      lang: filters.lang,
+      sortBy: filters.sortBy,
+    }),
+    // Already loaded when the query named a collection, because parsing needed
+    // it. Fetched here otherwise, so an unfiltered archive keeps paying for one
+    // round of queries rather than two.
+    preloadedCollections ?? services.collections.list(),
+  ]);
+
+  const allCollections = preloadedCollections ?? listedCollections;
+  const dimensionCtx: DimensionContext = {
+    collections: buildCollectionVocabulary(allCollections),
+  };
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
@@ -365,8 +520,12 @@ export async function renderArchivePage(
 
     const grouped = new Map<string, PostWithMedia[]>();
     for (const post of posts) {
-      const publishedAt = post.publishedAt ?? post.updatedAt;
-      const key = formatYearMonth(publishedAt, appConfig.timeZone);
+      // Bucket on the same axis the query sorted by, so groups stay ordered.
+      const groupedAt =
+        params.sort === "updated"
+          ? post.threadUpdatedAt
+          : (post.publishedAt ?? post.updatedAt);
+      const key = formatYearMonth(groupedAt, appConfig.timeZone);
       if (!grouped.has(key)) {
         grouped.set(key, []);
       }
@@ -421,51 +580,89 @@ export async function renderArchivePage(
 
   // --- Build active filter state for UI -------------------------------------
 
-  const effectiveVisibility = navData.isAuthenticated
-    ? params.visibilityAll
-      ? undefined
-      : (params.visibility ?? undefined)
-    : undefined;
-
   const archiveFilters: ArchiveFilters = {
-    year: params.validYear,
-    collectionSlug: params.collectionSlug,
-    collectionTitle: collection?.title,
-    format: params.format,
-    mediaKinds: params.mediaKinds,
-    hasMedia: params.hasMedia,
-    hasTitle: params.hasTitle,
-    hasReplies: params.hasReplies,
-    visibility: effectiveVisibility,
-    view: params.view,
+    selection: params.selection,
+    layout: params.layout,
+    sort: params.sort === "updated" ? "updated" : undefined,
   };
 
-  const feedQuery = buildArchiveFeedQuery(params);
+  const feedQuery = buildArchiveFeedQuery(params, dimensionCtx);
+  // A feed is unauthenticated by construction, so it cannot serve a selection
+  // only the author can see. Offering the link anyway would promise a feed
+  // that answers 404.
+  const feedHref =
+    appConfig.rssFeedsEnabled && !archiveQueryRequiresAuth(params)
+      ? `/archive/feed${feedQuery}`
+      : undefined;
 
   const availableCollectionsList = allCollections.map((col) => ({
+    id: col.id,
     slug: col.slug,
     title: col.title,
   }));
 
+  // A facet is one URL out of a family with no ceiling: `media` alone is a
+  // comma-joined subset of kinds, multiplied by year x collection x format x
+  // title x replies x visibility x sort. None of them is a page the site
+  // publishes, and the archive sits in no cache, so every one a crawler walks
+  // is a Worker invocation and seven D1 queries. `follow`, not `nofollow`:
+  // the posts these URLs link to are the real pages.
+  const readerAssembled = isReaderAssembledArchive(params, queryOverrides);
+  if (readerAssembled) c.header("X-Robots-Tag", "noindex, follow");
+
+  // Everything left over renders the same posts in the same order as the bare
+  // path — `layout` is markup only, `visibility=all` selects nothing, and
+  // tracking params select nothing either — so they all consolidate onto it.
+  // `page` is the exception and stays: page 2 is different content, not a
+  // different rendering of page 1.
+  const canonicalQuery =
+    params.currentPage > 1 ? `?page=${params.currentPage}` : "";
+  const canonicalHref = readerAssembled
+    ? undefined
+    : `${toAbsoluteSiteUrl(c.req.path, appConfig.siteUrl, appConfig.sitePathPrefix)}${canonicalQuery}`;
+
   return renderPublicPage(c, {
-    title: buildPageTitle("Archive", navData.siteName),
+    // A tab has no filter bar beside it, so unlike the page heading this has to
+    // name the selection itself — otherwise every bookmarked filtered view
+    // reads identically in the tab bar.
+    title: buildPageTitle(
+      getArchiveViewTitle(params.selection, getI18n(c), dimensionCtx),
+      params.sort === "updated" ? "Recently updated" : undefined,
+      navData.siteName,
+    ),
+    // An hreflang set is made of canonical URLs, so it mirrors the canonical
+    // exactly: the same trimmed query where there is one, and nothing at all
+    // on a facet, which has no canonical for the set to be built from.
+    alternateLanguages: readerAssembled
+      ? undefined
+      : buildSurfaceAlternates(c, { query: canonicalQuery }),
+    noindex: readerAssembled ? "follow" : undefined,
+    canonicalHref,
+    // The filters are part of the feed: a reader subscribing from a filtered
+    // archive gets that filtered feed, not the whole archive.
+    pageFeed: feedHref
+      ? {
+          href: toViewPath(c, feedHref),
+          title: buildArchiveFeedLabel(c, params, dimensionCtx),
+        }
+      : undefined,
     navData,
     content: (
       <ArchivePage
         groups={groups}
         items={flatItems}
+        defaultLayout={appConfig.archiveDefaultLayout}
         totalCount={totalCount}
+        baselineCount={baselineCount}
         currentPage={params.currentPage}
         totalPages={totalPages}
         filters={archiveFilters}
         availableYears={availableYears}
         availableCollections={availableCollectionsList}
         isAuthenticated={navData.isAuthenticated}
-        sitePathPrefix={navData.sitePathPrefix}
+        basePath={navData.basePath}
         timeZone={appConfig.timeZone}
-        feedHref={
-          appConfig.rssFeedsEnabled ? `/archive/feed${feedQuery}` : undefined
-        }
+        feedHref={feedHref}
       />
     ),
   });
@@ -475,130 +672,51 @@ export async function renderArchivePage(
 // Archive page route
 // =============================================================================
 
-archiveRoutes.get("/", (c) => {
-  const canonical = legacyArchiveParamsRedirect(c);
-  if (canonical) return c.redirect(canonical, 308);
+/**
+ * Serve the archive page, first normalizing any legacy query parameters.
+ *
+ * @param c - Hono context
+ * @returns Archive page response, or a 308 to the canonical parameter spelling
+ */
+export function renderArchiveRoute(
+  c: Context<Env>,
+): Promise<Response> | Response {
+  const redirect = archiveParamsRedirect(c);
+  if (redirect) return c.redirect(redirect.location, redirect.status);
   return renderArchivePage(c);
-});
+}
+
+archiveRoutes.get("/", renderArchiveRoute);
 
 // =============================================================================
 // Archive feed
 // =============================================================================
 
 /**
- * Build a descriptive feed title from active filters.
+ * Build a descriptive label for the archive feed from the active filters.
+ *
+ * Shared by the feed document's own title and the autodiscovery link on the
+ * archive page, so a subscriber sees the same name in both places.
+ *
+ * Unlike the page title this lists every active dimension. A feed name sits in
+ * someone's reader for years with no UI to inspect it, so two subscriptions
+ * that differ only in a dropped dimension must not arrive under one name.
  *
  * @param c - Hono context
  * @param params - Parsed archive filter params
- * @param collectionTitle - Resolved collection title (if any)
- * @returns Feed title string, e.g. "Site - Archive: Notes without title"
+ * @param ctx - Collection vocabulary, for naming a selected collection
+ * @returns Feed label, e.g. "Archive: Untitled, 2024"
+ * @example
+ * buildArchiveFeedLabel(c, params); // "Archive"
  */
-function buildArchiveFeedTitle(
+function buildArchiveFeedLabel(
   c: Context<Env>,
   params: ParsedArchiveParams,
-  collectionTitle?: string,
+  ctx: DimensionContext,
 ): string {
   const i18n = getI18n(c);
-  const siteName = c.var.appConfig.siteName;
 
-  const parts: string[] = [];
-
-  if (params.format) {
-    const formatLabels: Record<string, string> = {
-      note: i18n._(
-        msg({
-          message: "Notes",
-          comment:
-            "@context: Archive feed title segment for note format filter",
-        }),
-      ),
-      link: i18n._(
-        msg({
-          message: "Links",
-          comment:
-            "@context: Archive feed title segment for link format filter",
-        }),
-      ),
-      quote: i18n._(
-        msg({
-          message: "Quotes",
-          comment:
-            "@context: Archive feed title segment for quote format filter",
-        }),
-      ),
-    };
-    parts.push(formatLabels[params.format] ?? params.format);
-  }
-
-  if (collectionTitle) {
-    parts.push(collectionTitle);
-  }
-
-  if (params.hasTitle === false) {
-    parts.push(
-      i18n._(
-        msg({
-          message: "without title",
-          comment: "@context: Archive feed title segment for hasTitle=0 filter",
-        }),
-      ),
-    );
-  } else if (params.hasTitle === true) {
-    parts.push(
-      i18n._(
-        msg({
-          message: "with title",
-          comment: "@context: Archive feed title segment for hasTitle=1 filter",
-        }),
-      ),
-    );
-  }
-
-  if (params.hasMedia === true) {
-    parts.push(
-      i18n._(
-        msg({
-          message: "with media",
-          comment: "@context: Archive feed title segment for hasMedia=1 filter",
-        }),
-      ),
-    );
-  } else if (params.hasMedia === false) {
-    parts.push(
-      i18n._(
-        msg({
-          message: "without media",
-          comment: "@context: Archive feed title segment for hasMedia=0 filter",
-        }),
-      ),
-    );
-  }
-
-  if (params.hasReplies === true) {
-    parts.push(
-      i18n._(
-        msg({
-          message: "threads",
-          comment:
-            "@context: Archive feed title segment for hasReplies=1 filter",
-        }),
-      ),
-    );
-  } else if (params.hasReplies === false) {
-    parts.push(
-      i18n._(
-        msg({
-          message: "single posts",
-          comment:
-            "@context: Archive feed title segment for hasReplies=0 filter",
-        }),
-      ),
-    );
-  }
-
-  if (params.validYear) {
-    parts.push(String(params.validYear));
-  }
+  const parts = describeArchiveFilters(params.selection, i18n, ctx);
 
   const archiveLabel = i18n._(
     msg({
@@ -608,53 +726,66 @@ function buildArchiveFeedTitle(
   );
 
   if (parts.length === 0) {
-    return `${siteName} - ${archiveLabel}`;
+    return archiveLabel;
   }
 
-  return `${siteName} - ${archiveLabel}: ${parts.join(", ")}`;
+  return `${archiveLabel}: ${parts.join(", ")}`;
 }
 
 async function buildArchiveFeedData(
   c: Context<Env>,
   selfPath: string,
-): Promise<FeedData> {
+): Promise<FeedData | null> {
   const { appConfig, services } = c.var;
-  const params = parseArchiveParams(c);
+  const { params, collections } = await parseArchiveParams(c);
 
-  const collection = params.collectionSlug
-    ? await services.collections.getBySlug(params.collectionSlug)
-    : undefined;
+  // A collection slug that names nothing: the caller turns this into the same
+  // 404 the page gives, rather than handing a subscriber the entire archive
+  // under the collection's name.
+  if (params.collectionMissing) return null;
+
+  const dimensionCtx: DimensionContext = {
+    collections: collections
+      ? buildCollectionVocabulary(collections)
+      : EMPTY_COLLECTION_VOCABULARY,
+  };
   const rssPublishedBefore = getRssPublishedBefore(
     appConfig.rssPublishDelaySeconds,
   );
-  const yearPublishedBefore = params.validYear
-    ? Date.UTC(params.validYear + 1, 0, 1) / 1000
-    : undefined;
 
   // Feed mirrors the unauthenticated archive page: published + non-private,
   // including Hidden-from-Latest. /archive is the canonical "all posts" view,
   // so its feed must match.
+  //
+  // Ordered by publication by default, like the page it belongs to. Ordering
+  // by activity would make the feed's contents shift under a fixed
+  // `rssFeedLimit` — a new reply pulls an old Thread back into the window and
+  // pushes something else out — and it buys nothing in return, because readers
+  // key entries by id and will not re-surface one that merely moved.
+  // /latest/feed is the activity feed; this one is the chronological record.
+  //
+  // `?sort=updated` opts into the same axis the page uses, for a subscriber
+  // who wants that trade-off deliberately.
+  const sortsByActivity = params.sort === "updated";
+  // The year filter follows the active axis; the RSS delay always stays on
+  // publication, so a just-published post is never announced early. When both
+  // bound the publication column, the tighter one wins.
+  const selectionFilters = toPostFilters(params.selection, {
+    yearAxis: sortsByActivity ? "sort" : "published",
+  });
   const filters: PostFilters = {
-    format: params.format,
+    lang: getViewLang(c) ?? undefined,
     status: "published",
     excludeReplies: true,
     excludePrivate: true,
     excludeLatestHidden: false,
-    collectionId: collection?.id,
-    mediaKinds: params.mediaKinds,
-    hasMedia: params.hasMedia,
-    hasTitle: params.hasTitle,
-    hasReplies: params.hasReplies,
+    ...selectionFilters,
+    sortBy: sortsByActivity ? "thread_updated" : "published",
     ignorePinnedSort: true,
-    ...(params.validYear
-      ? {
-          publishedAfter: Date.UTC(params.validYear, 0, 1) / 1000,
-        }
-      : {}),
     publishedBefore:
-      yearPublishedBefore === undefined
+      selectionFilters.publishedBefore === undefined
         ? rssPublishedBefore
-        : Math.min(yearPublishedBefore, rssPublishedBefore),
+        : Math.min(selectionFilters.publishedBefore, rssPublishedBefore),
     limit: appConfig.rssFeedLimit,
   };
 
@@ -745,16 +876,19 @@ async function buildArchiveFeedData(
     };
   });
 
-  const feedQuery = buildArchiveFeedQuery(params);
+  const feedQuery = buildArchiveFeedQuery(params, dimensionCtx);
 
   return {
     siteName: appConfig.siteName,
     siteDescription: toPlainText(appConfig.siteDescription),
     siteUrl: appConfig.siteUrl,
-    siteLanguage: appConfig.siteLanguage,
-    title: buildArchiveFeedTitle(c, params, collection?.title),
+    siteLanguage: getViewLang(c) ?? appConfig.siteLanguage,
+    title: buildPageTitle(
+      appConfig.siteName,
+      buildArchiveFeedLabel(c, params, dimensionCtx),
+    ),
     selfUrl: toAbsoluteSiteUrl(
-      `${selfPath}${feedQuery}`,
+      `${viewBasePath(c)}${selfPath}${feedQuery}`,
       appConfig.siteUrl,
       appConfig.sitePathPrefix,
     ),
@@ -762,25 +896,43 @@ async function buildArchiveFeedData(
   };
 }
 
-// Atom — /archive/feed
-archiveRoutes.get("/feed", async (c) => {
+/**
+ * Render the archive Atom feed for the current view language.
+ *
+ * @param c - Hono context
+ * @returns Atom feed response
+ */
+export async function renderArchiveFeed(c: Context<Env>): Promise<Response> {
+  // No session reaches a feed reader, so a selection only the author can see
+  // has no honest rendering here — not an empty feed, and certainly not the
+  // unfiltered one. The page already withholds the link; this is the backstop.
+  // Read without resolving anything: the guard reads the visibility param and
+  // the session, so it must not depend on a database round trip.
+  const guardParams = readArchiveParams(c, archiveParamReader(c), null);
+  if (archiveQueryRequiresAuth(guardParams)) return c.notFound();
+
   const feedData = await buildArchiveFeedData(c, "/archive/feed");
+  // A collection slug that names nothing: the same 404 the page gives, rather
+  // than handing a subscriber the entire archive under the collection's name.
+  if (!feedData) return c.notFound();
+
   return new Response(defaultFeedRenderer(feedData), {
     headers: {
       "Content-Type": "application/atom+xml; charset=utf-8",
       "Cache-Control": RSS_FEED_CACHE_CONTROL,
     },
   });
-});
+}
+
+// Atom — /archive/feed
+archiveRoutes.get("/feed", renderArchiveFeed);
 
 // Legacy atom.xml redirect
-archiveRoutes.get("/feed/atom.xml", (c) => {
-  const sitePathPrefix = c.var.appConfig.sitePathPrefix;
+export function redirectLegacyArchiveFeed(c: Context<Env>): Response {
   const qs = c.req.url.includes("?")
     ? c.req.url.slice(c.req.url.indexOf("?"))
     : "";
-  return c.redirect(
-    `${toPublicPath("/archive/feed", sitePathPrefix)}${qs}`,
-    308,
-  );
-});
+  return c.redirect(`${toViewPath(c, "/archive/feed")}${qs}`, 308);
+}
+
+archiveRoutes.get("/feed/atom.xml", redirectLegacyArchiveFeed);

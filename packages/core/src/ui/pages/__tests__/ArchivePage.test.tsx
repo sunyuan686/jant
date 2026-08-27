@@ -53,11 +53,14 @@ function renderArchivePage(
       totalCount: 1,
       currentPage: 1,
       totalPages: 1,
-      filters: {},
+      filters: { selection: {} },
       availableYears: [2026],
       availableCollections: [],
       isAuthenticated: false,
       timeZone: "UTC",
+      // The fixture above is grid data, so these cases pin the grid layout.
+      // The list default gets its own case at the end of the file.
+      defaultLayout: "grid",
       ...props,
     }),
   );
@@ -93,22 +96,46 @@ describe("ArchivePage", () => {
   it("serializes visibility latest_hidden as the hidden URL alias", () => {
     const html = renderArchivePage({
       isAuthenticated: true,
-      filters: { visibility: "latest_hidden" },
+      filters: { selection: { visibility: "latest_hidden" } },
     });
 
     expect(html).toContain("visibility=hidden");
     expect(html).not.toContain("visibility=latest_hidden");
   });
 
+  // The archive already shows a signed-out reader every non-private post, so
+  // the dimension names sets they can reach. `private` is the exception, and
+  // it is absent rather than present-and-broken.
+  it("offers the visibility filter without private to a signed-out reader", () => {
+    const html = renderArchivePage();
+
+    expect(html).toContain('id="af-visibility"');
+    expect(html).toContain("visibility=public");
+    expect(html).toContain("visibility=hidden");
+    expect(html).toContain("visibility=featured");
+    expect(html).not.toContain("visibility=private");
+  });
+
+  it("offers private to the author", () => {
+    const html = renderArchivePage({ isAuthenticated: true });
+
+    expect(html).toContain('id="af-visibility"');
+    expect(html).toContain("visibility=private");
+  });
+
   it("marks the thread filter active when filtering single posts", () => {
-    const html = renderArchivePage({ filters: { hasReplies: false } });
+    const html = renderArchivePage({
+      filters: { selection: { replies: false } },
+    });
 
     expect(html).toContain("archive-chip-active");
     expect(html).toContain("Single posts");
   });
 
   it("uses a recognizable quote mark for the quote format filter", () => {
-    const html = renderArchivePage({ filters: { format: "quote" } });
+    const html = renderArchivePage({
+      filters: { selection: { format: "quote" } },
+    });
 
     expect(html).toContain('class="lucide lucide-quote"');
     expect(html).not.toContain('class="lucide lucide-text-quote"');
@@ -118,6 +145,91 @@ describe("ArchivePage", () => {
     expect(renderArchivePage()).not.toContain('class="feed-link"');
     expect(renderArchivePage({ feedHref: "/archive/feed" })).toContain(
       'class="feed-link"',
+    );
+  });
+
+  it("offers the updated sort and marks published as the default", () => {
+    const html = renderArchivePage();
+
+    expect(html).toContain('aria-label="Sort order"');
+    expect(html).toContain("sort=updated");
+    expect(html).toContain(
+      '<a href="/archive" class="archive-view-btn archive-view-btn-active" role="radio" aria-checked="true" aria-label="Sort by when each thread was published"',
+    );
+  });
+
+  it("marks the updated sort active and keeps a way back", () => {
+    const html = renderArchivePage({
+      filters: { selection: {}, sort: "updated" },
+    });
+
+    expect(html).toContain(
+      '<a href="/archive?sort=updated" class="archive-view-btn archive-view-btn-active" role="radio" aria-checked="true" aria-label="Sort by when each thread was last added to"',
+    );
+    expect(html).toContain('<a href="/archive" class="archive-view-btn"');
+  });
+
+  // Icon-only controls need a hover tooltip too — aria-label only reaches
+  // assistive tech, and a bare clock/history pair is unreadable without one.
+  it("gives every toolbar toggle a tooltip matching its accessible name", () => {
+    const html = renderArchivePage();
+
+    for (const label of [
+      "Sort by when each thread was published",
+      "Sort by when each thread was last added to",
+      "Show as a grid of tiles",
+      "Show as a list with full posts",
+    ]) {
+      expect(html).toContain(`aria-label="${label}" title="${label}"`);
+    }
+  });
+
+  it("labels month headers as update months in the updated sort", () => {
+    expect(renderArchivePage()).toContain(
+      '<span class="archive-month-header-label">March 2026</span>',
+    );
+
+    const updated = renderArchivePage({
+      filters: { selection: {}, sort: "updated" },
+    });
+    expect(updated).toContain(
+      '<span class="archive-month-header-label">Updated March 2026</span>',
+    );
+    expect(updated).toContain("newest changes first");
+  });
+
+  it("keeps the sort selection in filter and layout links", () => {
+    const html = renderArchivePage({
+      filters: { selection: {}, sort: "updated" },
+      availableCollections: [{ slug: "tech", title: "Tech" }],
+    });
+
+    expect(html).toContain("collection=tech&amp;sort=updated");
+    expect(html).toContain("layout=list&amp;sort=updated");
+  });
+
+  // Neither layout is implied by an absent param any more, so both toggle
+  // links name themselves. A link shared with a layout chosen keeps that layout
+  // even if the site's ARCHIVE_DEFAULT_LAYOUT later changes.
+  it("writes both layout options into the URL explicitly", () => {
+    const html = renderArchivePage();
+
+    expect(html).toContain('href="/archive?layout=grid"');
+    expect(html).toContain('href="/archive?layout=list"');
+    expect(html).not.toContain("view=grid");
+    expect(html).not.toContain("view=list");
+  });
+
+  it("renders the flat list when the site default layout is list", () => {
+    const html = renderArchivePage({
+      groups: [],
+      items: [],
+      defaultLayout: undefined,
+      totalCount: 0,
+    });
+
+    expect(html).toContain(
+      '<a href="/archive?layout=list" class="archive-view-btn archive-view-btn-active"',
     );
   });
 });

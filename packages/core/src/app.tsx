@@ -16,6 +16,7 @@ import { hostedDomainCheckRoutes } from "./routes/hosted/domain-check.js";
 
 // Routes - Pages
 import { homeRoutes } from "./routes/pages/home.js";
+import { languageRoutes } from "./routes/pages/language.js";
 import { pageRoutes } from "./routes/pages/page.js";
 import { collectionRoutes } from "./routes/pages/collection.js";
 import { archiveRoutes } from "./routes/pages/archive.js";
@@ -37,6 +38,7 @@ import { postsApiRoutes } from "./routes/api/posts.js";
 import { attachmentsApiRoutes } from "./routes/api/attachments.js";
 import { navItemsApiRoutes } from "./routes/api/nav-items.js";
 import { collectionsApiRoutes } from "./routes/api/collections.js";
+import { smartCollectionsApiRoutes } from "./routes/api/smart-collections.js";
 import { settingsApiRoutes } from "./routes/api/settings.js";
 import { uploadApiRoutes } from "./routes/api/upload.js";
 import { uploadsApiRoutes } from "./routes/api/uploads.js";
@@ -307,7 +309,11 @@ export function createApp(): App {
     if (startupConfigError) {
       return c.html(startupConfigError, 500);
     }
-    const runtime = await createRequestRuntime(c.env, publicRequestUrl);
+    const runtime = await createRequestRuntime(
+      c.env,
+      publicRequestUrl,
+      c.req.raw,
+    );
     c.set("services", runtime.services);
     c.set("servicesForSite", runtime.servicesForSite);
     c.set("hostedHandoff", runtime.hostedHandoff);
@@ -532,6 +538,7 @@ export function createApp(): App {
   app.route("/api/posts", postsApiRoutes);
   app.route("/api/nav-items", navItemsApiRoutes);
   app.route("/api/collections", collectionsApiRoutes);
+  app.route("/api/smart-collections", smartCollectionsApiRoutes);
   app.route("/api/settings", settingsApiRoutes);
   app.route("/api/custom-urls", customUrlsApiRoutes);
   app.route("/api/export", exportApiRoutes);
@@ -578,6 +585,12 @@ export function createApp(): App {
   app.route("/collections", collectionsPageRoutes);
   app.route("/collections", collectionRoutes);
   app.route("/", homeRoutes);
+
+  // Per-language views of every surface above. Mounted here on purpose: after
+  // the static route groups, so `/archive` is the archive rather than a
+  // language named "archive", and before the catch-all, so `/en` is a language
+  // view rather than a lookup for a post whose slug is "en".
+  app.route("/:lang", languageRoutes);
 
   // Custom page catch-all (must be last)
   app.route("/", pageRoutes);

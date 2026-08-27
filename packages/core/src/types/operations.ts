@@ -3,14 +3,17 @@
  */
 
 import type {
+  ArchiveLayout,
   Format,
   Status,
   Visibility,
   CollectionSortOrder,
+  SmartCollectionSortOrder,
   SystemNavKey,
   NavItemPlacement,
   TextAttachmentContentFormat,
 } from "./constants.js";
+import type { PostFilterSelection } from "../lib/filter-dimensions.js";
 
 export type PostAttachmentInput =
   | {
@@ -93,6 +96,18 @@ export interface CreatePost {
   collectionEntries?: ThreadCollectionEntry[];
   replyToId?: string;
   quietReply?: boolean;
+  /**
+   * BCP 47 content language. Ignored for replies, which always inherit the
+   * Thread root's language so a language filter stays a plain column predicate.
+   * Omitted on single-language sites, where the column stays NULL.
+   */
+  language?: string | null;
+  /**
+   * Thread root ID this Post is a translation of. The service joins both into
+   * one translation group when the Post is created, minting the group on the
+   * source Post if it does not have one yet. Roots only.
+   */
+  translationOfId?: string;
   publishedAt?: number;
   attachments?: PostAttachmentInput[];
 }
@@ -119,6 +134,13 @@ export interface UpdatePost {
   collectionIds?: string[];
   collectionEntries?: ThreadCollectionEntry[];
   publishedAt?: number;
+  /**
+   * Content language. Applied to the whole Thread, like
+   * `PostService.setThreadLanguage` — a Thread is written in one language, and
+   * that is what keeps every language filter a plain column predicate. Ignored
+   * on replies, which follow their root.
+   */
+  language?: string | null;
   attachments?: PostAttachmentInput[];
 }
 
@@ -137,10 +159,20 @@ export type CreateNavItem =
       position?: string;
     }
   | {
+      // The URL is derived from the collection's slug and is not accepted
+      // here; an omitted label means the item follows the collection's title.
       type: "collection";
       collectionId: string;
-      label: string;
-      url: string;
+      label?: string;
+      placement?: NavItemPlacement;
+      position?: string;
+    }
+  | {
+      // Same shape as `collection`: the URL comes from the smart collection's
+      // slug, and an omitted label follows its title.
+      type: "smart_collection";
+      smartCollectionId: string;
+      label?: string;
       placement?: NavItemPlacement;
       position?: string;
     }
@@ -173,10 +205,40 @@ export interface UpdateCollection {
   sortOrder?: CollectionSortOrder;
 }
 
+/**
+ * A smart collection's editable fields.
+ *
+ * `title` is required and stays required: the dialog asks for one, so no
+ * surface ever has to invent a name for an untitled smart collection in a page
+ * heading, a browser tab, a feed, or the directory.
+ */
+export interface CreateSmartCollection {
+  slug: string;
+  title: string;
+  description?: string | null;
+  /** The conditions. Omitted or empty means every post. */
+  selection?: PostFilterSelection;
+  sort?: SmartCollectionSortOrder;
+  layout?: ArchiveLayout | null;
+}
+
+export interface UpdateSmartCollection {
+  slug?: string;
+  title?: string;
+  description?: string | null;
+  selection?: PostFilterSelection;
+  sort?: SmartCollectionSortOrder;
+  layout?: ArchiveLayout | null;
+}
+
 export type CreateCollectionDirectoryEntry =
   | {
       type: "collection";
       collectionId: string;
+    }
+  | {
+      type: "smart_collection";
+      smartCollectionId: string;
     }
   | {
       type: "divider";

@@ -20,16 +20,33 @@ vi.mock("../../toast.js", () => ({
   showToastWithAction: vi.fn(),
 }));
 
+const { confirmMock } = vi.hoisted(() => ({ confirmMock: vi.fn() }));
+vi.mock("../../confirm.js", () => ({
+  showConfirmDialog: confirmMock,
+}));
+
+const { openCollectionDialogMock } = vi.hoisted(() => ({
+  openCollectionDialogMock: vi.fn(),
+}));
+vi.mock("../../collection-dialog-host.js", () => ({
+  openCollectionDialog: openCollectionDialogMock,
+}));
+
 import type {
   CollectionManagerItem,
   CollectionManagerLabels,
 } from "../collection-manager-types.js";
-import { queueCollectionCreatedNotice } from "../../collection-created-notice.js";
 import "../jant-collection-directory.js";
 import type { JantCollectionsManager } from "../jant-collection-directory.js";
 
 const labels: CollectionManagerLabels = {
   collectionsTitle: "Collections",
+  smartCollectionNoun: "Smart Collection",
+  newSmartCollection: "New Smart Collection",
+  editSmartCollection: "Edit Smart Collection",
+  deleteSmartCollection: "Delete",
+  confirmDeleteSmartCollection: "Delete this smart collection?",
+  smartCollectionDeleted: "Smart collection deleted.",
   organize: "Organize",
   done: "Done",
   organizeHint: "Drag to reorder.",
@@ -65,6 +82,7 @@ const labels: CollectionManagerLabels = {
   threadPlural: "threads",
   emptyState: "Create a collection to get started.",
   orderSaved: "Collection order updated.",
+  save: "Save",
   saved: "Collection saved.",
   linkCreated: "Link added.",
   linkSaved: "Link updated.",
@@ -83,13 +101,6 @@ const labels: CollectionManagerLabels = {
     quickHint: "More options are available after you create it.",
     quickSubmitLabel: "Done",
     createdLabel: "Collection created.",
-    descriptionLabel: "Description",
-    descriptionPlaceholder: "What's this collection about?",
-    sortOrderLabel: "Sort order",
-    sortNewest: "Newest first",
-    sortOldest: "Oldest first",
-    sortRatingDesc: "Highest rated",
-    submitLabel: "Save",
     cancelLabel: "Cancel",
   },
 };
@@ -154,6 +165,26 @@ const groupedItems: CollectionManagerItem[] = [
       sortOrder: "newest",
       threadCount: 1,
       recentActivityAt: 1_763_619_300,
+    },
+  },
+];
+
+const itemsWithSmartCollection: CollectionManagerItem[] = [
+  {
+    id: "directory-smart",
+    type: "smart_collection",
+    smartCollectionId: "smc_1",
+    position: "a0",
+    smartCollection: {
+      id: "smc_1",
+      slug: "quotes",
+      title: "Quotes",
+      description: null,
+      selection: { format: "quote" },
+      sort: "newest",
+      layout: null,
+      threadCount: 4,
+      recentActivityAt: 1_763_619_400,
     },
   },
 ];
@@ -233,6 +264,237 @@ describe("JantCollectionsManager", () => {
     vi.clearAllMocks();
     sortableCreateMock.mockClear();
     sortableDestroyMock.mockClear();
+    confirmMock.mockReset().mockResolvedValue(true);
+    openCollectionDialogMock.mockReset().mockResolvedValue({ changed: false });
+  });
+
+  it("creates a collection from the toolbar, and points at the new row", async () => {
+    const el = await createElementWithManagerRoot();
+    const toolbar = document.querySelector<HTMLElement>(
+      "[data-collections-toolbar]",
+    );
+    const createButton = document.createElement("button");
+    createButton.setAttribute("data-collections-action", "collection");
+    toolbar?.appendChild(createButton);
+
+    openCollectionDialogMock.mockResolvedValue({
+      changed: true,
+      collection: { id: "collection-1", slug: "reading", title: "Reading" },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ collections: [], directoryItems: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    createButton.click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    expect(openCollectionDialogMock).toHaveBeenCalledWith();
+    expect(el._createdCollectionId).toBe("collection-1");
+  });
+
+  it("edits a collection from its row menu rather than leaving the page", async () => {
+    const el = await createElement();
+    el._showItemMenuId = items[0]?.id ?? null;
+    await el.updateComplete;
+
+    const editButton = Array.from(
+      el.querySelectorAll<HTMLButtonElement>(".collections-page-menu-item"),
+    ).find((button) => button.textContent?.trim() === "Edit");
+    expect(editButton).toBeDefined();
+
+    editButton?.click();
+    await flushAsyncWork();
+
+    expect(openCollectionDialogMock).toHaveBeenCalledWith({
+      collectionId: "collection-1",
+    });
+  });
+
+  // The two kinds sit in one list and are read against each other, so a smart
+  // collection row carries the same two measures a collection row does.
+  it("dates a smart collection row the way it dates a collection row", async () => {
+    const el = await createElementWithItems([
+      ...items,
+      ...itemsWithSmartCollection,
+    ]);
+
+    const summaries = Array.from(
+      el.querySelectorAll(".collection-directory-summary"),
+    );
+    expect(summaries).toHaveLength(3);
+
+    const smartSummary = summaries.at(-1);
+    expect(smartSummary?.textContent).toContain("4 threads");
+    expect(
+      smartSummary
+        ?.querySelector(".collection-directory-updated")
+        ?.getAttribute("datetime"),
+    ).toBe(new Date(1_763_619_400 * 1000).toISOString());
+  });
+
+  // A smart collection is a collection to the reader, so its row offers the
+  // same navigation action a collection row does — and lands in the same
+  // placement, not buried under More.
+  it("adds a smart collection to navigation from its item menu", async () => {
+    const el = await createElementWithItems(itemsWithSmartCollection);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "nav-1" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const { showToastWithAction } = await import("../../toast.js");
+
+    el._showItemMenuId = "directory-smart";
+    await el.updateComplete;
+
+    const addButton = Array.from(
+      el.querySelectorAll<HTMLButtonElement>(".collections-page-menu-item"),
+    ).find((button) => button.textContent?.includes("Add to Navigation"));
+    expect(addButton).toBeDefined();
+
+    addButton?.click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/nav-items", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-Jant-Site-Header": "include",
+      },
+      body: JSON.stringify({
+        type: "smart_collection",
+        smartCollectionId: "smc_1",
+        placement: "header",
+      }),
+    });
+    expect(el.navigationCollectionIds).toContain("smc_1");
+    expect(showToastWithAction).toHaveBeenCalledWith(
+      "Collection added to navigation.",
+      {
+        label: "Edit Navigation",
+        href: "/settings/navigation",
+      },
+    );
+
+    el._showItemMenuId = "directory-smart";
+    await el.updateComplete;
+    const editNavigationLink = Array.from(
+      el.querySelectorAll<HTMLAnchorElement>(".collections-page-menu-item"),
+    ).find((link) => link.textContent?.includes("Edit Navigation"));
+    expect(editNavigationLink?.getAttribute("href")).toBe(
+      "/settings/navigation",
+    );
+  });
+
+  // The edit dialog deliberately has no delete of its own — this menu is where
+  // a smart collection is destroyed, so this is where it has to be covered.
+  it("deletes a smart collection from its item menu, after confirming", async () => {
+    const el = await createElementWithItems(itemsWithSmartCollection);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const { showToast } = await import("../../toast.js");
+
+    el._showItemMenuId = "directory-smart";
+    await el.updateComplete;
+
+    const remove = Array.from(
+      el.querySelectorAll<HTMLButtonElement>(".collections-page-menu-item"),
+    ).find((button) => button.textContent?.trim() === "Delete");
+    expect(remove).toBeDefined();
+
+    remove?.click();
+    await flushAsyncWork();
+    await el.updateComplete;
+
+    expect(confirmMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Delete this smart collection?",
+        tone: "danger",
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith("/api/smart-collections/smc_1", {
+      method: "DELETE",
+    });
+    expect(showToast).toHaveBeenCalledWith("Smart collection deleted.");
+  });
+
+  // A refreshed list has to name rows the way the server-rendered one does: a
+  // smart collection with no directory row of its own carries its own id, and
+  // that is the id the move endpoint places before moving.
+  it("names a smart collection with no directory row by its own id", async () => {
+    const el = await createElementWithItems(itemsWithSmartCollection);
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      if (String(input).startsWith("/api/collections")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              collections: [],
+              smartCollections: [
+                {
+                  id: "smc_9",
+                  slug: "quotes",
+                  title: "Quotes",
+                  description: null,
+                  selection: { format: "quote" },
+                  sort: "newest",
+                  layout: null,
+                  threadCount: 4,
+                  recentActivityAt: 1_763_619_400,
+                },
+              ],
+              directoryItems: [],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+
+    el._showItemMenuId = "directory-smart";
+    await el.updateComplete;
+
+    Array.from(
+      el.querySelectorAll<HTMLButtonElement>(".collections-page-menu-item"),
+    )
+      .find((button) => button.textContent?.trim() === "Delete")
+      ?.click();
+    await flushAsyncWork();
+    el._reorderMode = true;
+    await el.updateComplete;
+
+    const rows = Array.from(
+      el.querySelectorAll<HTMLElement>("[data-directory-item]"),
+    );
+    expect(rows.map((row) => row.dataset.directoryItem)).toEqual(["smc_9"]);
+  });
+
+  it("leaves a smart collection alone when the confirmation is declined", async () => {
+    confirmMock.mockResolvedValue(false);
+    const el = await createElementWithItems(itemsWithSmartCollection);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 204 }));
+
+    el._showItemMenuId = "directory-smart";
+    await el.updateComplete;
+
+    Array.from(
+      el.querySelectorAll<HTMLButtonElement>(".collections-page-menu-item"),
+    )
+      .find((button) => button.textContent?.trim() === "Delete")
+      ?.click();
+    await flushAsyncWork();
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("uses responsive sortable settings in reorder mode", async () => {
@@ -375,8 +637,9 @@ describe("JantCollectionsManager", () => {
   });
 
   it("shows a one-time post-create notice in the Collections content", async () => {
-    queueCollectionCreatedNotice("collection-1");
     const el = await createElement();
+    el._createdCollectionId = "collection-1";
+    await el.updateComplete;
 
     const notice = el.querySelector<HTMLElement>(".collection-created-notice");
     expect(notice?.textContent).toContain("Collection created.");
@@ -447,7 +710,6 @@ describe("JantCollectionsManager", () => {
   });
 
   it("adds the newly created Collection from the inline notice", async () => {
-    queueCollectionCreatedNotice("collection-1");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ id: "nav-1" }), {
         status: 201,
@@ -456,6 +718,8 @@ describe("JantCollectionsManager", () => {
     );
     const { showToastWithAction } = await import("../../toast.js");
     const el = await createElement();
+    el._createdCollectionId = "collection-1";
+    await el.updateComplete;
     const notice = el.querySelector<HTMLElement>(".collection-created-notice");
     const addButton = Array.from(
       notice?.querySelectorAll<HTMLButtonElement>("button") ?? [],

@@ -11,6 +11,7 @@ import type {
   SystemNavKey,
 } from "../../../types.js";
 import { SYSTEM_NAV_KEYS } from "../../../types.js";
+import { getSmartCollectionLabels } from "../../shared/smart-collection-labels.js";
 import type {
   NavManagerCollection,
   NavManagerLabels,
@@ -19,7 +20,10 @@ import type {
 } from "../../../client/components/nav-manager-types.js";
 import type { CollectionFormLabels } from "../../../client/components/collection-types.js";
 import { toPublicHref, toPublicPath } from "../../../lib/url.js";
-import { getCollectionFormLabels } from "../../shared/collection-management-labels.js";
+import {
+  getCollectionDialogLabels,
+  getCollectionFormLabels,
+} from "../../shared/collection-management-labels.js";
 import {
   getNavItemDisplayLabel,
   getSystemNavDescription,
@@ -210,14 +214,33 @@ export function NavigationContent({
           slug: item.collection.slug,
           group: currentGroup,
         });
+      } else if (item.type === "smart_collection" && item.smartCollection) {
+        result.push({
+          id: item.smartCollection.id,
+          title: item.smartCollection.title,
+          slug: item.smartCollection.slug,
+          group: currentGroup,
+          isSmart: true,
+        });
       }
     }
 
-    // Append collections not in directory items
+    // Append anything with no directory row, both kinds alike.
     const includedIds = new Set(result.map((c) => c.id));
     for (const c of directoryData.collections) {
       if (!includedIds.has(c.id)) {
         result.push({ id: c.id, title: c.title, slug: c.slug, group: null });
+      }
+    }
+    for (const c of directoryData.smartCollections) {
+      if (!includedIds.has(c.id)) {
+        result.push({
+          id: c.id,
+          title: c.title,
+          slug: c.slug,
+          group: null,
+          isSmart: true,
+        });
       }
     }
 
@@ -406,6 +429,7 @@ export function NavigationContent({
           "@context: Section label for nav items hidden under More dropdown",
       }),
     ),
+    previewMore: moreLabel,
     moreEmptyHint: i18n._(
       msg({
         message: "Drag links here to show them under the More menu",
@@ -480,10 +504,81 @@ export function NavigationContent({
         comment: "@context: Placeholder for the navigation page search",
       }),
     ),
+    searchPagesHint: i18n._(
+      msg({
+        message: "Search pages, or paste an address",
+        comment:
+          "@context: Placeholder for the navigation page search, which also accepts a pasted URL or path",
+      }),
+    ),
     recentPages: i18n._(
       msg({
         message: "Recently updated",
         comment: "@context: Heading above recent pages in the page picker",
+      }),
+    ),
+    addressMatch: i18n._(
+      msg({
+        message: "At that address",
+        comment:
+          "@context: Heading above the page a pasted address resolved to",
+      }),
+    ),
+    addressAlreadyAdded: i18n._(
+      msg({
+        message: "Already in navigation. Drag it in the list above to move it.",
+        comment:
+          "@context: Shown when a pasted address is already a navigation item",
+      }),
+    ),
+    addressNotFound: i18n._(
+      msg({
+        message: "Nothing at {address}. Check it, or search by title.",
+        comment:
+          "@context: Shown when a pasted address matches no page on the site",
+      }),
+      // Filled in the browser with the address that was looked up.
+      { address: "{address}" },
+    ),
+    addressUnpublished: i18n._(
+      msg({
+        message: "That page is a draft. Publish it, then add it.",
+        comment: "@context: Shown when a pasted address resolves to a draft",
+      }),
+    ),
+    addressPrivate: i18n._(
+      msg({
+        message: "That page is private, so nobody could open it from a menu.",
+        comment:
+          "@context: Shown when a pasted address resolves to a private page",
+      }),
+    ),
+    addressUntitled: i18n._(
+      msg({
+        message: "That page has no title yet, so a menu has nothing to show.",
+        comment:
+          "@context: Shown when a pasted address resolves to an untitled post",
+      }),
+    ),
+    addressExternal: i18n._(
+      msg({
+        message:
+          "That address is on another site. Navigation holds it as a link.",
+        comment: "@context: Shown when a pasted address points off the site",
+      }),
+    ),
+    addressLinkOnly: i18n._(
+      msg({
+        message: "Navigation holds that address as a link.",
+        comment:
+          "@context: Shown for a page on the site that can only be a link, such as an archive URL",
+      }),
+    ),
+    addressAddAsLink: i18n._(
+      msg({
+        message: "Add as link",
+        comment:
+          "@context: Button that opens the link form with the pasted address filled in",
       }),
     ),
     searchingPages: i18n._(
@@ -643,6 +738,7 @@ export function NavigationContent({
         comment: "@context: Button for adding a collection to nav",
       }),
     ),
+    smartCollectionLabel: getSmartCollectionLabels(i18n).noun,
     addCollectionToNavigation: i18n._(
       msg({
         message: "Add collection to navigation",
@@ -729,6 +825,14 @@ export function NavigationContent({
 
   return (
     <div class="max-w-3xl flex flex-col gap-8">
+      {/* The dialog is a Lit component and cannot reach the i18n catalogs, so
+          the page that can open it carries its strings. */}
+      <div
+        hidden
+        data-collection-dialog-labels={escapeJson(
+          getCollectionDialogLabels(i18n),
+        )}
+      />
       <jant-nav-manager
         items={escapeJson(itemsData)}
         labels={escapeJson(labels)}

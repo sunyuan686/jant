@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { extractWranglerJson } from "../../packages/core/bin/lib/wrangler-json.js";
 
 function parseWranglerError(output, fallbackMessage) {
   try {
-    const parsed = JSON.parse(output.trim());
+    const parsed = JSON.parse(extractWranglerJson(output).trim());
     if (parsed.error?.text) {
       const detail = parsed.error.notes?.[0]?.text;
       return `${parsed.error.text}${detail ? `\n  ${detail}` : ""}`;
@@ -44,7 +45,7 @@ export function queryRemoteD1({ cwd, sql, database = "DB" }) {
     );
   }
 
-  const parsed = JSON.parse(stdout);
+  const parsed = JSON.parse(extractWranglerJson(stdout));
   if (parsed.error?.text) {
     const detail = parsed.error.notes?.[0]?.text;
     throw new Error(
@@ -136,6 +137,10 @@ export function buildSiteContentResetSql(
   statements.push(
     `DELETE FROM "media" WHERE "site_id" = '${escapedSiteId}';`,
     `DELETE FROM "post" WHERE "site_id" = '${escapedSiteId}';`,
+    // Before `collection`, which a smart collection may point at. This reset
+    // leaves the `site` row in place, so nothing cascades here — every table it
+    // clears, it names.
+    `DELETE FROM "smart_collection" WHERE "site_id" = '${escapedSiteId}';`,
     `DELETE FROM "collection" WHERE "site_id" = '${escapedSiteId}';`,
   );
 

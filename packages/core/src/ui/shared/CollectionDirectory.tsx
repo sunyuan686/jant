@@ -2,7 +2,15 @@ import { msg } from "@lingui/core/macro";
 import type { FC } from "hono/jsx";
 import { useLingui } from "../../i18n/context.js";
 import type { CollectionDirectoryItem } from "../../types.js";
-import { getCollectionSelectionPath } from "../../lib/collection-paths.js";
+import {
+  getCollectionPagePath,
+  getCollectionSelectionPath,
+} from "../../lib/collection-paths.js";
+import { getIconSvg } from "../../lib/icons.js";
+import {
+  describeSmartCollection,
+  getSmartCollectionLabels,
+} from "./smart-collection-labels.js";
 import { getDividerCollectionGroup } from "../../lib/collection-groups.js";
 import { render as renderMarkdown } from "../../lib/markdown.js";
 import { formatRelativeAge, toISOString } from "../../lib/time.js";
@@ -12,6 +20,15 @@ export interface CollectionDirectoryProps {
   items: CollectionDirectoryItem[];
   emptyMessage?: string;
   sitePathPrefix?: string;
+  /**
+   * Public path prefix for collection links, carrying the language prefix in a
+   * language view.
+   *
+   * Required rather than defaulting to `sitePathPrefix`: forgetting it does not
+   * fail, it silently links a reader in `/en` back into the primary view, which
+   * is a bug that looks like a working link. Pass `navData.basePath`.
+   */
+  basePath: string;
   siteOrigin?: string;
 }
 
@@ -19,6 +36,7 @@ const hasDirectoryContent = (items: CollectionDirectoryItem[]) =>
   items.some(
     (item) =>
       (item.type === "collection" && item.collection) ||
+      (item.type === "smart_collection" && item.smartCollection) ||
       (item.type === "link" && item.label && item.url),
   );
 
@@ -37,6 +55,7 @@ const hasDirectoryContent = (items: CollectionDirectoryItem[]) =>
 const computeSequenceLabels = (items: CollectionDirectoryItem[]): string[] => {
   const isContentItem = (item: CollectionDirectoryItem) =>
     (item.type === "collection" && item.collection) ||
+    (item.type === "smart_collection" && item.smartCollection) ||
     (item.type === "link" && item.label && item.url);
 
   // First pass: determine group sizes.
@@ -113,6 +132,7 @@ export const CollectionDirectory: FC<CollectionDirectoryProps> = ({
   items,
   emptyMessage,
   sitePathPrefix = "",
+  basePath,
   siteOrigin = "",
 }) => {
   const { i18n } = useLingui();
@@ -152,7 +172,7 @@ export const CollectionDirectory: FC<CollectionDirectoryProps> = ({
                       <a
                         href={toPublicPath(
                           getCollectionSelectionPath(group.slugExpression),
-                          sitePathPrefix,
+                          basePath,
                         )}
                         class="collection-directory-divider-link collection-directory-divider-text"
                       >
@@ -254,6 +274,104 @@ export const CollectionDirectory: FC<CollectionDirectoryProps> = ({
           );
         }
 
+        if (item.type === "smart_collection") {
+          const smartCollection = item.smartCollection;
+          if (!smartCollection) return null;
+          const sequence = sequenceLabels[index];
+          // The full sentence is the marker's tooltip; its accessible name is
+          // just the kind, because the marker sits inside the title link and a
+          // whole sentence there would swamp the link's name.
+          const conditions = describeSmartCollection(
+            smartCollection.selection,
+            i18n,
+          );
+          const smartCollectionNoun = getSmartCollectionLabels(i18n).noun;
+
+          return (
+            <div
+              key={item.id}
+              class="collection-directory-item"
+              data-smart-collection={smartCollection.slug}
+            >
+              <div class="collection-directory-main">
+                <span class="collection-directory-sequence" aria-hidden="true">
+                  {sequence}
+                </span>
+                <div class="collection-directory-title-row">
+                  <a
+                    href={toPublicPath(
+                      getCollectionPagePath(smartCollection.slug),
+                      basePath,
+                    )}
+                    class="collection-directory-title-link"
+                  >
+                    <span class="collection-directory-title">
+                      {smartCollection.title}
+                      {/* Shown to every reader, not only the author: which
+                          kind of collection this is changes how the list
+                          reads. It goes in the same slot the link rows put
+                          their marker in, which centres it on the title
+                          without any arithmetic. */}
+                      <span
+                        class="collection-directory-smart-icon"
+                        title={conditions}
+                        aria-label={smartCollectionNoun}
+                        role="img"
+                        dangerouslySetInnerHTML={{
+                          __html: getIconSvg("funnel", "icon-fine") ?? "",
+                        }}
+                      />
+                    </span>
+                  </a>
+                </div>
+                {smartCollection.description && (
+                  <div
+                    class="collection-directory-description prose"
+                    dangerouslySetInnerHTML={{
+                      __html: renderMarkdown(smartCollection.description, {
+                        namespace: smartCollection.id,
+                      }),
+                    }}
+                  />
+                )}
+                <p class="collection-directory-summary">
+                  <span class="collection-directory-meta">
+                    {smartCollection.threadCount}{" "}
+                    {smartCollection.threadCount === 1
+                      ? i18n._(
+                          msg({
+                            message: "thread",
+                            comment: "@context: Singular thread count label",
+                          }),
+                        )
+                      : i18n._(
+                          msg({
+                            message: "threads",
+                            comment: "@context: Plural thread count label",
+                          }),
+                        )}
+                  </span>
+                  {/* The same two measures a collection row carries. The
+                      conditions are what differs between the two kinds; how
+                      full and how fresh the result is is not. */}
+                  <span
+                    class="collection-directory-meta-separator"
+                    aria-hidden="true"
+                  >
+                    /
+                  </span>
+                  <time
+                    class="collection-directory-updated"
+                    dateTime={toISOString(smartCollection.recentActivityAt)}
+                  >
+                    {formatRelativeAge(smartCollection.recentActivityAt)}
+                  </time>
+                </p>
+              </div>
+            </div>
+          );
+        }
+
         const collection = item.collection;
         if (!collection) return null;
         const sequence = sequenceLabels[index];
@@ -268,7 +386,7 @@ export const CollectionDirectory: FC<CollectionDirectoryProps> = ({
                 <a
                   href={toPublicPath(
                     getCollectionSelectionPath(collection.slug),
-                    sitePathPrefix,
+                    basePath,
                   )}
                   class="collection-directory-title-link"
                 >

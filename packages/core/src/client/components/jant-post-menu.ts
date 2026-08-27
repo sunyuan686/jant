@@ -16,8 +16,13 @@ import {
   FEATURED_SPARKLE_PATH,
 } from "../../lib/featured-icons.js";
 import { showConfirmDialog } from "../confirm.js";
+import { refreshArticleView } from "../post-refresh.js";
 import { showToast } from "../toast.js";
+import { readErrorMessage } from "../json.js";
 import { publicPath } from "../runtime-paths.js";
+import { looksLikeAddress } from "../../lib/url.js";
+import { pickPost } from "../post-picker.js";
+import type { PostPickerResult } from "./jant-post-picker.js";
 import {
   applyItemOrder,
   filterCollectionsBySearch,
@@ -33,6 +38,52 @@ interface PostMenuData {
   featured: boolean;
   visibility: string;
   isReply: boolean;
+  isDraft: boolean;
+  /** Content language of the Thread, when the site publishes more than one. */
+  language: string | null;
+}
+
+/** One language the site publishes. */
+interface MenuLanguage {
+  tag: string;
+  label: string;
+}
+
+/**
+ * What the server made of an address pasted into the translation picker: the
+ * Thread it names, or why that Thread cannot be linked to this one.
+ */
+type TranslationAddressResolution =
+  | {
+      kind: "ok";
+      address: string;
+      candidate: { id: string; label: string; language: string | null };
+    }
+  | {
+      kind:
+        | "external"
+        | "not_found"
+        | "not_a_post"
+        | "same_thread"
+        | "unpublished"
+        | "no_language"
+        | "same_language"
+        | "group_conflict";
+      address: string;
+    }
+  | {
+      kind: "language_taken" | "group_language_taken";
+      address: string;
+      language: string;
+    };
+
+/** A Thread already linked to this one as a translation. */
+interface TranslationItem {
+  id: string;
+  slug: string;
+  /** What to call it — its title, or something derived when it has none. */
+  label: string;
+  language: string | null;
 }
 
 interface CollectionItem {
@@ -49,7 +100,20 @@ interface ThreadCollectionsResponse {
   collectionIds?: string[];
 }
 
-type PostMenuView = "menu" | "collections" | "visibility";
+type PostMenuView =
+  | "menu"
+  | "collections"
+  | "visibility"
+  | "language"
+  | "language-switch";
+
+/**
+ * Where the language panel puts focus, in document order rather than in the
+ * order written here — `querySelector` picks the first match on the page, so
+ * this reads as "the topmost real action in the panel", whichever it is.
+ */
+const LANGUAGE_PANEL_FOCUS =
+  "[data-post-menu-translation] a, [data-post-menu-translation-first], [data-post-menu-open-language-switch]";
 
 interface MenuTriggerRect {
   top: number;
@@ -104,11 +168,15 @@ function readPostMenuData(article: HTMLElement): PostMenuData | null {
     featured: article.hasAttribute("data-post-featured"),
     visibility: article.dataset.postVisibility ?? "public",
     isReply: threadId !== id || article.hasAttribute("data-post-reply"),
+    isDraft: article.hasAttribute("data-post-draft"),
+    // Carried on the Thread root, so a reply reads it from there.
+    language: threadRootArticle.dataset.postLanguage ?? null,
   };
 }
 
 export class JantPostMenu extends LitElement {
   static properties = {
+    languages: { type: Array },
     _open: { state: true },
     _data: { state: true },
     _x: { state: true },
@@ -120,8 +188,12 @@ export class JantPostMenu extends LitElement {
     _collectionSearch: { state: true },
     _threadCollectionIds: { state: true },
     _addCollectionPanelOpen: { state: true },
+    _translations: { state: true },
+    _translationsLoading: { state: true },
+    _translationBusy: { state: true },
   };
 
+  declare languages: MenuLanguage[];
   declare _open: boolean;
   declare _data: PostMenuData | null;
   declare _x: number;
@@ -133,6 +205,9 @@ export class JantPostMenu extends LitElement {
   declare _collectionSearch: string;
   declare _threadCollectionIds: string[];
   declare _addCollectionPanelOpen: boolean;
+  declare _translations: TranslationItem[] | null;
+  declare _translationsLoading: boolean;
+  declare _translationBusy: boolean;
   declare _triggerEl: HTMLElement | null;
 
   /** Whether collections were modified during this session (triggers page reload on close) */
@@ -147,6 +222,7 @@ export class JantPostMenu extends LitElement {
 
   constructor() {
     super();
+    this.languages = [];
     this._open = false;
     this._data = null;
     this._x = 0;
@@ -158,6 +234,9 @@ export class JantPostMenu extends LitElement {
     this._collectionSearch = "";
     this._threadCollectionIds = [];
     this._addCollectionPanelOpen = false;
+    this._translations = null;
+    this._translationsLoading = false;
+    this._translationBusy = false;
     this._triggerEl = null;
   }
 
@@ -215,6 +294,12 @@ export class JantPostMenu extends LitElement {
         return;
       }
       if (this._open) {
+        // One step back per press, not one step out: the language picker is a
+        // level deeper than the panel that opens it.
+        if (this._view === "language-switch") {
+          this.#showLanguagePanel();
+          return;
+        }
         if (this._view !== "menu") {
           this.#showMainMenu();
           return;
@@ -297,11 +382,27 @@ export class JantPostMenu extends LitElement {
       return;
     }
 
-    // Clicking inside the dropdown — don't close (menu or collection picker)
+    // Clicking inside the dropdown — don't close (menu or any of its panels).
+    //
+    // `.post-menu-view` — the root of whichever panel is on screen — and not
+    // the two obvious alternatives, for two different reasons.
+    //
+    // Not `[role="menu"]`: that is on the *list*, and a panel's header sits
+    // outside it, so every back button read as a click outside the menu and
+    // closed the whole thing.
+    //
+    // Not `.post-menu-panel`, the container the views render into, even though
+    // it reads as the more honest "anywhere in the dropdown". On a *real*
+    // click the browser runs a microtask checkpoint between event listeners,
+    // so a menu item that switches panels has already re-rendered by the time
+    // this handler runs: `target` is a detached node whose subtree ends at the
+    // view root, and `closest` can no longer reach the container. Clicking
+    // Language would open the panel and close the menu in the same event.
+    // (`el.click()` from a script never shows this — the stack never empties,
+    // so nothing re-renders mid-dispatch. Hence the `performUpdate()` in the
+    // test that covers it.)
     if (this._open) {
-      const inside = target.closest?.(
-        "[role='menu'], [data-collection-picker], [data-visibility-panel]",
-      );
+      const inside = target.closest?.(".post-menu-view, .post-menu-panel");
       if (inside) return;
     }
 
@@ -462,6 +563,404 @@ export class JantPostMenu extends LitElement {
     );
   }
 
+  // --- Language and translations ---
+
+  /** Whether this site publishes enough languages for any of this to matter. */
+  get #multilingual(): boolean {
+    return this.languages.length > 1;
+  }
+
+  #languageLabel(tag: string | null): string {
+    if (!tag) return "Not set";
+    return this.languages.find((l) => l.tag === tag)?.label ?? tag;
+  }
+
+  async #openLanguagePanel() {
+    if (this._data?.isReply) return;
+    this._view = "language";
+    this.#focusAfterUpdate(LANGUAGE_PANEL_FOCUS);
+    // The panel is mostly about them, and the picker one level down needs them
+    // too: a language is unavailable exactly when another post in the group
+    // already holds it.
+    await this.#loadTranslations();
+    // A Thread whose every other language is already spoken for has nothing to
+    // put on screen until this resolves, so the first attempt found nothing to
+    // land on. Anywhere else, focus is already inside and must stay put.
+    if (!this.contains(document.activeElement)) {
+      this.#focusAfterUpdate(LANGUAGE_PANEL_FOCUS);
+    }
+  }
+
+  #showLanguagePanel(focusSelector = "[data-post-menu-open-language-switch]") {
+    this._view = "language";
+    this.#focusAfterUpdate(focusSelector);
+  }
+
+  /**
+   * The one place the language picker lives.
+   *
+   * Behind a row of its own rather than at the top of the language panel:
+   * switching a Thread's language is a correction, made once if ever, while
+   * reading and adding other versions is the daily work. Left inline it also
+   * degenerated — on a two-language site whose other version is already linked,
+   * the radio group rendered a single unclickable row for the current language.
+   */
+  #openLanguageSwitch() {
+    if (this._data?.isReply) return;
+    this._view = "language-switch";
+    this.#focusAfterUpdate(
+      "[data-post-menu-language-current='true'], [data-post-menu-language-option]",
+    );
+  }
+
+  /**
+   * Split the site's languages by what this Thread can do with each.
+   *
+   * A language another version already holds is neither selectable nor free:
+   * the group allows one post per language, so it is spoken for either way.
+   */
+  #languageChoices() {
+    const current = this._data?.language ?? null;
+    const linked = this._translations ?? [];
+    const held = new Set(
+      linked.flatMap((translation) =>
+        translation.language ? [translation.language] : [],
+      ),
+    );
+    return {
+      current,
+      linked,
+      selectable: this.languages.filter(
+        (language) => language.tag === current || !held.has(language.tag),
+      ),
+      free: this.languages.filter(
+        (language) => language.tag !== current && !held.has(language.tag),
+      ),
+    };
+  }
+
+  /**
+   * Set the language of this whole Thread.
+   *
+   * Not optimistic: unlike visibility, this can be refused server-side — the
+   * Thread's translation group may already hold that language — and showing the
+   * new language before the server agrees would be a lie the author acts on.
+   */
+  async #setLanguage(tag: string) {
+    const data = this._data;
+    if (!data || this._translationBusy) return;
+    this._translationBusy = true;
+
+    try {
+      const response = await fetch(
+        publicPath(`/api/posts/${data.threadId}/language`),
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ language: tag }),
+        },
+      );
+      if (!response.ok) {
+        showToast(
+          await readErrorMessage(
+            response,
+            "Could not change the language. Try again.",
+          ),
+          "error",
+        );
+        return;
+      }
+
+      const article = document.querySelector<HTMLElement>(
+        `article[data-post-id="${data.threadId}"]`,
+      );
+      if (article) article.dataset.postLanguage = tag;
+      this._data = { ...data, language: tag };
+      showToast(`Thread is now in ${this.#languageLabel(tag)}.`);
+      this.#close();
+    } catch {
+      showToast("Could not change the language. Try again.", "error");
+    } finally {
+      this._translationBusy = false;
+    }
+  }
+
+  async #loadTranslations() {
+    const data = this._data;
+    if (!data) return;
+    this._translationsLoading = true;
+    try {
+      const response = await fetch(
+        publicPath(`/api/posts/${data.threadId}/translations`),
+        { credentials: "same-origin" },
+      );
+      if (!response.ok) return;
+      const body = (await response.json()) as {
+        translations?: TranslationItem[];
+      };
+      this._translations = body.translations ?? [];
+    } catch {
+      this._translations = [];
+    } finally {
+      this._translationsLoading = false;
+    }
+  }
+
+  /**
+   * Open the composer on a new post that translates this one.
+   *
+   * Prefers the dialog, so the author writes the translation without leaving
+   * the post they are translating — navigating away to a blank page loses that
+   * context exactly when it is most useful. Pages that render no dialog (the
+   * standalone composer among them) fall back to the URL, which carries the
+   * same two values.
+   */
+  async #writeTranslation(tag: string) {
+    const data = this._data;
+    if (!data) return;
+    this.#close({ restoreFocus: false });
+
+    const composeEl = document.querySelector("jant-compose-dialog") as
+      | import("./jant-compose-dialog.js").JantComposeDialog
+      | null;
+    if (composeEl) {
+      await composeEl.openTranslation(data.threadId, tag);
+      return;
+    }
+
+    const params = new URLSearchParams({
+      translationOf: data.threadId,
+      lang: tag,
+    });
+    window.location.assign(publicPath(`/new?${params.toString()}`));
+  }
+
+  /**
+   * Ask the author which post to link, in a dialog rather than in this popover.
+   *
+   * The menu is the wrong shape for a search: results need room for a real
+   * title and a keyboard. The picker is generic — the eligibility rules stay on
+   * the server, and this only supplies the copy and the request.
+   */
+  async #openLinkPicker() {
+    const data = this._data;
+    if (!data) return;
+    this.#close({ restoreFocus: false });
+
+    const picked = await pickPost({
+      heading: "Link a translation",
+      hint: "Only posts you could actually link are listed: published, and in a language this one's group does not already have.",
+      placeholder: "Search your posts, or paste a URL…",
+      emptyHint: "Nothing matched that you could link.",
+      search: async (query) => {
+        // An author writing a translation has the other post open in a tab, so
+        // the URL is closer to hand than the title. Resolving it also lets the
+        // answer be a reason rather than an empty list.
+        if (looksLikeAddress(query)) {
+          return this.#resolveTranslationAddress(data.threadId, query);
+        }
+
+        const response = await fetch(
+          publicPath(
+            `/api/posts/${data.threadId}/translations/candidates?q=${encodeURIComponent(query)}`,
+          ),
+          { credentials: "same-origin" },
+        );
+        if (!response.ok) return { items: [] };
+        const body = (await response.json()) as {
+          candidates?: Array<{
+            id: string;
+            label: string;
+            language: string | null;
+          }>;
+        };
+        return {
+          items: (body.candidates ?? []).map((candidate) => ({
+            id: candidate.id,
+            label: candidate.label,
+            meta: this.#languageLabel(candidate.language),
+          })),
+        };
+      },
+    });
+
+    if (!picked) return;
+    this._data = data;
+    await this.#linkTranslation(picked);
+    // The page renders the link too ("Also available in …"), so it has to catch
+    // up with the change the author just made.
+    window.location.reload();
+  }
+
+  /**
+   * Look up the post at a pasted address, and say what is wrong with it when
+   * it cannot be linked. The rules are the server's; this only puts the answer
+   * into words.
+   */
+  async #resolveTranslationAddress(
+    threadId: string,
+    address: string,
+  ): Promise<PostPickerResult> {
+    let resolution: TranslationAddressResolution | undefined;
+    try {
+      const response = await fetch(
+        publicPath(
+          `/api/posts/${threadId}/translations/resolve?url=${encodeURIComponent(address)}`,
+        ),
+        { credentials: "same-origin" },
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      ({ resolution } = (await response.json()) as {
+        resolution?: TranslationAddressResolution;
+      });
+    } catch {
+      return {
+        items: [],
+        note: "Could not check that address. Try again in a moment.",
+      };
+    }
+
+    if (!resolution) return { items: [] };
+    if (resolution.kind === "ok") {
+      return {
+        items: [
+          {
+            id: resolution.candidate.id,
+            label: resolution.candidate.label,
+            meta: this.#languageLabel(resolution.candidate.language),
+          },
+        ],
+      };
+    }
+
+    return { items: [], note: this.#translationAddressNote(resolution) };
+  }
+
+  #translationAddressNote(resolution: TranslationAddressResolution): string {
+    const language = this.#languageLabel(
+      "language" in resolution ? resolution.language : null,
+    );
+
+    switch (resolution.kind) {
+      case "external":
+        return "That address is somewhere else. Only posts on this site can be linked.";
+      case "not_found":
+        return `Nothing at ${resolution.address}. Check the address, or search by title.`;
+      case "not_a_post":
+        return "That address is not a post. Translations link posts to posts.";
+      case "same_thread":
+        return "That is this post.";
+      case "unpublished":
+        return "That post is a draft. Publish it, then link it.";
+      case "no_language":
+        return "That post has no language yet. Set one on it first.";
+      case "same_language":
+        return `That post is written in ${this.#languageLabel(
+          this._data?.language ?? null,
+        )} too. A translation has to be in another language.`;
+      case "language_taken":
+        return `A ${language} version is already linked here. Unlink that one first.`;
+      case "group_conflict":
+        return "That post belongs to another translation group. Unlink it first.";
+      case "group_language_taken":
+        return `Its translation group already has a ${language} version.`;
+      default:
+        return "That post cannot be linked.";
+    }
+  }
+
+  async #linkTranslation(otherId: string) {
+    const data = this._data;
+    if (!data || this._translationBusy) return;
+    this._translationBusy = true;
+
+    try {
+      const response = await fetch(
+        publicPath(`/api/posts/${data.threadId}/translations`),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ postId: otherId }),
+        },
+      );
+      if (!response.ok) {
+        showToast(
+          await readErrorMessage(
+            response,
+            "Could not link those posts. Try again.",
+          ),
+          "error",
+        );
+        return;
+      }
+      await this.#loadTranslations();
+      showToast("Posts linked as translations.");
+    } catch {
+      showToast("Could not link those posts. Try again.", "error");
+    } finally {
+      this._translationBusy = false;
+    }
+  }
+
+  /**
+   * Take one other version out of this Thread's translation group.
+   *
+   * Unlinking is per-version rather than "leave the group": from the author's
+   * seat the group *is* the list of other versions, so removing the row they
+   * are looking at is the action they mean. A group left with a single member
+   * collapses server-side, which makes the two-post case do the obvious thing.
+   *
+   * The confirm runs after the menu closes, the way deleting a post does — a
+   * modal opened underneath a popover fights it for focus and for the backdrop
+   * click.
+   */
+  async #unlinkTranslation(target: TranslationItem) {
+    const data = this._data;
+    if (!data || this._translationBusy) return;
+
+    const trigger = this._triggerEl;
+    this.#close({ restoreFocus: false });
+
+    const languageLabel = this.#languageLabel(target.language);
+    const confirmed = await showConfirmDialog({
+      message: `Unlink the ${languageLabel} version, “${target.label}”? Both posts stay published — they just stop pointing at each other.`,
+      confirmLabel: "Unlink",
+      cancelLabel: "Cancel",
+      tone: "danger",
+    });
+    if (!confirmed) {
+      trigger?.focus();
+      return;
+    }
+
+    this._translationBusy = true;
+    try {
+      const response = await fetch(
+        publicPath(`/api/posts/${target.id}/translations`),
+        { method: "DELETE", credentials: "same-origin" },
+      );
+      if (!response.ok) {
+        showToast(
+          await readErrorMessage(response, "Could not unlink. Try again."),
+          "error",
+        );
+        trigger?.focus();
+        return;
+      }
+      showToast("Translation link removed.");
+      // The page renders the link too ("Also available in …"), so it has to
+      // catch up with the change the author just made.
+      window.location.reload();
+    } catch {
+      showToast("Could not unlink. Try again.", "error");
+      trigger?.focus();
+    } finally {
+      this._translationBusy = false;
+    }
+  }
+
   #close(options: { restoreFocus?: boolean } = {}) {
     const restoreFocus =
       options.restoreFocus ?? this.#restoreTriggerFocusOnClose;
@@ -473,6 +972,7 @@ export class JantPostMenu extends LitElement {
     this._view = "menu";
     this._addCollectionPanelOpen = false;
     this._collectionSearch = "";
+    this._translations = null;
 
     if (this.#collectionsDirty) {
       this.#collectionsDirty = false;
@@ -526,6 +1026,36 @@ export class JantPostMenu extends LitElement {
       | null;
     if (composeEl) {
       await composeEl.openEdit(postId);
+    }
+  }
+
+  async #publish() {
+    if (!this._data) return;
+    const postId = this._data.id;
+    const trigger = this._triggerEl;
+    this.#close({ restoreFocus: false });
+
+    const article = document.querySelector<HTMLElement>(
+      `article[data-post-id="${postId}"]`,
+    );
+
+    try {
+      const res = await fetch(`/api/posts/${postId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "published" }),
+      });
+      if (!res.ok) throw new Error();
+
+      showToast("Draft published.");
+      // The badge, the timestamp, and any drafts published alongside this one
+      // all change at once — re-render the surface rather than patching it.
+      if (!article || !(await refreshArticleView(article))) {
+        globalThis.location.reload();
+      }
+    } catch {
+      showToast("Could not publish the draft. Try again.", "error");
+      trigger?.focus();
     }
   }
 
@@ -711,8 +1241,10 @@ export class JantPostMenu extends LitElement {
     this.#close({ restoreFocus: false });
 
     const confirmed = await showConfirmDialog({
-      message: "Delete this post permanently? This can't be undone.",
-      confirmLabel: "Delete",
+      message: this._data.isDraft
+        ? "Discard this draft permanently? This can't be undone."
+        : "Delete this post permanently? This can't be undone.",
+      confirmLabel: this._data.isDraft ? "Discard" : "Delete",
       cancelLabel: "Cancel",
       tone: "danger",
     });
@@ -992,6 +1524,21 @@ export class JantPostMenu extends LitElement {
 
   // --- Icons (inline SVG) ---
 
+  #iconPublish() {
+    return html`<svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.75"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="M12 19V5" />
+      <path d="m5 12 7-7 7 7" />
+    </svg>`;
+  }
+
   #iconEdit() {
     return html`<svg
       xmlns="http://www.w3.org/2000/svg"
@@ -1128,6 +1675,22 @@ export class JantPostMenu extends LitElement {
       stroke-linejoin="round"
     >
       <path d="M20 6 9 17l-5-5" />
+    </svg>`;
+  }
+
+  #iconExternal() {
+    return html`<svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.9"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="M14 4h6v6" />
+      <path d="M20 4 11 13" />
+      <path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
     </svg>`;
   }
 
@@ -1297,6 +1860,226 @@ export class JantPostMenu extends LitElement {
             </svg>
             Add Collection
           </button>
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Everything about this Thread's language, in one place.
+   *
+   * The picker and the translation list belong together: a language is
+   * unavailable here precisely because another post in the group already holds
+   * it, and that reason is only legible next to the list of those posts. Two
+   * top-level menu entries for one subject was one too many.
+   *
+   * Top to bottom, the panel answers three questions in the order they get
+   * asked. *What language is this?* — the entry that opened this panel already
+   * said "Language · 简体中文", so the panel opens by confirming it, and the
+   * picker itself is one level down (see `#openLanguageSwitch`) because
+   * changing it is a correction, made once if ever. *What can I do?* — writing
+   * or linking a version, the recurring work, and self-describing enough to
+   * need no section label over it. *What is already there?* — the other
+   * versions, last, because they arrive with a fetch: any earlier and the
+   * panel would shove itself downward under the author's cursor a moment
+   * after opening.
+   */
+  #renderLanguagePanel() {
+    if (!this._data || this._data.isReply) return nothing;
+
+    const { current, linked, free } = this.#languageChoices();
+    return html`
+      <div class="post-menu-view post-menu-language-panel">
+        <div class="post-menu-panel-header">
+          <button
+            type="button"
+            class="post-menu-panel-back"
+            aria-label="Back"
+            @click=${() => this.#showMainMenu("[data-post-menu-open-language]")}
+          >
+            ${this.#iconChevronLeft()}
+          </button>
+          <div class="post-menu-panel-heading">
+            <span>Language</span>
+          </div>
+        </div>
+        <div role="menu" class="post-menu-list">
+          <!-- Both sections stand or fall together: with every other language
+               spoken for there is nothing to switch to and nothing to add. -->
+          ${free.length > 0
+            ? html`
+                <div class="post-menu-section">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="post-menu-item"
+                    data-post-menu-open-language-switch
+                    ?disabled=${this._translationBusy}
+                    @click=${() => this.#openLanguageSwitch()}
+                  >
+                    <span class="post-menu-item-label">Change language</span>
+                    <span class="post-menu-item-meta"
+                      >${this.#languageLabel(current)}</span
+                    >
+                    <span class="post-menu-item-trailing post-menu-item-chevron"
+                      >${this.#iconChevronRight()}</span
+                    >
+                  </button>
+                </div>
+                <div class="post-menu-section">
+                  ${free.map(
+                    (language, index) => html`
+                      <button
+                        type="button"
+                        role="menuitem"
+                        class="post-menu-item"
+                        ?data-post-menu-translation-first=${index === 0}
+                        @click=${() => this.#writeTranslation(language.tag)}
+                      >
+                        <span class="post-menu-item-label"
+                          >Write the ${language.label} version</span
+                        >
+                        <span
+                          class="post-menu-item-trailing post-menu-item-chevron"
+                          >${this.#iconChevronRight()}</span
+                        >
+                      </button>
+                    `,
+                  )}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="post-menu-item"
+                    @click=${() => this.#openLinkPicker()}
+                  >
+                    <span class="post-menu-item-label"
+                      >Link a version you already wrote</span
+                    >
+                    <span class="post-menu-item-trailing post-menu-item-chevron"
+                      >${this.#iconChevronRight()}</span
+                    >
+                  </button>
+                </div>
+              `
+            : nothing}
+          ${linked.length > 0
+            ? html`
+                <div class="post-menu-section">
+                  <p class="post-menu-section-label">Other versions</p>
+                  ${linked.map((translation) => {
+                    const languageLabel = this.#languageLabel(
+                      translation.language,
+                    );
+                    return html`
+                      <div class="post-menu-row" data-post-menu-translation>
+                        <a
+                          role="menuitem"
+                          class="post-menu-item post-menu-row-main"
+                          href=${publicPath(`/${translation.slug}`)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title=${translation.label}
+                          aria-label=${`Open the ${languageLabel} version, ${translation.label}, in a new tab`}
+                        >
+                          <span
+                            class="post-menu-item-label"
+                            lang=${translation.language ?? nothing}
+                            >${languageLabel}</span
+                          >
+                          <span
+                            class="post-menu-item-trailing post-menu-item-chevron"
+                            >${this.#iconExternal()}</span
+                          >
+                        </a>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          class="post-menu-row-action post-menu-row-action-danger"
+                          data-post-menu-translation-unlink
+                          ?disabled=${this._translationBusy}
+                          aria-label=${`Unlink the ${languageLabel} version`}
+                          @click=${() => this.#unlinkTranslation(translation)}
+                        >
+                          Unlink
+                        </button>
+                      </div>
+                    `;
+                  })}
+                </div>
+              `
+            : nothing}
+          ${this._translationsLoading
+            ? html`<p class="post-menu-hint">Loading…</p>`
+            : nothing}
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Which language this Thread is written in.
+   *
+   * A language another version already holds is left out entirely rather than
+   * shown greyed out: the author cannot switch to it, and a dead row saying
+   * "Taken" answers a question nobody asked. The version holding it is one
+   * level up under *Other versions*, where reading it and unlinking it are one
+   * click each.
+   */
+  #renderLanguageSwitchPanel() {
+    if (!this._data || this._data.isReply) return nothing;
+
+    const { current, selectable } = this.#languageChoices();
+    return html`
+      <div
+        class="post-menu-view post-menu-language-panel post-menu-language-switch-panel"
+      >
+        <div class="post-menu-panel-header">
+          <button
+            type="button"
+            class="post-menu-panel-back"
+            aria-label="Back"
+            @click=${() => this.#showLanguagePanel()}
+          >
+            ${this.#iconChevronLeft()}
+          </button>
+          <div class="post-menu-panel-heading">
+            <span>Change language</span>
+          </div>
+        </div>
+        <div role="menu" class="post-menu-list">
+          <div
+            class="post-menu-section"
+            role="radiogroup"
+            aria-label="Language"
+          >
+            ${selectable.map((language) => {
+              const selected = language.tag === current;
+              return html`
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  lang=${language.tag}
+                  aria-checked=${selected ? "true" : "false"}
+                  ?disabled=${this._translationBusy}
+                  data-post-menu-language-option
+                  data-post-menu-language-current=${selected ? "true" : "false"}
+                  class=${`post-menu-item${selected ? " post-menu-item-active" : ""}`}
+                  @click=${() =>
+                    selected
+                      ? this.#showLanguagePanel()
+                      : this.#setLanguage(language.tag)}
+                >
+                  <span class="post-menu-item-label">${language.label}</span>
+                  ${selected
+                    ? html`<span
+                        class="post-menu-item-trailing post-menu-item-check"
+                        >${this.#iconCheck()}</span
+                      >`
+                    : nothing}
+                </button>
+              `;
+            })}
+          </div>
         </div>
       </div>
     `;
@@ -1501,6 +2284,21 @@ export class JantPostMenu extends LitElement {
               <span class="post-menu-item-trailing">${this.#iconEdit()}</span>
             </button>
 
+            ${this._data.isDraft
+              ? html`
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="post-menu-item"
+                    @click=${() => this.#publish()}
+                  >
+                    <span class="post-menu-item-label">Publish</span>
+                    <span class="post-menu-item-trailing"
+                      >${this.#iconPublish()}</span
+                    >
+                  </button>
+                `
+              : nothing}
             ${this._data.isReply
               ? nothing
               : html`
@@ -1536,27 +2334,49 @@ export class JantPostMenu extends LitElement {
                     >
                   </button>
                 `}
+            ${this._data.isReply || !this.#multilingual
+              ? nothing
+              : html`
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="post-menu-item"
+                    data-post-menu-open-language
+                    @click=${() => this.#openLanguagePanel()}
+                  >
+                    <span class="post-menu-item-label">Language</span>
+                    <span class="post-menu-item-meta"
+                      >${this.#languageLabel(this._data.language)}</span
+                    >
+                    <span class="post-menu-item-trailing post-menu-item-chevron"
+                      >${this.#iconChevronRight()}</span
+                    >
+                  </button>
+                `}
           </div>
 
           <div class="post-menu-section">
-            <button
-              type="button"
-              role="menuitem"
-              class="post-menu-item"
-              @click=${() => this.#setFeatured(!isFeatured)}
-            >
-              <span class="post-menu-item-label"
-                >${isFeatured
-                  ? "Remove from Featured"
-                  : "Add to Featured"}</span
-              >
-              <span class="post-menu-item-trailing"
-                >${isFeatured
-                  ? this.#iconFeaturedOff()
-                  : this.#iconFeatured()}</span
-              >
-            </button>
-
+            ${this._data.isDraft
+              ? nothing
+              : html`
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="post-menu-item"
+                    @click=${() => this.#setFeatured(!isFeatured)}
+                  >
+                    <span class="post-menu-item-label"
+                      >${isFeatured
+                        ? "Remove from Featured"
+                        : "Add to Featured"}</span
+                    >
+                    <span class="post-menu-item-trailing"
+                      >${isFeatured
+                        ? this.#iconFeaturedOff()
+                        : this.#iconFeatured()}</span
+                    >
+                  </button>
+                `}
             ${this._data.isReply
               ? nothing
               : html`
@@ -1604,7 +2424,9 @@ export class JantPostMenu extends LitElement {
               class="post-menu-item post-menu-item-danger"
               @click=${() => this.#delete()}
             >
-              <span class="post-menu-item-label">Delete</span>
+              <span class="post-menu-item-label"
+                >${this._data.isDraft ? "Discard" : "Delete"}</span
+              >
               <span class="post-menu-item-trailing">${this.#iconTrash()}</span>
             </button>
           </div>
@@ -1639,7 +2461,11 @@ export class JantPostMenu extends LitElement {
                   ? this.#renderCollectionPicker()
                   : this._view === "visibility"
                     ? this.#renderVisibilityPanel()
-                    : this.#renderMenu()}
+                    : this._view === "language"
+                      ? this.#renderLanguagePanel()
+                      : this._view === "language-switch"
+                        ? this.#renderLanguageSwitchPanel()
+                        : this.#renderMenu()}
               </div>
             </div>
           `

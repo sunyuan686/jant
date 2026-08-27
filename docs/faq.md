@@ -26,15 +26,15 @@ Not built-in. May come later. For now you can embed third-party systems like gis
 
 ## Does Jant have standalone pages (like an About page)?
 
-There's no separate "page" type. Set a Note titled `About` to **Hidden from Latest** (off the homepage, direct link still works) and it becomes a standalone page. Jant builds the slug from the title, so the address defaults to `/about`; to use a different one, expand **Custom link** in the **Publish settings** panel next to the Publish button. See [Writing and organizing § Make a standalone page](writing-and-organizing.md#make-a-standalone-page-about).
+There's no separate "page" type. Set a Note titled `About` to **Hidden from Latest** (off the homepage, direct link still works) and it becomes a standalone page. Jant builds the slug from the title, so the address defaults to `/about`; to use a different one, open the control at the top right of the post (it reads `Now · /…`) and fill in **Custom link**. See [Writing and organizing § Make a standalone page](writing-and-organizing.md#make-a-standalone-page-about).
 
 ## How do I publish a post with a past date?
 
-Next to the **Publish** button in the composer there's a **Publish settings** panel — set **Published on** to an earlier date and the post drops into the timeline at that point. Handy for backfilling older posts brought over from elsewhere. You can only pick today or earlier; Jant doesn't schedule posts. See [Writing and organizing § Publish settings](writing-and-organizing.md#publish-settings).
+Each post in the composer has a control at its top right reading `Now · /…`. Open it and set **Published on** to an earlier date; the post drops into the timeline at that point. Handy for backfilling older posts brought over from elsewhere. You can only pick today or earlier; Jant doesn't schedule posts. See [Writing and organizing § Publish settings](writing-and-organizing.md#publish-settings).
 
 ## How do I give a post a custom URL?
 
-In the same **Publish settings** panel, expand **Custom link** and enter the slug you want before publishing. If the post is already published and you want to change its URL, use **Settings → Advanced → Custom URLs** instead — it 301-redirects the old address so you don't leave a dead link. See [Writing and organizing § Custom URLs](writing-and-organizing.md#custom-urls).
+Open the same control at the top right of the post and enter the slug you want under **Custom link** before publishing. If the post is already published and you want to change its URL, use **Settings → Advanced → Custom URLs** instead — it 301-redirects the old address so you don't leave a dead link. See [Writing and organizing § Custom URLs](writing-and-organizing.md#custom-urls).
 
 ## Can I customize the theme/appearance?
 
@@ -73,12 +73,11 @@ No. Deletion is permanent — the post row, its paths, and its attachment media 
 
 ## Is multi-language supported?
 
-Site content can be in any language. **Settings → General → Language** sets the language. That setting drives two things:
+Yes. **Settings → Language** holds three settings, each doing one thing:
 
-- **Content metadata**: `<html lang>` and the `<language>` field in the RSS feed use the tag you set verbatim — this is what search engines, screen readers, and feed readers consume.
-- **Settings UI language**: today only English, Simplified Chinese, and Traditional Chinese are supported. Other values fall back to English.
-
-Public-facing pages (home, Featured, Latest, navigation copy) are currently fixed to English.
+- **Content language**: the language the site publishes in. It fills `<html lang>` and the `<language>` field in your feeds, which is what search engines, screen readers, and feed readers consume.
+- **Multilingual content**: turn it on and each language gets its own URL prefix, home page, archive, and feed, with a switcher in the header and posts linkable as versions of one another. See [Multilingual content](multilingual.md).
+- **Dashboard language**: what your own dashboard is displayed in, which only you see. It ships in English, Simplified Chinese, and Traditional Chinese; other values fall back to English.
 
 ## Is multi-author supported?
 
@@ -156,13 +155,15 @@ There's no built-in path, but `site export` produces standard Markdown + YAML fr
 
 ## Why the name Jant?
 
-From _Jantelagen_ (the Law of Jante), a Nordic cultural concept of "don't think you're anything special." For the design rationale, see [Introduction](overview.md#a-quieter-way-to-write-in-public).
+From _Jantelagen_ (the Law of Jante), a Nordic cultural concept of "don't think you're anything special." For the design rationale, see [Introduction](overview.md#about-the-name).
 
 ## Why is hosted priced at $10.46/year?
 
-I've always liked `.com` pricing: $10.46/year.
+$10.46 is what Cloudflare charges to register and renew a `.com` domain for a year. A subscription you keep for years has to be judged on what it costs over those years, and $10.46 looks fair to me.
 
-That's what Cloudflare charges to register and renew a `.com`. It sits just above free, and just formal enough — low enough not to add friction at the start, but not so trivial that you don't take it seriously.
+## What if the hosted plan's 10 GB of media storage isn't enough?
+
+Email [support@jant.me](mailto:support@jant.me) and it can be raised separately.
 
 ## What's next
 

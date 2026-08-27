@@ -9,9 +9,11 @@ import type { AppVariables } from "../../types/app-context.js";
 import { requireAuthApi } from "../../middleware/auth.js";
 import { requirePublicApiAccess } from "../../middleware/public-content-access.js";
 import {
-  CollectionDirectoryItemIdSchema,
+  CollectionDirectoryRowIdSchema,
   CollectionDescriptionValueSchema,
+  CollectionIdSchema,
   CollectionSortOrderSchema,
+  ContentLanguageSchema,
   CreateCollectionDirectoryItemSchema,
   CreateCollectionSchema,
   PostIdSchema,
@@ -36,12 +38,24 @@ const ThreadAssignSchema = z.object({
 });
 
 const MoveSchema = z.object({
-  after: CollectionDirectoryItemIdSchema.nullable().optional(),
-  before: CollectionDirectoryItemIdSchema.nullable().optional(),
+  after: CollectionDirectoryRowIdSchema.nullable().optional(),
+  before: CollectionDirectoryRowIdSchema.nullable().optional(),
+});
+
+const SlugQuerySchema = z.object({
+  mode: z.literal("check"),
+  slug: z.string().trim().toLowerCase().min(1).max(200),
+  collectionId: CollectionIdSchema.optional(),
 });
 
 const ListCollectionsQuerySchema = z.object({
   view: z.enum(["compose"]).optional(),
+  /**
+   * Content language of the calling view. The directory's Thread counts are
+   * narrowed by it, so the page and this endpoint have to be asked the same
+   * question — see `jant-collection-directory`.
+   */
+  lang: ContentLanguageSchema.optional(),
 });
 
 // List collections (includes Thread counts and directory items)
@@ -50,6 +64,11 @@ collectionsApiRoutes.get("/", requirePublicApiAccess(), async (c) => {
 
   if (query.view === "compose") {
     c.header("Cache-Control", "no-store");
+    // Smart collections are deliberately absent. A post cannot be added to one
+    // by hand — its conditions decide, permanently — so offering it here would
+    // be a control that does nothing. Every "add this post to a collection"
+    // surface leaves them out for the same reason; see the smart collections
+    // design notes on the asymmetry, which is not a gap to be filled in later.
     const collections = await c.var.services.collections.listByRecentActivity();
     return c.json({
       collections,
@@ -57,10 +76,14 @@ collectionsApiRoutes.get("/", requirePublicApiAccess(), async (c) => {
     });
   }
 
-  const directoryData = await c.var.services.collections.listDirectoryData();
+  const directoryData = await c.var.services.collections.listDirectoryData({
+    isAuthenticated: c.var.isAuthenticated,
+    lang: query.lang,
+  });
 
   return c.json({
     collections: directoryData.collections,
+    smartCollections: directoryData.smartCollections,
     directoryItems: directoryData.directoryItems,
   });
 });
@@ -98,13 +121,17 @@ collectionsApiRoutes.put(
 );
 
 // Move directory item — must be before /:id
+//
+// The moved row and its neighbours may each be named by a collection or smart
+// collection id: those are the rows the directory renders without one of its
+// own. The service places them before it moves anything.
 collectionsApiRoutes.put(
   "/directory-items/:id/move",
   requireAuthApi(),
   async (c) => {
-    const id = parseIdParam(
+    const id = parseValidated(
+      CollectionDirectoryRowIdSchema,
       c.req.param("id"),
-      ID_PREFIX.collectionDirectoryItem,
     );
     const body = parseValidated(MoveSchema, await c.req.json());
 
@@ -134,6 +161,22 @@ collectionsApiRoutes.delete(
     return c.json({ success: true });
   },
 );
+
+/**
+ * Address availability, in the shape smart collections already use.
+ *
+ * Declared before `/:id` so the literal path wins. The editing dialog asks
+ * while the author types, so a clash is answered where the decision is being
+ * made rather than on write.
+ */
+collectionsApiRoutes.get("/slug", requireAuthApi(), async (c) => {
+  const query = parseValidated(SlugQuerySchema, c.req.query());
+  const available = await c.var.services.collections.checkSlugAvailability(
+    query.slug,
+    query.collectionId,
+  );
+  return c.json({ slug: query.slug, available });
+});
 
 // Get single collection
 collectionsApiRoutes.get("/:id", requirePublicApiAccess(), async (c) => {

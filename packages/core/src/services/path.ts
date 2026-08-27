@@ -6,7 +6,7 @@
  * slash (for example: "hello-world" or "collections/reading+tools").
  */
 
-import { and, eq, inArray, isNotNull, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { type Database, batchQuery } from "../db/index.js";
 import {
   sqliteSchemaBundle,
@@ -19,7 +19,12 @@ import { normalizePath } from "../lib/url.js";
 import type { PathKind, PathRecord, Status } from "../types.js";
 
 export interface ResolvedPath extends PathRecord {
-  targetType: "post" | "collection" | "redirect" | "archive";
+  targetType:
+    | "post"
+    | "collection"
+    | "smart_collection"
+    | "redirect"
+    | "archive";
 }
 
 export interface CreatePathInput {
@@ -27,6 +32,7 @@ export interface CreatePathInput {
   kind: PathKind;
   postId?: string | null;
   collectionId?: string | null;
+  smartCollectionId?: string | null;
   redirectToPath?: string | null;
   redirectType?: 301 | 302 | null;
   archiveQuery?: string | null;
@@ -35,25 +41,66 @@ export interface CreatePathInput {
 export interface PathService {
   getByPath(path: string): Promise<PathRecord | null>;
   resolve(path: string): Promise<ResolvedPath | null>;
+  /**
+   * Resolve a path the way a browser would: following stored redirects until
+   * something that is not a redirect answers.
+   *
+   * Reach for this when an address has to name an *entity* — an author pasting
+   * a URL means the post at the end of it, not the hop they happened to copy.
+   * The plain {@link PathService.resolve} stays the right call for serving a
+   * request, which must emit the redirect rather than swallow it.
+   *
+   * @param path - Stored or public path, with or without a leading slash
+   * @returns What the address finally points at, or null when nothing does
+   * @example
+   * await paths.resolveTarget("/old-name"); // { targetType: "post", postId: "pst_…" }
+   */
+  resolveTarget(path: string): Promise<ResolvedPath | null>;
   isPathAvailable(path: string, excludeId?: string): Promise<boolean>;
   getPostSlug(postId: string): Promise<string | null>;
   getCollectionSlug(collectionId: string): Promise<string | null>;
+  getSmartCollectionSlug(smartCollectionId: string): Promise<string | null>;
   getPostSlugMap(postIds: string[]): Promise<Map<string, string>>;
   getCollectionSlugMap(collectionIds: string[]): Promise<Map<string, string>>;
+  getSmartCollectionSlugMap(
+    smartCollectionIds: string[],
+  ): Promise<Map<string, string>>;
   create(input: CreatePathInput): Promise<PathRecord>;
   createPostSlug(postId: string, slug: string): Promise<PathRecord>;
   updatePostSlug(postId: string, slug: string): Promise<void>;
   createCollectionSlug(collectionId: string, slug: string): Promise<PathRecord>;
   updateCollectionSlug(collectionId: string, slug: string): Promise<void>;
+  createSmartCollectionSlug(
+    smartCollectionId: string,
+    slug: string,
+  ): Promise<PathRecord>;
+  updateSmartCollectionSlug(
+    smartCollectionId: string,
+    slug: string,
+  ): Promise<void>;
   deleteByPostId(postId: string): Promise<void>;
   getPostAliases(postIds: string[]): Promise<Map<string, string[]>>;
   listNavigableItems(): Promise<NavigableItem[]>;
+  /**
+   * Find registered paths that a URL segment would shadow: the segment itself
+   * and anything nested under it.
+   *
+   * Used before a language is added, because `/{prefix}` and `/{prefix}/…` stop
+   * resolving through the path registry once that prefix goes live.
+   *
+   * @param segment - First URL segment, without slashes
+   * @param limit - Maximum records to return
+   * @returns Matching path records, shortest path first
+   * @example
+   * await paths.findPathsUnderSegment("ja"); // [{ path: "ja", postId: "pst_…" }]
+   */
+  findPathsUnderSegment(segment: string, limit?: number): Promise<PathRecord[]>;
 }
 
 export interface NavigableItem {
   title: string;
   path: string;
-  type: "post" | "collection";
+  type: "post" | "collection" | "smart_collection";
   format?: string;
   status?: Status;
 }
@@ -74,7 +121,7 @@ export function createPathService(
   siteId: string,
   databaseSchema: DatabaseSchema = sqliteSchemaBundle,
 ): PathService {
-  const { pathRegistry, posts, collections } = databaseSchema;
+  const { pathRegistry, posts, collections, smartCollections } = databaseSchema;
 
   function toPathRecord(row: typeof pathRegistry.$inferSelect): PathRecord {
     return {
@@ -84,6 +131,7 @@ export function createPathService(
       kind: row.kind as PathKind,
       postId: row.postId,
       collectionId: row.collectionId,
+      smartCollectionId: row.smartCollectionId,
       redirectToPath: row.redirectToPath,
       redirectType: row.redirectType as 301 | 302 | null,
       archiveQuery: row.archiveQuery,
@@ -110,6 +158,7 @@ export function createPathService(
           kind: input.kind,
           postId: input.postId ?? null,
           collectionId: input.collectionId ?? null,
+          smartCollectionId: input.smartCollectionId ?? null,
           redirectToPath: input.redirectToPath
             ? normalizeStoredPath(input.redirectToPath)
             : null,
@@ -157,9 +206,29 @@ export function createPathService(
             ? "redirect"
             : record.postId
               ? "post"
-              : "collection";
+              : record.smartCollectionId
+                ? "smart_collection"
+                : "collection";
 
       return { ...record, targetType };
+    },
+
+    async resolveTarget(path) {
+      let current = await this.resolve(path);
+      const seen = new Set<string>();
+
+      while (
+        current?.targetType === "redirect" &&
+        current.redirectToPath &&
+        !seen.has(current.path)
+      ) {
+        seen.add(current.path);
+        current = await this.resolve(current.redirectToPath);
+      }
+
+      // A redirect chain that loops, or ends on another redirect with nothing
+      // to point at, names no entity.
+      return current?.targetType === "redirect" ? null : current;
     },
 
     async isPathAvailable(path, excludeId) {
@@ -202,6 +271,21 @@ export function createPathService(
           and(
             eq(pathRegistry.siteId, siteId),
             eq(pathRegistry.collectionId, collectionId),
+            eq(pathRegistry.kind, "slug"),
+          ),
+        )
+        .limit(1);
+      return result[0] ? fromCollectionPath(result[0].path) : null;
+    },
+
+    async getSmartCollectionSlug(smartCollectionId) {
+      const result = await db
+        .select({ path: pathRegistry.path })
+        .from(pathRegistry)
+        .where(
+          and(
+            eq(pathRegistry.siteId, siteId),
+            eq(pathRegistry.smartCollectionId, smartCollectionId),
             eq(pathRegistry.kind, "slug"),
           ),
         )
@@ -265,6 +349,35 @@ export function createPathService(
       });
     },
 
+    async getSmartCollectionSlugMap(smartCollectionIds) {
+      if (smartCollectionIds.length === 0) return new Map<string, string>();
+
+      return batchQuery(smartCollectionIds, async (chunk) => {
+        const result = new Map<string, string>();
+        const rows = await db
+          .select({
+            smartCollectionId: pathRegistry.smartCollectionId,
+            path: pathRegistry.path,
+          })
+          .from(pathRegistry)
+          .where(
+            and(
+              eq(pathRegistry.siteId, siteId),
+              inArray(pathRegistry.smartCollectionId, chunk),
+              eq(pathRegistry.kind, "slug"),
+              isNotNull(pathRegistry.smartCollectionId),
+            ),
+          );
+
+        for (const row of rows) {
+          if (row.smartCollectionId) {
+            result.set(row.smartCollectionId, fromCollectionPath(row.path));
+          }
+        }
+        return result;
+      });
+    },
+
     async create(input) {
       return insertPath(input);
     },
@@ -322,6 +435,40 @@ export function createPathService(
             and(
               eq(pathRegistry.siteId, siteId),
               eq(pathRegistry.collectionId, collectionId),
+              eq(pathRegistry.kind, "slug"),
+            ),
+          );
+      } catch (err) {
+        if (isUniqueConstraintError(err)) {
+          throw new ConflictError(`Path "${normalized}" is already in use`);
+        }
+        throw err;
+      }
+    },
+
+    async createSmartCollectionSlug(smartCollectionId, slug) {
+      return insertPath({
+        path: toCollectionPath(slug),
+        kind: "slug",
+        smartCollectionId,
+      });
+    },
+
+    async updateSmartCollectionSlug(smartCollectionId, slug) {
+      const timestamp = now();
+      const normalized = toCollectionPath(slug);
+
+      try {
+        await db
+          .update(pathRegistry)
+          .set({
+            path: normalized,
+            updatedAt: timestamp,
+          })
+          .where(
+            and(
+              eq(pathRegistry.siteId, siteId),
+              eq(pathRegistry.smartCollectionId, smartCollectionId),
               eq(pathRegistry.kind, "slug"),
             ),
           );
@@ -415,6 +562,31 @@ export function createPathService(
           ),
         );
 
+      // A smart collection is a page with an address, so it is reachable from
+      // anywhere addresses are listed. Its own row rather than a collection's:
+      // a collection also answers at `/collections/{slug}`, through a redirect,
+      // and a smart collection does not.
+      const smartCollectionRows = await db
+        .select({
+          title: smartCollections.title,
+          path: pathRegistry.path,
+        })
+        .from(pathRegistry)
+        .innerJoin(
+          smartCollections,
+          and(
+            eq(smartCollections.id, pathRegistry.smartCollectionId),
+            eq(smartCollections.siteId, siteId),
+          ),
+        )
+        .where(
+          and(
+            eq(pathRegistry.siteId, siteId),
+            eq(pathRegistry.kind, "slug"),
+            isNotNull(pathRegistry.smartCollectionId),
+          ),
+        );
+
       const items: NavigableItem[] = [];
 
       for (const row of postRows) {
@@ -436,7 +608,42 @@ export function createPathService(
         });
       }
 
+      for (const row of smartCollectionRows) {
+        items.push({
+          title: row.title,
+          path: fromCollectionPath(row.path),
+          type: "smart_collection",
+        });
+      }
+
       return items;
+    },
+
+    async findPathsUnderSegment(segment, limit = 10) {
+      const normalized = normalizeStoredPath(segment);
+      if (!normalized) return [];
+
+      // Stored alias paths are free-form, so a segment containing `%` or `_`
+      // would widen the prefix match. The explicit ESCAPE clause is understood
+      // by both SQLite and Postgres; drizzle's bare `like()` is not, because
+      // the two dialects disagree on the default escape character.
+      const childPattern = `${normalized.replace(/[\\%_]/g, "\\$&")}/%`;
+      const rows = await db
+        .select()
+        .from(pathRegistry)
+        .where(
+          and(
+            eq(pathRegistry.siteId, siteId),
+            or(
+              eq(pathRegistry.path, normalized),
+              sql`${pathRegistry.path} LIKE ${childPattern} ESCAPE '\\'`,
+            ),
+          ),
+        )
+        .orderBy(asc(pathRegistry.path))
+        .limit(limit);
+
+      return rows.map(toPathRecord);
     },
   };
 }

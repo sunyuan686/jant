@@ -60,6 +60,24 @@ export class ConflictError extends DomainError {
   }
 }
 
+/**
+ * A content language cannot be dropped while posts still carry it — 409.
+ *
+ * Thrown when removing a language, and when turning multilingual on with a
+ * language list that leaves stamped posts behind. Carries the language and
+ * post count so the settings route can compose a localized message; the
+ * plain-English `message` serves API consumers.
+ */
+export class LanguageInUseError extends DomainError {
+  constructor(
+    message: string,
+    public readonly language: string,
+    public readonly postCount: number,
+  ) {
+    super(message, 409, "LANGUAGE_IN_USE");
+  }
+}
+
 /** Hosted media quota exceeded — 409 */
 export class MediaQuotaExceededError extends DomainError {
   constructor(
@@ -87,6 +105,21 @@ export class ExternalServiceError extends DomainError {
 export class ConfigurationError extends DomainError {
   constructor(message: string) {
     super(message, 500, "CONFIGURATION_ERROR");
+  }
+}
+
+/**
+ * The requested site exists but is not being served — 503.
+ *
+ * Distinct from `NotFoundError` on purpose: a suspended site has a real
+ * hostname and real data behind it, and it can come back. 404 tells both the
+ * visitor and search engines that nothing was ever here, so a suspended site
+ * would quietly lose its index entries during a window it can still be
+ * restored from.
+ */
+export class SiteUnavailableError extends DomainError {
+  constructor(message = "This site is not being served right now.") {
+    super(message, 503, "SITE_UNAVAILABLE");
   }
 }
 

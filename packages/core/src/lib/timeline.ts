@@ -14,9 +14,23 @@ import type {
 } from "../types.js";
 import type { AppVariables } from "../types/app-context.js";
 import { buildMediaMap } from "./media-helpers.js";
-import { createMediaContext, toPostView } from "./view.js";
+import { createMediaContext, resolveDraftTailId, toPostView } from "./view.js";
+import { getViewLang } from "./view-language.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
+
+/**
+ * Language filter for the view the request is being served in.
+ *
+ * Read from the context rather than passed in, so a caller cannot forget it
+ * and quietly leak another language's posts into a language view.
+ *
+ * @param c - Hono context
+ * @returns Canonical tag to filter on, or undefined on the root view
+ */
+function viewLangFilter(c: Context<Env>): string | undefined {
+  return getViewLang(c) ?? undefined;
+}
 
 /**
  * Result from assembling a timeline page.
@@ -51,13 +65,32 @@ async function buildTimelineItems(
   // Batch load media, collections, and latest-reply contexts in parallel
   const postIds = posts.map((p) => p.id);
   const mediaCtx = createMediaContext(c.var.appConfig);
-  const [rawMediaMap, collectionsMap, threadContexts, aliasesMap] =
-    await Promise.all([
-      c.var.services.media.getByPostIds(postIds),
-      c.var.services.collections.getCollectionsByPostIds(postIds),
-      c.var.services.posts.getThreadTimelineContext(postIds),
-      c.var.services.paths.getPostAliases(postIds),
-    ]);
+  const threadIds = posts.map((p) => p.threadId);
+  const [
+    rawMediaMap,
+    collectionsMap,
+    threadContexts,
+    aliasesMap,
+    publishedTails,
+    draftInclusiveTails,
+  ] = await Promise.all([
+    c.var.services.media.getByPostIds(postIds),
+    c.var.services.collections.getCollectionsByPostIds(postIds),
+    c.var.services.posts.getThreadTimelineContext(postIds),
+    c.var.services.paths.getPostAliases(postIds),
+    // The feed never renders drafts — it would turn a reading surface into a
+    // workspace. So the author's trailing draft stays hidden here, and the
+    // reply affordance carries its ID instead of silently offering a reply
+    // the server will refuse.
+    c.var.isAuthenticated
+      ? c.var.services.posts.getThreadTailIds(threadIds)
+      : Promise.resolve(new Map<string, string>()),
+    c.var.isAuthenticated
+      ? c.var.services.posts.getThreadTailIds(threadIds, {
+          includeDrafts: true,
+        })
+      : Promise.resolve(new Map<string, string>()),
+  ]);
   const mediaMap = buildMediaMap(
     rawMediaMap,
     mediaCtx.r2PublicUrl,
@@ -113,6 +146,12 @@ async function buildTimelineItems(
       firstAlias(post.id),
     );
 
+    const draftTailId = resolveDraftTailId(
+      post.threadId,
+      publishedTails,
+      draftInclusiveTails,
+    );
+
     const threadCtx = threadContexts.get(post.id);
 
     if (threadCtx) {
@@ -142,9 +181,10 @@ async function buildTimelineItems(
         },
         mediaCtx,
         contextCollectionsMap.get(threadCtx.latestReply.id),
-        true, // latestReply is the last post in the thread
+        true, // latestReply is the last published post in the thread
         firstContextAlias(threadCtx.latestReply.id),
       );
+      if (draftTailId) latestReplyView.draftTailId = draftTailId;
 
       return {
         post: postView,
@@ -156,6 +196,10 @@ async function buildTimelineItems(
         },
       };
     }
+
+    // No published replies, so the root carries the reply affordance — and any
+    // trailing draft with it.
+    if (draftTailId) postView.draftTailId = draftTailId;
 
     return { post: postView };
   });
@@ -314,18 +358,22 @@ export async function assembleTimeline(
   const excludePrivate = !(options?.isAuthenticated ?? false);
 
   // Count + list are independent — run in parallel
+  const lang = viewLangFilter(c);
+
   const [totalCount, posts] = await Promise.all([
     c.var.services.posts.count({
       status: "published",
       excludeReplies: true,
       excludeLatestHidden: true,
       excludePrivate,
+      lang,
     }),
     c.var.services.posts.list({
       status: "published",
       excludeReplies: true,
       excludeLatestHidden: true,
       excludePrivate,
+      lang,
       limit: pageSize,
       offset,
     }),
@@ -390,14 +438,18 @@ export async function assembleFeaturedTimeline(
   const offset = (page - 1) * pageSize;
   const excludePrivate = !(options?.isAuthenticated ?? false);
 
+  const lang = viewLangFilter(c);
+
   const [totalCount, rootIds] = await Promise.all([
     c.var.services.posts.countFeaturedThreadRoots({
       status: "published",
       excludePrivate,
+      lang,
     }),
     c.var.services.posts.listFeaturedThreadRootIds({
       status: "published",
       excludePrivate,
+      lang,
       limit: pageSize,
       offset,
     }),
@@ -452,6 +504,7 @@ export async function assembleCollectionTimeline(
   const page = Math.max(1, options.page ?? 1);
   const offset = (page - 1) * pageSize;
   const excludePrivate = !(options.isAuthenticated ?? false);
+  const lang = viewLangFilter(c);
 
   const [totalCount, rootIds] = await Promise.all([
     c.var.services.posts.countCollectionThreadRootsForCollections(
@@ -459,6 +512,7 @@ export async function assembleCollectionTimeline(
       {
         status: "published",
         excludePrivate,
+        lang,
       },
     ),
     c.var.services.posts.listCollectionThreadRootIdsForCollections(
@@ -466,6 +520,7 @@ export async function assembleCollectionTimeline(
       {
         status: "published",
         excludePrivate,
+        lang,
         sortOrder: options.sortOrder,
         limit: pageSize,
         offset,

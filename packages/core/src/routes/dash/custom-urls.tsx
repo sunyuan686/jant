@@ -272,6 +272,7 @@ function CustomUrlsListContent({
                         class="custom-url-menu"
                         role="menu"
                         data-custom-url-menu
+                        popover="manual"
                         hidden
                       >
                         <button
@@ -434,15 +435,6 @@ function NewCustomUrlContent({
                 }),
               )}
             </option>
-            <option value="archive">
-              {i18n._(
-                msg({
-                  message: "Archive",
-                  comment:
-                    "@context: Custom URL type option for filtered archive view",
-                }),
-              )}
-            </option>
           </select>
         </div>
 
@@ -492,33 +484,6 @@ function NewCustomUrlContent({
               </option>
             </select>
           </div>
-        </div>
-
-        <div data-show="$targetType === 'archive'" class="field">
-          <label class="label">
-            {i18n._(
-              msg({
-                message: "Query Parameters",
-                comment: "@context: Archive custom URL query params field",
-              }),
-            )}
-          </label>
-          <input
-            type="text"
-            data-bind="archiveQuery"
-            class="input"
-            placeholder="format=note&title=none&visibility=public&view=list"
-          />
-          <p class="text-xs text-muted-foreground mt-1">
-            {i18n._(
-              msg({
-                message:
-                  "Archive filter parameters (e.g. format=note&view=list)",
-                comment:
-                  "@context: Help text for archive custom URL query params",
-              }),
-            )}
-          </p>
         </div>
 
         <div
@@ -705,7 +670,6 @@ customUrlsRoutes.post("/", async (c) => {
     targetId,
     toPath: body.toPath,
     redirectType,
-    archiveQuery: body.archiveQuery,
   });
 
   return dsRedirect(

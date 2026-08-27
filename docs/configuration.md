@@ -23,8 +23,6 @@ Every runtime requires this variable:
 | ------------- | --------------------------------------------------------------------------------------------------------- |
 | `AUTH_SECRET` | Key better-auth uses to sign session cookies. At least 32 characters. Don't commit it to version control. |
 
-Don't commit `AUTH_SECRET` to version control.
-
 - Cloudflare local development: put it in `.dev.vars`
 - Cloudflare production: set it as a Worker secret with `npx wrangler secret put AUTH_SECRET`
 - Node and Docker: put it in `.env` or process environment variables
@@ -127,6 +125,19 @@ All three values accept integers from `1` to `100`. They can also be changed at
 runtime in Config Editor; the environment variables remain their deployment
 fallbacks.
 
+### Archive layout (optional)
+
+| Variable                 | Default | Description                                    |
+| ------------------------ | ------- | ---------------------------------------------- |
+| `ARCHIVE_DEFAULT_LAYOUT` | `list`  | Layout `/archive` opens with: `list` or `grid` |
+
+`list` renders full posts, the same timeline Latest and Featured use. `grid`
+renders the tile catalogue. Readers switch layouts from the page itself, and a
+`?layout=` link keeps its layout whatever this is set to.
+
+`?view=grid` was the earlier spelling of that link. It still works — `/archive`
+redirects it to `?layout=`, and stored custom archive URLs are read either way.
+
 ### Storage
 
 Storage depends on the runtime:
@@ -136,9 +147,7 @@ Storage depends on the runtime:
 | Cloudflare Workers | `r2`    | `r2`, `s3`        |
 | Node and Docker    | `local` | `local`, `s3`     |
 
-Node does not support `r2`.
-
-Cloudflare does not support `local`.
+Node does not support `r2`, and Cloudflare does not support `local`.
 
 Switch drivers via the `STORAGE_DRIVER` environment variable, e.g. `STORAGE_DRIVER=s3`. When unset, the runtime default is used.
 
@@ -415,6 +424,7 @@ These settings can be changed on Jant's Settings page after setup. Each one can 
 | `CJK_SERIF_FONT`             | CJK serif fallback                               |
 | `TIME_ZONE`                  | Display time zone, e.g. `UTC` or `Asia/Shanghai` |
 | `MAIN_RSS_FEED`              | What `/feed` returns                             |
+| `ARCHIVE_DEFAULT_LAYOUT`     | Layout `/archive` opens with                     |
 | `PAGE_SIZE`                  | Default items per page (`1–100`)                 |
 | `SEARCH_PAGE_SIZE`           | Search results per page (`1–100`)                |
 | `ARCHIVE_PAGE_SIZE`          | Archive posts per page (`1–100`)                 |
@@ -427,6 +437,8 @@ These settings can be changed on Jant's Settings page after setup. Each one can 
 | `NOINDEX`                    | Ask search engines not to index the site         |
 | `PUBLIC_API_ENABLED`         | Allow JSON reads without a session or API token  |
 | `RSS_FEEDS_ENABLED`          | Publish Atom feeds and built-in feed links       |
+
+Multilingual sites carry two more settings, `ADDITIONAL_LANGUAGES` and `MULTILINGUAL_ENABLED`. Both are written by the Language page rather than set by hand, because their values have to stay consistent with the language stamped on your posts — see [Multilingual content](multilingual.md).
 
 Color theme, font theme, custom CSS, avatar, and other appearance details are also managed in Settings.
 

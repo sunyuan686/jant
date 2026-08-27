@@ -249,6 +249,7 @@
   .site-header-right {
     display: flex;
     align-items: center;
+    gap: 0.9rem;
     flex-shrink: 0;
   }
 
@@ -715,10 +716,6 @@
     overflow: hidden;
   }
 
-  .p-name {
-    font-family: var(--font-heading);
-  }
-
   .site-logo {
     display: flex;
     flex: 0 1 auto;
@@ -943,6 +940,74 @@
       color-mix(in srgb, var(--site-divider) 60%, transparent);
   }
 
+  /* --- Language switcher ---------------------------------------------------
+     Reuses the "More" menu's classes for look and behaviour; only the
+     anchoring differs, because the switcher sits at the end of the header row
+     where a left-anchored popover would run off the viewport. These rules must
+     stay *after* the `.site-header-more-*` rules they override: the selectors
+     have equal specificity, so source order decides. */
+
+  .site-header-lang {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .site-header-lang-btn {
+    white-space: nowrap;
+    gap: 0.38rem;
+  }
+
+  /* Quiet marker that this control is about language, ahead of a label that
+     is written in the current language itself. */
+  .site-header-lang-globe {
+    flex-shrink: 0;
+    opacity: 0.72;
+  }
+
+  /* Only present off the primary language. Long endonyms ("Nederlands",
+     "Português") ellipsize rather than push the header around. */
+  .site-header-lang-name {
+    display: block;
+    min-width: 0;
+    max-width: 7rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .site-header-lang-popover {
+    left: auto;
+    right: 0;
+    min-width: 9rem;
+    border-left: none;
+    border-right: 0.5px solid var(--site-header-hairline);
+    transform-origin: top right;
+  }
+
+  .site-header-lang-popover .site-header-more-link {
+    justify-content: flex-end;
+    padding: 0.38rem 1.15rem 0.38rem 0.75rem;
+  }
+
+  /* The first question this menu has to answer is which language the reader
+     is already in. The shared `-active` colour shift cannot answer it: it is
+     the same shift hover paints on whichever row the pointer sits over. */
+  .site-header-lang-popover .site-header-more-link-active {
+    color: var(--site-text-primary);
+    font-weight: var(--fw-medium);
+  }
+
+  .site-header-lang-popover .site-header-more-link-active::before {
+    content: "";
+    flex: none;
+    width: 4px;
+    height: 4px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.6;
+  }
+
   /* --- Header responsive -------------------------------------------------- */
 
   @media (max-width: 1200px) {
@@ -1019,8 +1084,17 @@
 
   @media (max-width: 480px) {
     .site-header-nav,
-    .site-header-more {
+    .site-header-more,
+    /* The drawer carries the language list at this width, so a bare globe
+       would only take room. Off the primary language the trigger is not a
+       control any more but a statement of where the reader is, and that has
+       to survive the narrow header. */
+    .site-header-lang:not(.site-header-lang-named) {
       display: none;
+    }
+
+    .site-header-lang-name {
+      max-width: 4.5rem;
     }
 
     .site-header-search-slot {
@@ -1452,7 +1526,9 @@
     right: 0;
     top: calc(100% + 0.45rem);
     z-index: 30;
+    width: max-content;
     min-width: 11rem;
+    max-width: min(20rem, calc(100vw - 2rem));
     padding: 0.28rem;
     border: 1px solid var(--border);
     border-radius: 14px;
@@ -1463,7 +1539,7 @@
   }
 
   .collections-page-menu-item {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     gap: 0.7rem;
     width: 100%;
@@ -1492,6 +1568,15 @@
     height: 1rem;
     flex-shrink: 0;
     color: var(--site-text-secondary);
+  }
+
+  /* The slot decides the size, not the glyph: icons reach these menus both
+     hand-inlined at 16px and injected from lucide-static, which ships a
+     24px width/height on every icon it hands out. Without this the injected
+     ones draw half again as large as the rest of the menu. */
+  .collections-page-menu-item-icon svg {
+    width: 100%;
+    height: 100%;
   }
 
   .collections-page-menu-item-label {
@@ -1875,53 +1960,64 @@
     transform: scale(1.01);
   }
 
+  /* Three groups, not four stacked lines: the way back, the collection itself
+     (title with what it holds), and the row that counts and orders it. The
+     distance between the groups has to beat the distance inside them, or the
+     header reads as one undifferentiated pile — which is what makes a header
+     this sparse still feel crowded. */
   .collection-page-header {
     display: flex;
     flex-direction: column;
-    gap: 1.05rem;
+    gap: 1.7rem;
     margin-bottom: 4rem;
     max-width: 55%;
   }
 
+  /* Shrink-wraps the link. Left as a block it took the inherited body leading
+     and carried dead space under the text, which the eye reads as a smaller
+     gap above the title than below the description. */
   .collection-page-topbar {
-    min-width: 0;
-  }
-
-  .collection-breadcrumb {
-    min-width: 0;
-  }
-
-  .collection-breadcrumb ol {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.45rem;
-    font-size: var(--type-secondary);
-    color: var(--muted-foreground);
+    min-width: 0;
   }
 
-  .collection-breadcrumb a {
-    color: inherit;
+  /* The quietest thing in the header, and the only one above the title: the
+     title is the only size that carries, everything else reads at meta size. */
+  .collection-page-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+    /* Lucide's arrow sits 3/24 into its own box, so a flush box would push the
+       mark off the text column the title, description and meta share. Pull the
+       box left by that inset and the glyph lands on the edge. */
+    margin-left: -0.1rem;
+    font-size: var(--type-sm);
+    line-height: 1.3;
+    color: var(--muted-foreground);
+    overflow-wrap: anywhere;
     transition: color 0.15s ease;
   }
 
-  .collection-breadcrumb a:hover {
+  .collection-page-back:hover {
     color: var(--foreground);
   }
 
-  .collection-breadcrumb li:last-child {
-    min-width: 0;
+  /* Tied to the text so the chevron cannot drift the next time this line
+     changes size. */
+  .collection-page-back-icon {
+    flex-shrink: 0;
+    width: 1em;
+    height: 1em;
   }
 
-  .collection-breadcrumb span {
-    overflow-wrap: anywhere;
-  }
-
+  /* Title and what the collection holds are one thing said in two lines, so
+     they sit closer to each other than to anything else in the header. */
   .collection-page-title-block {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.7rem;
+    gap: 0.45rem;
   }
 
   .collection-page-title {
@@ -1932,7 +2028,9 @@
     user-select: all;
   }
 
-  .collection-page-title span {
+  /* Direct child only: the title's own wrapper is the block that sets the
+     measure. A marker nested inside it stays inline, in the words. */
+  .collection-page-title > span {
     display: block;
     max-width: min(18ch, 100%);
     overflow-wrap: anywhere;
@@ -1960,16 +2058,24 @@
     margin-bottom: 0;
   }
 
+  /* Counts and the aggregate's "Includes" line. Meta sits under the
+     description, never over it: same size as the description here, as the
+     directory row's own meta, and as the post footers further down the page. */
   .collection-page-meta {
     margin: 0;
     font-family: var(--font-ui);
-    font-size: var(--type-secondary);
+    font-size: var(--type-sm);
     color: var(--muted-foreground);
     line-height: 1.3;
     font-variant-numeric: tabular-nums;
   }
 
+  /* Touch-sized controls overhang this line instead of setting it: left to
+     size the row, the owner's 2.1rem buttons pushed the meta text down by
+     5.6px, so the header kept a different rhythm for its owner than for a
+     visitor who has no buttons at all. */
   .collection-page-subhead {
+    --collection-subhead-line: calc(var(--type-sm) * 1.5);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1983,6 +2089,8 @@
     gap: 0.55rem;
     flex-wrap: wrap;
     min-width: 0;
+    font-size: var(--type-sm);
+    line-height: 1.5;
   }
 
   .collection-page-meta-divider {
@@ -1990,10 +2098,106 @@
     user-select: none;
   }
 
+  /* What a smart collection gathers, standing in for the description its owner
+     has not written. It takes the description's slot and the description's
+     weight; only the link colour is its own, because the sentence is also the
+     way to the archive. */
+  .smart-collection-conditions {
+    margin: 0;
+  }
+
+  .smart-collection-conditions a {
+    color: inherit;
+  }
+
+  /* Description at rest, and the way to the archive under the pointer. An
+     underline here would make the one line of description look like a control,
+     which is the thing this page has no room for. */
+  .smart-collection-conditions a:hover,
+  .smart-collection-conditions a:focus-visible {
+    color: var(--foreground);
+    text-decoration: underline;
+    text-decoration-color: color-mix(
+      in srgb,
+      var(--foreground) 40%,
+      transparent
+    );
+    text-underline-offset: 3px;
+  }
+
+  .collection-page-smart-icon,
+  .collection-directory-smart-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted-foreground);
+  }
+
+  /* Lucide draws at stroke-width 2 on a 24-unit grid, which at this size lays
+     down more ink than the text beside it — the glyph read heavier than the
+     words it annotates. The lighter stroke comes from `icon-fine` on the svg
+     itself, because the rule that sets stroke width is unlayered and nothing
+     in this file can outrank it. */
+  .collection-page-smart-icon svg,
+  .collection-directory-smart-icon svg {
+    width: 0.75rem;
+    height: 0.75rem;
+  }
+
+  /* After the title, at the directory's size rather than the heading's: scaled
+     to the page title it would read as a peer of the title instead of a note
+     about it. Inline, so a wrapped title carries it along to the last line.
+     The negative margins pay back the padding, so a 12px glyph answers to a
+     24px pointer without moving the words around it. */
+  .collection-page-smart-icon {
+    margin-left: 0.15rem;
+    padding: 0.45rem;
+    margin-top: -0.45rem;
+    margin-bottom: -0.45rem;
+    margin-right: -0.45rem;
+    border-radius: 999px;
+    vertical-align: middle;
+    color: color-mix(in srgb, var(--muted-foreground) 60%, transparent);
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease;
+  }
+
+  .collection-page-smart-icon:hover {
+    color: var(--muted-foreground);
+  }
+
+  .collection-page-smart-icon:focus-visible {
+    outline: none;
+    color: var(--foreground);
+    background: color-mix(in srgb, var(--accent) 42%, transparent);
+  }
+
+  .collection-directory-smart-icon {
+    flex: none;
+  }
+
+  /* Inside the title, in the slot the link rows put their marker in — the
+     title is an inline-flex row that already centres its children, so this
+     needs no line-box arithmetic. A marker, not a peer of the title: it sits
+     well below the words, and hover lifts it only to the meta colour rather
+     than all the way to the title's. Standing alone — the picker row, the
+     page's condition line — it keeps the meta colour, because there it is the
+     only thing carrying the meaning. */
+  .collection-directory-title .collection-directory-smart-icon {
+    color: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
+    transition: color 0.15s ease;
+  }
+
+  .collection-directory-title-link:hover .collection-directory-smart-icon {
+    color: var(--muted-foreground);
+  }
+
   .collection-page-owner-tools {
     display: flex;
     align-items: center;
     gap: 0.2rem;
+    height: var(--collection-subhead-line);
   }
 
   .collection-page-manage {
@@ -2069,146 +2273,6 @@
       color-mix(in srgb, var(--site-accent) 12%, transparent);
   }
 
-  .collection-editor-shell {
-    display: flex;
-    flex-direction: column;
-    gap: clamp(1.35rem, 3vw, 2.5rem);
-    max-width: var(--max-width-form);
-  }
-
-  .collection-editor-header {
-    display: flex;
-    flex-direction: column;
-    gap: 0.9rem;
-  }
-
-  .collection-editor-title-block {
-    max-width: none;
-  }
-
-  .collection-editor-title {
-    text-wrap: balance;
-  }
-
-  .collection-editor-card {
-    padding-top: 0.2rem;
-  }
-
-  .collection-editor-form {
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-    width: 100%;
-    max-width: none;
-  }
-
-  .collection-editor-primary-grid,
-  .collection-editor-secondary-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 1rem 1.1rem;
-  }
-
-  .collection-editor-form .field {
-    gap: 0.45rem;
-  }
-
-  .collection-editor-form .label {
-    color: var(--site-text-secondary);
-    font-size: var(--type-2xs);
-    font-weight: var(--fw-medium);
-    letter-spacing: 0.03em;
-  }
-
-  .collection-editor-form .input,
-  .collection-editor-form .textarea,
-  .collection-editor-form .select {
-    width: 100%;
-    border-color: color-mix(in srgb, var(--site-divider) 72%, transparent);
-    background-color: color-mix(
-      in srgb,
-      var(--site-elevated-bg) 88%,
-      var(--site-page-bg) 12%
-    );
-    box-shadow: none;
-  }
-
-  .collection-editor-form .input:focus,
-  .collection-editor-form .textarea:focus,
-  .collection-editor-form .select:focus,
-  .collection-editor-form .input:focus-visible,
-  .collection-editor-form .textarea:focus-visible,
-  .collection-editor-form .select:focus-visible {
-    border-color: color-mix(
-      in srgb,
-      var(--site-accent) 24%,
-      var(--site-divider)
-    );
-    box-shadow: 0 0 0 3px
-      color-mix(in srgb, var(--site-accent) 10%, transparent);
-  }
-
-  .collection-editor-description-field .textarea {
-    min-height: 8.5rem;
-    resize: vertical;
-  }
-
-  .collection-editor-sort-field {
-    max-width: 15rem;
-  }
-
-  .collection-editor-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding-top: 0.35rem;
-  }
-
-  .collection-editor-submit,
-  .collection-editor-cancel {
-    min-height: 2.75rem;
-    border-radius: 999px;
-  }
-
-  .collection-editor-submit {
-    min-width: 7.5rem;
-    justify-content: center;
-  }
-
-  .collection-editor-cancel {
-    color: var(--site-text-secondary);
-  }
-
-  .collection-editor-card jant-collection-form {
-    display: block;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .collection-editor-card jant-collection-form form {
-    max-width: none;
-  }
-
-  @media (min-width: 640px) {
-    .collection-editor-primary-grid,
-    .collection-editor-secondary-grid {
-      align-items: start;
-    }
-  }
-
-  @media (max-width: 639px) {
-    .collection-editor-actions {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .collection-editor-submit,
-    .collection-editor-cancel {
-      width: 100%;
-      justify-content: center;
-    }
-  }
-
   .collection-sort-menu {
     position: relative;
   }
@@ -2224,7 +2288,7 @@
     border-radius: 999px;
     background: transparent;
     color: var(--foreground);
-    font-size: var(--type-xs);
+    font-size: var(--type-sm);
     font-weight: 500;
     line-height: 1.3;
     cursor: pointer;
@@ -2464,6 +2528,17 @@
     width: 0.72rem;
     height: 0.72rem;
     flex-shrink: 0;
+  }
+
+  /* The two post titles that do not carry their own heading font: the detail
+     h1 (`[data-page="post"] .post-detail-title` sets everything but the face)
+     and the compact card title, which otherwise runs on utilities alone.
+     This used to hang off `.p-name`, but microformats classes are the parsed
+     API of a post — styling one means any future `p-name` silently changes
+     typography wherever it is added. They stay purely semantic. */
+  .post-detail-title,
+  .feed-compact-title {
+    font-family: var(--font-heading);
   }
 
   .feed-link-title {
@@ -2939,21 +3014,52 @@
     flex-shrink: 0;
   }
 
+  /* One dot on both rails: a flat fill with a surface-coloured gap punched
+     around it, so it reads as a bead threaded on the rail rather than a bulge in
+     it. Same size, same colours, same punch — reading then rings it (below) and
+     compose stops at the fill. What a post *is* comes from its card; the dot
+     only says where it sits on the chain, and an accent fill says which one the
+     view is about. */
   .thread-group,
   .compose-thread-layout {
-    --site-thread-marker-size: 10px;
-    --site-thread-marker-border-width: 2px;
-    --site-thread-marker-ring-width: 2px;
-    --site-thread-marker-hero-size: 14px;
-    --site-thread-marker-hero-border-width: 3px;
+    --site-thread-marker-size: 7px;
+    /* Kept at 7:1.5 with the marker. A 7px dot on a 1px hairline reads as a bead
+       dropped onto a thread rather than the same stroke thickening; the timeline
+       components this pattern comes from (Ant, CodyHouse) all run a 2px rail. */
+    --site-thread-rail-line-width: 1.5px;
+    /* The gap's ceiling is set by whichever dot has the rail on one side only —
+       in compose that's the last post, where the rail is trimmed. One line end
+       holds it instead of two, and around 12px it reads as floating loose. */
+    --site-thread-marker-gap: 9px;
     --site-thread-marker-surface: var(--site-page-bg);
+    /* "This is the post the view is about." Tinted toward the rail rather than
+       the raw accent: every other accent-derived token in the system sits
+       between 6% and 24% (see tokens.css), and a 7px shape at full accent was
+       the single highest-contrast thing in an otherwise near-empty column. */
+    --site-thread-marker-current: color-mix(
+      in srgb,
+      var(--site-accent) 90%,
+      var(--site-threadline)
+    );
   }
 
-  /* Thread group: timeline layout — vertical line with dot markers */
+  .compose-thread-layout {
+    --site-thread-marker-surface: var(--compose-paper-bg);
+  }
+
+  /* Thread group: timeline layout — vertical line with dot markers.
+     Reading rings its dots; compose doesn't. A compose dot sits beside a card
+     edge, a format switcher and a "1/3", so a joint in the line is all it has to
+     be. Reading's rail runs down an otherwise empty column, where a bare fill
+     reads as a speck of stray threadline — the ring gives it a silhouette
+     without making it any louder, since the tint is the same 16% accent every
+     other halo in the system uses. Held off the fill by a band of surface so
+     the two stay separate marks rather than one fuzzy dot. */
   .thread-group {
     --site-thread-rail-indent: 24px;
     --site-thread-rail-line-left: 5px;
-    --site-thread-rail-line-width: 2px;
+    --site-thread-marker-ring-inset: 2px;
+    --site-thread-marker-ring-width: 2px;
     position: relative;
     padding-left: var(--site-thread-rail-indent);
   }
@@ -2987,28 +3093,55 @@
 
   /* Dot marker at each post position — auto-centered on the rail line.
      Line ::before is relative to .thread-group, but dot ::before is relative
-     to .thread-item which sits inside the padding (indent), so we subtract it. */
+     to .thread-item which sits inside the padding (indent), so we subtract it.
+     Every length here is derived: a hardcoded half-marker is what once left the
+     compose rail running down the edge of its own dots instead of through them. */
   .thread-item::before {
     content: "";
     position: absolute;
     left: calc(
       var(--site-thread-rail-line-left) + var(--site-thread-rail-line-width) /
-        2 - 6px - var(--site-thread-rail-indent)
+        2 - var(--site-thread-marker-size) / 2 - var(--site-thread-rail-indent)
     );
     top: 50%;
     transform: translateY(-50%);
-    width: 12px;
-    height: 12px;
+    width: var(--site-thread-marker-size);
+    height: var(--site-thread-marker-size);
     border-radius: 50%;
     background-color: var(--site-threadline);
+    /* Three concentric layers off one border box, painted first-on-top: a band
+       of surface, the accent ring, then the rest of the punch-out. The punch's
+       radius is unchanged, so the ring sits inside the gap the rail line was
+       already broken for and nothing downstream (`.thread-context-shell`'s
+       inset, the compose switcher's overhang) has to move for it. */
+    box-shadow:
+      0 0 0 var(--site-thread-marker-ring-inset)
+        var(--site-thread-marker-surface),
+      0 0 0
+        calc(
+          var(--site-thread-marker-ring-inset) +
+            var(--site-thread-marker-ring-width)
+        )
+        var(--site-thread-dot-ring),
+      0 0 0 var(--site-thread-marker-gap) var(--site-thread-marker-surface);
     z-index: 1;
+  }
+
+  /* "This is the post the view is about": the feed preview's latest reply, a
+     curated preview's highlighted segment, and the post you opened on a detail
+     page. One signal for all three — accent fill on the same dot. Hero and
+     curated also ran 4px larger; the full card beside them already says it, so
+     size was a second signal doing the first one's job. */
+  .thread-item-hero::before,
+  .thread-item-curated::before,
+  .thread-item-current::before {
+    background-color: var(--site-thread-marker-current);
   }
 
   .thread-group-preview,
   .thread-group-detail {
     --site-thread-rail-indent: 0px;
     --site-thread-rail-line-left: -27px;
-    --site-thread-rail-line-width: 1px;
   }
 
   @media (max-width: 760px) {
@@ -3019,6 +3152,12 @@
     }
   }
 
+  /* The rail fades in at the top, where collapsed ancestor context begins: the
+     thread continues above what this view shows, so the line shouldn't start on
+     a hard edge. The bottom needs no matching fade — the line is cut at the last
+     dot instead. Compose doesn't share the gradient: its rail is drawn per row
+     so both ends can be trimmed, and a per-row gradient would fade once per
+     post rather than once per thread. */
   .thread-group-preview::before,
   .thread-group-detail::before {
     background: linear-gradient(
@@ -3029,24 +3168,28 @@
     );
   }
 
+  /* The rail ends at the last dot. Below it the line pointed at posts that
+     aren't there — the thread is over, and compose already trims its own rail
+     the same way. Painted over rather than shortened: the line is one box on the
+     group so it can carry a single gradient, and only the last post knows where
+     its own dot sits (its own 50%). `> ` scopes this to the group's own children
+     — the ancestors inside `.thread-context-shell` have a last child too, and
+     the rail must run straight through it. */
+  .thread-group > .thread-item:last-child::after {
+    content: "";
+    position: absolute;
+    left: calc(
+      var(--site-thread-rail-line-left) - var(--site-thread-rail-indent)
+    );
+    top: 50%;
+    bottom: 0;
+    width: var(--site-thread-rail-line-width);
+    background-color: var(--site-thread-marker-surface);
+  }
+
   .thread-group-preview .thread-item,
   .thread-group-detail .thread-item {
     padding: var(--site-thread-item-spacing) 0;
-  }
-
-  .thread-group-preview .thread-item::before,
-  .thread-group-detail .thread-item::before {
-    left: calc(
-      var(--site-thread-rail-line-left) + var(--site-thread-rail-line-width) /
-        2 - var(--site-thread-marker-size) / 2 - var(--site-thread-rail-indent)
-    );
-    width: var(--site-thread-marker-size);
-    height: var(--site-thread-marker-size);
-    border: var(--site-thread-marker-border-width) solid
-      var(--site-thread-marker-surface);
-    background-color: var(--site-threadline);
-    box-shadow: 0 0 0 var(--site-thread-marker-ring-width)
-      var(--site-thread-dot-ring);
   }
 
   /* Collapsible ancestor context wrapper.
@@ -3054,14 +3197,15 @@
      while data-collapsed is set; JS only toggles the Show more/less button
      visibility based on real overflow. Negative left margin + matching
      padding extends the shell's box past the content edge so the dot
-     markers (which live at left:-31.5px on desktop) survive
-     `overflow: hidden`. `box-sizing: content-box` keeps the inner content
-     width identical to before. */
+     markers survive `overflow: hidden`. `box-sizing: content-box` keeps the
+     inner content width identical to before. The inset has to clear the dot's
+     punched gap, not just its fill: on desktop the fill starts at -30px but the
+     gap reaches -39px, so the old 40px cleared it by a single pixel. */
   .thread-context-shell {
     position: relative;
     box-sizing: content-box;
-    margin-left: -40px;
-    padding-left: 40px;
+    margin-left: -48px;
+    padding-left: 48px;
     transition: max-height 0.32s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
@@ -3252,37 +3396,6 @@
     padding-top: 0.95rem;
   }
 
-  .thread-group-preview .thread-item-hero::before,
-  .compose-editor-row .compose-thread-dot {
-    left: calc(
-      var(--site-thread-rail-line-left) + var(--site-thread-rail-line-width) /
-        2 - var(--site-thread-marker-hero-size) / 2 -
-        var(--site-thread-rail-indent)
-    );
-    width: var(--site-thread-marker-hero-size);
-    height: var(--site-thread-marker-hero-size);
-    border: var(--site-thread-marker-hero-border-width) solid
-      var(--site-thread-marker-surface);
-    background-color: var(--site-accent);
-    box-shadow: 0 0 0 var(--site-thread-marker-ring-width)
-      var(--site-thread-dot-ring);
-  }
-
-  .thread-group-curated .thread-item-curated::before {
-    left: calc(
-      var(--site-thread-rail-line-left) + var(--site-thread-rail-line-width) /
-        2 - var(--site-thread-marker-hero-size) / 2 -
-        var(--site-thread-rail-indent)
-    );
-    width: var(--site-thread-marker-hero-size);
-    height: var(--site-thread-marker-hero-size);
-    border: var(--site-thread-marker-hero-border-width) solid
-      var(--site-thread-marker-surface);
-    background-color: var(--site-accent);
-    box-shadow: 0 0 0 var(--site-thread-marker-ring-width)
-      var(--site-thread-dot-ring);
-  }
-
   /* Compact text for thread replies */
   .feed-compact {
     @apply text-sm;
@@ -3291,6 +3404,28 @@
   /* Thread detail: current post anchor + dot-only highlight */
   .thread-detail-item {
     scroll-margin-top: 80px;
+  }
+
+  /* --- Trailing draft in a thread (author-only) ---------------------------
+     Rendered so the author sees the same thread end the server does. Reads as
+     provisional — present enough to act on, quiet enough not to pass for
+     published writing. */
+
+  .thread-detail-item article[data-post-draft] {
+    opacity: 0.72;
+    transition: opacity 0.18s ease;
+  }
+
+  .thread-detail-item article[data-post-draft]:hover,
+  .thread-detail-item article[data-post-draft]:focus-within {
+    opacity: 1;
+  }
+
+  /* A draft is not part of the published spine, so its marker is hollow: the
+     rail reaches it, but the dot reads as an empty slot rather than another
+     published stop. */
+  .thread-item:has(article[data-post-draft])::before {
+    background-color: var(--site-thread-marker-surface);
   }
 
   /* When a child post has an ancestor shell above it (toggle button sits
@@ -3303,24 +3438,15 @@
     scroll-margin-top: 120px;
   }
 
-  .thread-group-detail .thread-item-current::before {
-    background-color: var(--site-accent);
-    box-shadow:
-      0 0 0 var(--site-thread-marker-border-width)
-        var(--site-thread-marker-surface),
-      0 0 0
-        calc(
-          var(--site-thread-marker-border-width) +
-            var(--site-thread-marker-ring-width)
-        )
-        color-mix(
-          in srgb,
-          var(--site-accent) 18%,
-          var(--site-thread-marker-surface)
-        );
+  /* Quote block styling */
+
+  /* Groups the quotation with its attribution so the h-cite can span both.
+     Layout-neutral on purpose: no width of its own, so the children keep
+     resolving their `--layout-content-width` percentage against the article. */
+  .feed-quote-cite {
+    margin: 0;
   }
 
-  /* Quote block styling */
   .feed-quote {
     margin: 0;
     padding-left: 12px;
@@ -3404,7 +3530,10 @@
     line-height: 1.3;
   }
 
-  .feed-quote-attribution:has(+ .post-menu-footer) {
+  /* The attribution is the figure's last child, so the adjacency test is on
+     the figure; the margin still collapses out through it (no padding, no
+     border) and lands between the source line and the footer as before. */
+  .feed-quote-cite:has(+ .post-menu-footer) .feed-quote-attribution {
     margin-bottom: 0.45rem;
   }
 
@@ -3538,6 +3667,7 @@
   /* Show the container when at least one status is active */
   article[data-post-pinned] .post-status-badges,
   article[data-post-pinned-in-collection] .post-status-badges,
+  article[data-post-draft] .post-status-badges,
   article[data-post-visibility="private"] .post-status-badges {
     display: flex;
   }
@@ -3566,6 +3696,38 @@
 
   article[data-post-visibility="private"] .post-status-private {
     display: inline-flex;
+  }
+
+  article[data-post-draft] .post-status-draft {
+    display: inline-flex;
+  }
+
+  /* The draft badge is a button — the shortest path from "I see an unfinished
+     post" to "I'm finishing it". */
+  .post-status-draft {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    letter-spacing: inherit;
+    cursor: pointer;
+    transition: color 0.18s ease;
+  }
+
+  .post-status-draft:hover,
+  .post-status-draft:focus-visible {
+    color: var(--site-text-primary);
+  }
+
+  .post-status-draft:hover svg,
+  .post-status-draft:focus-visible svg {
+    opacity: 1;
+  }
+
+  .post-status-draft:focus-visible {
+    outline: 2px solid var(--site-accent);
+    outline-offset: 3px;
+    border-radius: 3px;
   }
 
   .post-status-badge svg {
@@ -3929,6 +4091,13 @@
     background: transparent;
   }
 
+  /* Three sections and post titles need more room than a plain action list. */
+  .post-menu-panel:has(.post-menu-language-panel) {
+    width: min(19rem, calc(100vw - 1.25rem));
+    min-width: min(19rem, calc(100vw - 1.25rem));
+    max-width: min(21rem, calc(100vw - 1.25rem));
+  }
+
   .post-menu-panel {
     width: min(15rem, calc(100vw - 1.25rem));
     min-width: min(15rem, calc(100vw - 1.25rem));
@@ -4013,6 +4182,131 @@
     flex-direction: column;
     gap: 0;
     padding: 0 0.22rem;
+  }
+
+  /* Every item in a group is conditional, so a group can end up with none —
+     a draft reply hides both Featured and Pin. Match on element children so
+     Lit's binding comments and the template's whitespace don't count as
+     content, otherwise the empty group still draws its divider and padding. */
+  .post-menu-section:not(:has(> *)) {
+    display: none;
+  }
+
+  /* "Also available in …" under a post that has translations. Quiet: it is a
+     way out for a reader who needs one, not a call to action. It carries the
+     post footer's type and colour and sits one rhythm below it, so it reads
+     as the last line of the post's own metadata; a size larger and an inch
+     further down, it read as a sentence adrift under the page. */
+  .post-translations {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-hint);
+    line-height: 1.45;
+    color: var(--site-text-secondary);
+    text-wrap: pretty;
+  }
+
+  /* Same mark as the header's language switcher — the only glyph on the page
+     that already means "language" — drawn in the collection tag's icon tone
+     so the two metadata lines rhyme. */
+  .post-translations-globe {
+    display: inline-block;
+    width: 0.95rem;
+    height: 0.95rem;
+    margin-right: 0.32rem;
+    vertical-align: -0.2em;
+    color: color-mix(
+      in srgb,
+      var(--site-text-secondary) 78%,
+      var(--site-divider)
+    );
+  }
+
+  /* Underlined on purpose: the reader this line is written for cannot read
+     the sentence around the language names, so the names have to look like
+     the way out on their own. */
+  .post-translations a {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+    text-decoration-color: color-mix(
+      in srgb,
+      var(--site-text-secondary) 45%,
+      transparent
+    );
+  }
+
+  .post-translations a:hover {
+    color: var(--site-text-primary);
+    text-decoration-color: currentColor;
+  }
+
+  /* Explanatory line inside a panel — the same muted register as the menu's
+     own metadata, never competing with the items it explains. */
+  .post-menu-hint {
+    padding: 0.3rem 0.95rem 0.55rem;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-meta);
+    line-height: 1.45;
+    text-wrap: pretty;
+    color: color-mix(in srgb, var(--site-text-secondary) 78%, transparent);
+  }
+
+  /* Names a group of rows that would not otherwise say what they are — the
+     language panel's list of other versions is a column of bare language
+     names. Rows that describe themselves ("Write the English version") get no
+     label; a heading over them would only repeat what they already say. */
+  .post-menu-section-label {
+    margin: 0;
+    padding: 0.45rem 0.95rem 0.3rem;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, var(--site-text-secondary) 68%, transparent);
+  }
+
+  .post-menu-search {
+    padding: 0.2rem 0.35rem 0.35rem;
+  }
+
+  .post-menu-search-input {
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: 0.5px solid var(--site-divider);
+    border-radius: 0.55rem;
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-meta);
+    color: var(--site-text-primary);
+  }
+
+  .post-menu-search-input::placeholder {
+    color: color-mix(in srgb, var(--site-text-secondary) 62%, transparent);
+  }
+
+  .post-menu-search-input:focus-visible {
+    outline: none;
+    border-color: color-mix(in srgb, var(--site-text-primary) 40%, transparent);
+  }
+
+  /* Rows here name a language or an action, both of which want the whole line
+     and neither of which is worth wrapping to a second one — "Write the 简体中文
+     version" in a narrow popover would otherwise grow the row. The one row with
+     a meta, *Change language*, is sized by the shared rule further down. */
+  .post-menu-language-panel .post-menu-item-label {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .post-menu-language-panel [role="menuitem"][disabled],
+  .post-menu-language-panel [role="menuitemradio"][disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   .post-menu-section + .post-menu-section {
@@ -4162,6 +4456,79 @@
 
   .post-menu-item-active .post-menu-item-trailing {
     color: var(--site-text-primary);
+  }
+
+  /* A menu row that carries a second action — reading a translation and
+     unlinking it are different enough to want their own hit targets. The row
+     is a flex pair rather than one item: a link that fills it, and a small
+     text button pinned to the end.
+     The action is worded, not drawn: every icon for "unlink" is the chain of
+     "link" with something taken away, and at this size the difference is not
+     one anybody should have to squint for. Since the row spends no width on
+     the other version's title — the language is what identifies it, and the
+     title is on the link's tooltip — there is room to just say it.
+     Both children wear `role="menuitem"`, which BaseCoat styles through a
+     three-class selector of its own (`width: 100%`, among others). Every rule
+     below therefore names the row as well, to sit at the same specificity and
+     win on source order — dropping `.post-menu-row` from any of them silently
+     hands the button a full-width menu item's geometry back, which is also why
+     `width` and `font-size` are restated rather than left to default. */
+  .post-menu-row {
+    display: flex;
+    align-items: center;
+    gap: 0.1rem;
+    padding-right: 0.3rem;
+  }
+
+  .post-menu-panel .post-menu-row .post-menu-row-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding-right: 0.45rem;
+  }
+
+  .post-menu-panel .post-menu-row .post-menu-row-action {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: auto;
+    min-height: 2.15rem;
+    padding: 0 0.6rem;
+    border: none;
+    border-radius: 0.8rem !important;
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-caption);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0;
+    white-space: nowrap;
+    color: color-mix(in srgb, var(--site-text-secondary) 88%, transparent);
+    transition:
+      background-color 0.16s ease,
+      color 0.16s ease;
+  }
+
+  .post-menu-panel .post-menu-row .post-menu-row-action:hover,
+  .post-menu-panel .post-menu-row .post-menu-row-action:focus-visible {
+    outline: none;
+    background: color-mix(in srgb, var(--site-nav-hover-bg) 72%, transparent);
+    color: var(--site-text-primary);
+  }
+
+  .post-menu-panel .post-menu-row .post-menu-row-action-danger:hover,
+  .post-menu-panel .post-menu-row .post-menu-row-action-danger:focus-visible {
+    background: color-mix(
+      in srgb,
+      var(--destructive) 12%,
+      var(--site-page-bg) 88%
+    );
+    color: var(--destructive);
+  }
+
+  .post-menu-panel .post-menu-row .post-menu-row-action[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed !important;
   }
 
   /* --- Collection Picker (replaces menu when "Add to collection" is clicked) --- */
@@ -4765,7 +5132,12 @@
     }
   }
 
+  /* The one composer that is not a floating sheet: it fills the viewport, so
+     its paper is the page's, not the elevated surface's. Nothing sits behind
+     it to be lifted away from. */
   .compose-page {
+    --compose-paper-bg: var(--site-page-bg);
+
     position: fixed;
     inset: 0;
     z-index: 50;
@@ -4834,19 +5206,18 @@
   .compose-page-shell .compose-dialog-inner {
     min-height: 0;
     max-height: none;
+    padding-top: 0;
     border-radius: inherit;
   }
 
-  .compose-page-shell .compose-dialog-inner > jant-compose-editor,
-  .compose-page-shell .compose-thread-layout,
-  .compose-page-shell .compose-editor-row,
-  .compose-page-shell .compose-editor-row > jant-compose-editor {
+  /* The page itself is the scroller here, so the composer's region gives up
+     its own and grows to whatever it holds. */
+  .compose-page-shell .compose-scroll {
     flex: 0 1 auto;
-    min-height: 0;
+    overflow: visible;
   }
 
   .compose-page-shell .compose-body {
-    flex: 0 1 auto;
     min-height: clamp(8rem, 22vh, 12rem);
   }
 
@@ -4873,6 +5244,10 @@
     }
 
     .compose-page-shell .compose-dialog-inner-page {
+      /* The card's own padding is the text column here, so nothing inside it
+         adds a gutter of its own. */
+      --compose-gutter: 0px;
+
       padding: 20px 24px 16px;
       background-color: var(--compose-floating-bg);
       border: 1px solid var(--compose-control-border);
@@ -4883,40 +5258,25 @@
       overflow: visible;
     }
 
-    .compose-page-shell .compose-dialog-inner-page .compose-dialog-header {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      align-items: center;
-      gap: 12px;
-      padding: 0 0 16px;
-    }
-
-    .compose-page-shell
-      .compose-dialog-inner-page
-      .compose-dialog-header-center {
-      position: static;
-      transform: none;
-      justify-self: start;
-      min-width: 0;
-    }
-
-    .compose-page-shell .compose-dialog-inner-page .compose-dialog-cancel {
-      display: none;
-    }
-
     .compose-page-shell .compose-dialog-inner-page .compose-body {
-      padding: 22px 0 12px;
+      padding: 22px 0 12px var(--compose-gutter);
       min-height: clamp(16rem, 36vh, 24rem);
     }
 
+    /* Only the right is restated: the left comes from the card's own gutter,
+       which is what every one of these rows already reads. */
     .compose-page-shell .compose-dialog-inner-page .compose-tools-row,
     .compose-page-shell .compose-dialog-inner-page .compose-add-thread-trigger {
-      padding-inline: 0;
+      padding-inline-end: 0;
       background: transparent;
     }
 
+    .compose-page-shell .compose-dialog-inner-page .compose-thread-post-header {
+      padding-inline-end: 0;
+    }
+
     .compose-page-shell .compose-dialog-inner-page .compose-attachments-dock {
-      padding-inline: 0;
+      padding-inline-end: 0;
       background: transparent;
     }
 
@@ -4925,7 +5285,15 @@
       bottom: 0;
       z-index: 5;
       margin-inline: 0;
-      padding: 14px 0 0;
+      padding: 14px 0 0 var(--compose-gutter);
+      background-color: inherit;
+    }
+
+    /* Takes the page's gutter rather than the dialog's, so the toggles line up
+       under Publish instead of sitting 12px inside it. */
+    .compose-page-shell .compose-dialog-inner-page .compose-quick-actions-row {
+      padding-inline: 0;
+      padding-bottom: 2px;
       background-color: inherit;
     }
 
@@ -4950,22 +5318,58 @@
 
   .compose-dialog,
   .compose-page-shell > jant-compose-dialog {
-    --compose-title-input-size: var(--type-content-subtitle);
-    --compose-title-input-leading: var(--type-display-leading);
+    --compose-title-input-size: calc(var(--type-content-body) * 1.2);
+    --compose-title-input-leading: 1.35;
     --compose-quote-input-size: var(--type-content-subtitle);
     --compose-quote-input-leading: 1.32;
     --compose-inline-input-size: var(--type-ui-input);
+    /* The quote source is a mono URL sitting under the sans author line. At
+       the shared inline-input size mono's wider glyphs read a notch louder
+       than the author it supports, so it steps down to land where the
+       rendered `.feed-quote-source` sits. A custom property resolves its
+       var()s where it is declared, so any layout that re-tunes
+       --compose-inline-input-size must restate this ratio too — see
+       `.compose-reply-compose-layout`. */
+    --compose-quote-source-size: calc(var(--compose-inline-input-size) * 0.88);
     --compose-panel-label-size: var(--type-ui-control);
     --compose-panel-hint-size: var(--type-ui-hint);
     --compose-panel-control-size: var(--type-ui-control);
     --compose-summary-size: var(--type-ui-meta);
     --compose-primary-button-size: var(--type-ui-meta);
+
+    /* How far the format switcher is pulled left of the text column. Declared
+       up here with the other compose tunables so one value covers the dialog,
+       the /new page and every thread row at once. See `.compose-segmented` for
+       what the endpoints look like and why 12px is the ceiling. */
+    --compose-switcher-hang: 8px;
+
+    /* The composer's text column, measured from each row's own container.
+       Every row starts its padding here and the control inside it hangs its
+       box back out by its own optical inset, so what lands on the column is
+       the glyph or the label rather than the box around it — the switcher's
+       hang above is the same idea, named per control because each one is
+       inset by a different amount.
+
+       It drops to 0 wherever something outside the editor already supplies the
+       indent: a thread row's rail, or the /new card's own padding. Only the
+       left is expressed this way; the right paddings stay per-row, because a
+       thread row is indented on one side only. */
+    --compose-gutter: 20px;
+  }
+
+  /* The fullscreen sheet renders none of these rows today, but it does share
+     `.compose-editor-row`. Give it the column too rather than leave the value
+     undefined there: an undefined custom property drops the whole padding
+     declaration that reads it instead of falling back to a sane number. */
+  .compose-fullscreen-dialog {
+    --compose-gutter: 20px;
   }
 
   @media (min-width: 700px) {
     .compose-dialog,
+    .compose-fullscreen-dialog,
     .compose-page-shell > jant-compose-dialog {
-      --compose-title-input-size: var(--feed-note-title-size);
+      --compose-gutter: 24px;
     }
   }
 
@@ -4985,7 +5389,7 @@
     box-shadow:
       0 8px 40px rgba(0, 0, 0, 0.08),
       0 1px 3px rgba(0, 0, 0, 0.04);
-    border: 1px solid var(--compose-control-border);
+    border: 1px solid var(--site-raised-border);
     overflow: visible;
   }
 
@@ -4993,8 +5397,15 @@
     animation: compose-modal-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
+  /* The dim is only half of it. On a dark page there is no luminance left to
+     take away — 0.3 → 0.7 alpha moves the dialog's contrast against its own
+     backdrop by 0.05 — so the blur carries the separation instead. It reads as
+     depth rather than darkness, which is the one cue that still works when the
+     page and the sheet are three percent apart. */
   .compose-dialog::backdrop {
     background-color: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
   }
 
   .compose-dialog jant-compose-dialog {
@@ -5014,10 +5425,15 @@
     background: transparent;
   }
 
+  /* The composer opens straight onto the first post's header row now that the
+     title bar is gone, so the top gutter it used to provide lives here. It
+     cannot go on the row itself: single-post mode's wrapper is
+     `display: contents` and generates no box to pad. */
   .compose-dialog-inner {
     display: flex;
     flex-direction: column;
     max-height: calc(100dvh - var(--compose-margin-top) - 20px);
+    padding-top: 10px;
     position: relative;
     background-color: var(--compose-paper-bg);
     border-radius: inherit;
@@ -5037,12 +5453,31 @@
     pointer-events: none;
   }
 
-  .compose-dialog-inner > jant-compose-editor {
+  /* The composer's one scroll region. Every block inside it — editor body,
+     attachments, per-post toolbar — flows at its natural height and scrolls
+     together, so there is a single answer to "what scrolls?" in every mode.
+     Only the action row below it stays pinned. Nesting a second scroller in
+     here (a fixed-height body, a capped attachment dock) is what forced the
+     old previews to be small; don't reintroduce one. */
+  .compose-scroll {
     flex: 1;
     min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .compose-scroll::-webkit-scrollbar {
+    width: 3px;
+  }
+
+  .compose-scroll::-webkit-scrollbar-thumb {
+    background-color: var(--site-divider);
+    border-radius: 4px;
+  }
+
+  .compose-scroll > jant-compose-editor {
     display: flex;
     flex-direction: column;
-    overflow: hidden;
     position: relative;
   }
 
@@ -5120,120 +5555,39 @@
 
   /* --- Header ------------------------------------------------------------- */
 
-  .compose-dialog-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    min-height: 3.6rem;
-    padding: 12px 14px;
-    background-color: var(--compose-paper-bg);
-    border-top-left-radius: inherit;
-    border-top-right-radius: inherit;
-    position: relative;
-    z-index: 4;
-  }
-
-  @media (min-width: 700px) {
-    .compose-dialog-header {
-      padding: 14px 18px;
-    }
-  }
-
-  .compose-dialog-cancel {
-    min-height: 44px;
-    min-width: 72px;
-    padding: 10px 14px;
-    border: none;
-    background: none;
-    border-radius: 10px;
-    color: var(--site-text-secondary);
-    font-size: var(--type-ui-control);
-    font-weight: var(--fw-medium);
-    cursor: pointer;
-    transition: color 0.15s ease-out;
-    flex-shrink: 0;
-    text-align: left;
-  }
-
-  .compose-dialog-cancel:hover {
-    color: var(--site-text-primary);
-  }
-
-  .compose-dialog-header-center {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    width: max-content;
-    max-width: calc(100% - 9.5rem);
-  }
-
-  .compose-dialog-header-actions {
-    display: flex;
-    align-items: center;
-    gap: 0;
-    flex-shrink: 0;
-    min-width: 44px;
-    justify-content: flex-end;
-  }
-
-  .compose-dialog-title {
-    font-weight: var(--fw-semibold);
-    font-size: var(--type-ui-control);
-    line-height: 1.2;
-  }
-
-  .compose-dialog-header-btn {
+  /* Leaves the composer, so unlike the per-post × it never hides until hover:
+     on a phone this and the options sheet are the only ways out. */
+  .compose-close-btn {
     --compose-dialog-icon-paper-fill: var(--compose-paper-bg);
 
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
+    margin-left: auto;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
     border: none;
-    background: none;
+    background: transparent;
     color: var(--site-text-secondary);
     cursor: pointer;
-    transition:
-      background-color 0.15s ease-out,
-      color 0.15s ease-out;
-  }
-
-  .compose-dialog-header-btn:hover {
-    --compose-dialog-icon-paper-fill: var(--compose-control-bg);
-    color: var(--site-text-primary);
-    background-color: var(--compose-control-bg);
-  }
-
-  .compose-dialog-draft-btn {
-    color: color-mix(
-      in srgb,
-      var(--site-text-primary) 48%,
-      var(--site-text-secondary)
-    );
-  }
-
-  .compose-dialog-header-icon {
-    display: block;
-    width: 26px;
-    height: 26px;
-    --icon-stroke: 1.32;
     flex-shrink: 0;
-    overflow: visible;
+    opacity: 0.6;
+    transition:
+      opacity 0.15s ease,
+      background-color 0.13s ease,
+      color 0.13s ease;
   }
 
-  .compose-dialog-draft-btn .compose-dialog-header-icon {
-    --icon-stroke: 1.24;
-  }
-
-  .compose-dialog-draft-btn:hover {
+  .compose-close-btn:hover {
+    opacity: 1;
+    background-color: var(--compose-control-bg);
     color: var(--site-text-primary);
   }
 
-  .compose-dialog-header-btn:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
+  .compose-edit-loading-close {
+    display: flex;
+    justify-content: flex-end;
   }
 
   /* Treat touch-first browsers as mobile here too. iOS Safari can expose a
@@ -5273,29 +5627,13 @@
       padding-left: calc(20px + env(safe-area-inset-left));
     }
 
-    .compose-dialog-inner > jant-compose-editor,
-    .compose-thread-layout,
-    .compose-editor-row,
-    .compose-editor-row > jant-compose-editor {
-      flex: 0 1 auto;
-    }
-
-    .compose-dialog-inner > jant-compose-editor,
-    .compose-editor-row > jant-compose-editor {
-      max-height: calc(
-        100dvh - 13rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)
-      );
-    }
-
-    .compose-dialog-header {
-      padding-top: calc(12px + env(safe-area-inset-top));
-      padding-right: calc(14px + env(safe-area-inset-right));
-      padding-left: calc(14px + env(safe-area-inset-left));
-      border-bottom: 1px solid var(--compose-control-border);
+    /* Fullscreen on a phone, so the composer's own first row sits under the
+       notch — it takes the inset the title bar used to. */
+    .compose-dialog-inner {
+      padding-top: calc(10px + env(safe-area-inset-top));
     }
 
     .compose-body {
-      flex: 0 1 auto;
       min-height: clamp(8rem, 22vh, 12rem);
       padding-right: calc(20px + env(safe-area-inset-right));
       padding-left: calc(20px + env(safe-area-inset-left));
@@ -5322,92 +5660,100 @@
     }
   }
 
-  /* --- Format switcher with animated pill --------------------------------- */
+  /* --- Format switcher ----------------------------------------------------- */
 
+  /* One grouped control — a tinted track with a pill on the active format.
+     The strip's own inset (track padding + item padding) is 16px, so its box
+     and its first label can never both sit on the text column: whatever the
+     strip is pulled left by, the other edge is 16px away from the text. There
+     is no value that aligns both, only a choice of which one to favour, so the
+     amount is a knob rather than a derived number:
+
+       0px  strip's tinted box on the text edge, "Note" 16px inside it
+       8px  neither edge exact; the tint is light enough that the perceived
+            edge sits between them, which is why this is the default
+       16px "Note" on the text edge, the tint hanging a full inset out
+
+     12px is the hard ceiling: in a thread row the rail dot ends 12px short of
+     the content edge, and past that the tint runs over the dot. */
   .compose-segmented {
+    --compose-switcher-track-pad: 3px;
+    --compose-switcher-item-pad: 13px;
+
     display: inline-flex;
-    background-color: var(--compose-control-bg);
-    border-radius: 10px;
-    padding: 3px;
+    flex: none;
+    gap: 1px;
+    padding: var(--compose-switcher-track-pad);
+    margin-inline-start: calc(-1 * var(--compose-switcher-hang));
+    /* Paints over the thread rail dot, not under it. The dot carries a
+       surface-coloured ring (`--site-thread-marker-gap`) to break the rail line
+       around itself, and that ring reaches further right than the dot does —
+       far enough to clip the strip's left edge once it hangs. Both sit at
+       z-index 1, so the strip wins on document order. Covering ring pixels is
+       harmless here: the line it protects runs down the dot's centre, well left
+       of anywhere the strip reaches. */
     position: relative;
-    box-shadow: inset 0 0 0 1px var(--compose-control-border);
+    z-index: 1;
+    border-radius: calc(var(--compose-switcher-track-pad) + 8px);
+    background-color: var(--compose-control-bg);
     font-family: var(--font-ui);
   }
 
-  .compose-format-pill {
-    position: absolute;
-    top: 3px;
-    left: 3px;
-    width: calc((100% - 6px) / 3);
-    height: calc(100% - 6px);
-    background-color: var(--compose-paper-bg);
-    border-radius: 7px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-    transition: left 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-    z-index: 0;
-  }
-
-  .compose-format-pill-link {
-    left: calc(3px + (100% - 6px) / 3);
-  }
-
-  .compose-format-pill-quote {
-    left: calc(3px + (100% - 6px) * 2 / 3);
-  }
-
   .compose-segmented-item {
-    position: relative;
-    z-index: 1;
-    flex: 1;
-    padding: 5px 0.95rem;
-    border-radius: 8px;
+    flex: none;
+    padding: 5px var(--compose-switcher-item-pad);
     border: none;
+    border-radius: 8px;
     background: transparent;
     color: var(--site-text-secondary);
     font-size: var(--type-ui-hint);
     font-weight: var(--fw-medium);
     line-height: 1.2;
-    cursor: pointer;
-    transition: color 0.2s ease;
     letter-spacing: 0.01em;
+    cursor: pointer;
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease,
+      box-shadow 0.15s ease;
   }
 
-  @media (min-width: 700px) {
-    .compose-segmented-item {
-      padding: 0.4rem 1.15rem;
-      font-size: var(--type-ui-control);
-    }
+  .compose-segmented-item:hover:not(.compose-segmented-item-active) {
+    color: var(--site-text-primary);
   }
 
   .compose-segmented-item-active {
     color: var(--site-text-primary);
-    font-weight: var(--fw-medium);
+    background-color: var(--compose-paper-bg);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   }
 
   /* --- Body --------------------------------------------------------------- */
 
+  /* Grows with its content — `.compose-scroll` does the scrolling. The floor is
+     a target to click into on an empty post, so it yields once the post has an
+     attachment: below a full-size preview the same space reads as a gap between
+     the text and the picture. */
   .compose-body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 16px 20px 12px;
+    min-height: 72px;
+    padding: 16px 20px 12px var(--compose-gutter);
     display: flex;
     flex-direction: column;
   }
 
+  jant-compose-editor:has(.compose-attachments-dock) .compose-body {
+    min-height: 0;
+  }
+
+  jant-compose-editor:has(.compose-attachments-dock)
+    .compose-tiptap-body
+    .tiptap {
+    min-height: 0;
+  }
+
   @media (min-width: 700px) {
     .compose-body {
-      padding: 18px 24px 12px;
+      padding: 18px 24px 12px var(--compose-gutter);
     }
-  }
-
-  .compose-body::-webkit-scrollbar {
-    width: 3px;
-  }
-
-  .compose-body::-webkit-scrollbar-thumb {
-    background-color: var(--site-divider);
-    border-radius: 4px;
   }
 
   .compose-field-enter {
@@ -5433,52 +5779,31 @@
     color: var(--site-text-secondary);
   }
 
+  /* An optional field sitting directly above the one people came to type in:
+     the empty state should recede, not announce itself. */
+  .compose-note-title::placeholder,
+  .compose-link-title::placeholder {
+    color: color-mix(in srgb, var(--site-text-secondary) 55%, transparent);
+    font-weight: 400;
+  }
+
   .compose-input:focus::placeholder {
     opacity: 0.6;
   }
 
   /* --- Note mode ---------------------------------------------------------- */
 
-  .compose-note-title-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
-    animation: compose-fade-up 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
   .compose-note-title {
-    flex: 1;
+    width: 100%;
+    /* Sole owner of the title-to-body gap now that the first block's lead-in
+       margin is gone — one place to tune instead of two that stack. */
+    margin-bottom: 12px;
     font-family: var(--font-heading);
     font-size: var(--compose-title-input-size);
     font-weight: var(--type-heading-weight);
     letter-spacing: var(--type-heading-tracking);
     line-height: var(--compose-title-input-leading);
     text-wrap: pretty;
-  }
-
-  @media (min-width: 700px) {
-    .compose-note-title {
-      font-size: var(--compose-title-input-size);
-    }
-  }
-
-  .compose-note-title-dismiss {
-    border: none;
-    background: transparent;
-    color: var(--site-text-secondary);
-    cursor: pointer;
-    font-size: var(--type-ui-hint);
-    padding: 6px 8px;
-    border-radius: 8px;
-    flex-shrink: 0;
-    line-height: 1;
-    opacity: 0.6;
-    transition: opacity 0.15s ease;
-  }
-
-  .compose-note-title-dismiss:hover {
-    opacity: 1;
   }
 
   .compose-body-input {
@@ -5535,6 +5860,9 @@
     border-bottom-color: transparent;
   }
 
+  /* Matches the 16px above it, unlike a note's title. This one is boxed in on
+     both sides, so anything tighter below than above tips it into the body and
+     it reads as the body's opening line rather than its own field. */
   .compose-link-title {
     font-family: var(--font-heading);
     font-size: var(--compose-title-input-size);
@@ -5546,10 +5874,11 @@
     text-wrap: pretty;
   }
 
-  @media (min-width: 700px) {
-    .compose-link-title {
-      font-size: var(--compose-title-input-size);
-    }
+  /* When the required-title message is showing it is the thing that has to sit
+     close to the field, so hand the gap over to it — its own bottom margin
+     carries the separation down to the body instead. */
+  .compose-link-title[aria-invalid="true"] {
+    margin-bottom: 6px;
   }
 
   /* --- Quote mode --------------------------------------------------------- */
@@ -5622,15 +5951,17 @@
     font-weight: var(--fw-regular);
     line-height: var(--compose-quote-input-leading);
     letter-spacing: -0.02em;
-    min-height: 9rem;
+    /* Four lines of the quote's own type — enough to hold most pulled passages
+       without opening a well. Stated in lines so it tracks the two leadings
+       this input takes (1.32 in compose, 1.42 in a reply) instead of needing a
+       pixel value per breakpoint. The `rows` attribute is set to match. */
+    min-height: calc(var(--compose-quote-input-leading) * 4em);
     padding-top: 0.5rem;
     text-wrap: pretty;
   }
 
   @media (min-width: 700px) {
     .compose-quote-text {
-      font-size: var(--compose-quote-input-size);
-      min-height: 9.5rem;
       padding-top: 0.55rem;
     }
   }
@@ -5676,15 +6007,22 @@
     margin-bottom: 1.05rem;
   }
 
-  .compose-quote-source-input {
-    font-size: var(--compose-inline-input-size);
-    line-height: 1.35;
+  /* Scoped to the wrapper — like `.compose-link-url-wrap .compose-url-input`
+     — so it outranks the shared `.compose-url-input` base further down, which
+     otherwise wins on order and holds this input at the inline-input size.
+     Line height and color stay with that base. */
+  .compose-quote-source .compose-quote-source-input {
+    font-size: var(--compose-quote-source-size);
     letter-spacing: 0.005em;
-    color: color-mix(
-      in srgb,
-      var(--site-text-secondary) 88%,
-      var(--site-text-primary)
-    );
+  }
+
+  /* iOS Safari zooms the page whenever a focused input is under 16px — the
+     floor --type-ui-input already buys. Applied at the use site so it holds
+     whichever --compose-quote-source-size declaration won. */
+  @media (hover: none) and (pointer: coarse) {
+    .compose-quote-source .compose-quote-source-input {
+      font-size: max(16px, var(--compose-quote-source-size));
+    }
   }
 
   .compose-quote-author-row:focus-within .compose-quote-author,
@@ -5699,7 +6037,9 @@
 
   .compose-url-input {
     border-bottom: 1px solid transparent;
+    font-family: var(--font-mono);
     font-size: var(--compose-inline-input-size);
+    color: var(--site-accent);
     line-height: 1.4;
     padding-block: 0.1rem;
     transition:
@@ -5796,16 +6136,11 @@
     margin-left: 4px;
   }
 
+  /* Plain background, no top fade: nothing scrolls underneath it any more —
+     the dock travels with its post inside `.compose-scroll`. */
   .compose-attachments-dock {
-    flex-shrink: 0;
-    padding: 8px 20px 4px;
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--compose-paper-bg) 0%, transparent) 0%,
-        var(--compose-paper-bg) 18px
-      ),
-      var(--compose-paper-bg);
+    padding: 8px 20px 4px var(--compose-gutter);
+    background-color: var(--compose-paper-bg);
   }
 
   @media (min-width: 700px) {
@@ -5893,26 +6228,31 @@
 
   /* --- Tools row ---------------------------------------------------------- */
 
+  /* Belongs to its post, not to the dialog: it sits under that post's content
+     and scrolls away with it, so a thread shows one toolbar per block. */
   .compose-tools-row {
-    padding: 6px 10px;
+    /* Half the difference between the 44px button and the 20px glyph inside
+       it. The row starts on the text column and its first control hangs back
+       out by this much, so the icon lands on the column while the button keeps
+       its full touch target. 12px is also the ceiling for anything hanging out
+       of a thread row — see `.compose-segmented`, whose knob has the same job
+       for a control with a different inset. */
+    --compose-tool-hang: 12px;
+
+    padding: 6px 10px 6px var(--compose-gutter);
     display: flex;
     align-items: center;
-    flex-shrink: 0;
     gap: 4px;
     background-color: var(--compose-paper-bg);
   }
 
-  .compose-thread-layout .compose-tools-row {
-    padding-inline-start: 0;
-  }
-
-  .compose-thread-layout .compose-tools-row .compose-tool-btn:first-child {
-    margin-inline-start: -10px;
+  .compose-tools-row > :first-child {
+    margin-inline-start: calc(-1 * var(--compose-tool-hang));
   }
 
   @media (min-width: 700px) {
     .compose-tools-row {
-      padding: 6px 16px;
+      padding: 6px 16px 6px var(--compose-gutter);
       gap: 4px;
     }
   }
@@ -5924,37 +6264,64 @@
     justify-content: center;
     width: 44px;
     height: 44px;
+    /* The button keeps its 44px touch target; only the paint is inset, so the
+       chip a hovered or switched-on tool wears is 36px and sits closer to the
+       glyph than to its neighbours. `background-clip` shrinks the corner radii
+       with the box, which is why 12px here reads as 8px on the chip. */
+    padding: 4px;
+    background-clip: content-box;
     border-radius: 12px;
     border: none;
-    background: transparent;
+    background-color: transparent;
     cursor: pointer;
     transition: all 0.18s ease;
     flex-shrink: 0;
-    color: var(--site-text-secondary);
+    color: var(--compose-tool-ink);
   }
 
+  /* One weight for the whole row, stated here rather than per icon, so the
+     stroked glyphs and the star's outline read as one set. */
   .compose-tool-icon {
-    --icon-stroke: 1.46;
     display: block;
     width: 20px;
     height: 20px;
     flex-shrink: 0;
     overflow: visible;
+    stroke-width: 1.42;
   }
 
   .compose-tool-btn:hover {
     background-color: var(--compose-control-bg);
   }
 
+  /* On is a real chip — the shape people already read as "this control is
+     switched on" — just quieter than the one that was tried first. That one
+     paired the chip with full-strength ink, so the whole button lit up at
+     once; here the glyph is left in the row's faded ink and the chip does the
+     talking on its own, a little under the row's hover tint. It is the only
+     edge in the row, so it needs no help to be found. */
   .compose-tool-btn-active {
-    color: var(--site-text-primary);
+    background-color: color-mix(
+      in srgb,
+      var(--compose-control-bg) 85%,
+      var(--compose-paper-bg)
+    );
+  }
+
+  /* Hover has to stay a step above a button that already carries a chip. */
+  .compose-tool-btn-active:hover {
     background-color: var(--compose-control-bg-strong);
   }
 
+  /* A tool that has grown a label is reading matter now, so it carries text's
+     weight — the row's faded ink would put "Add more" under the 4.5:1 floor. */
   .compose-tool-btn-add {
     width: auto;
     gap: 4px;
-    padding: 0 10px 0 8px;
+    /* Same 4px of inset paint as the icon-only buttons; only the sides open up
+       to make room for the label. */
+    padding: 4px 10px 4px 8px;
+    color: var(--site-text-secondary);
   }
 
   .compose-tool-label {
@@ -5963,12 +6330,11 @@
     white-space: nowrap;
   }
 
-  .compose-tool-sep {
-    width: 1px;
-    height: 16px;
-    background-color: var(--site-divider);
-    margin: 0 2px;
-    border-radius: 1px;
+  /* Was a hairline. The two groups (insert something / mark something up) are
+     still worth telling apart, but air does it without drawing another edge
+     into the paper. */
+  .compose-tool-gap {
+    width: 8px;
     flex-shrink: 0;
   }
 
@@ -5982,7 +6348,6 @@
     width: 44px;
     height: 44px;
     border-radius: 12px;
-    color: var(--site-text-secondary);
   }
 
   .compose-tool-btn-view:hover,
@@ -6011,7 +6376,7 @@
   /* --- Action row --------------------------------------------------------- */
 
   .compose-action-row {
-    padding: 10px 12px 14px;
+    padding: 10px 12px 14px var(--compose-gutter);
     display: flex;
     align-items: center;
     gap: 10px;
@@ -6022,7 +6387,10 @@
     border-bottom-right-radius: inherit;
   }
 
+  /* The quick toggles take over the action row's bottom edge when present, so
+     the two read as one block rather than a strip stuck underneath. */
   .compose-action-row:has(+ .compose-quick-actions-row) {
+    padding-bottom: 4px;
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
   }
@@ -6035,17 +6403,250 @@
     justify-content: flex-end;
   }
 
+  .compose-quick-actions-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    /* Left takes the action row's gutter so Cancel starts where the collection
+       pill does; right keeps the row's own inset, which is what lines the
+       switches up under Publish. */
+    padding: 2px 12px 12px var(--compose-gutter);
+    background-color: var(--compose-paper-bg);
+    border-bottom-left-radius: inherit;
+    border-bottom-right-radius: inherit;
+  }
+
+  /* Leaving compose, at the row's near edge and in the register of the switches
+     it sits with rather than Publish across the way. `margin-inline-end: auto`
+     claims the gap the switches leave, so it sits under the collection pill
+     whether or not any switch is present. */
+  .compose-quick-actions-close {
+    /* Hangs back out of the row by its own padding, so it is the label that
+       starts on the gutter and not the button's box. */
+    --compose-close-hang: 0.55rem;
+
+    margin-inline-end: auto;
+    margin-inline-start: calc(-1 * var(--compose-close-hang));
+    padding: 0.5rem var(--compose-close-hang);
+    min-height: 36px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-caption);
+    line-height: 1.1;
+    color: color-mix(in srgb, var(--site-text-secondary) 78%, transparent);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease;
+  }
+
+  .compose-quick-actions-close:hover:not(:disabled),
+  .compose-quick-actions-close:focus-visible {
+    color: var(--site-text-secondary);
+    background-color: var(--compose-control-bg);
+  }
+
+  .compose-quick-actions-close:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
   @media (min-width: 700px) {
     .compose-action-row {
-      padding: 12px 18px 16px;
+      padding: 12px 18px 16px var(--compose-gutter);
+    }
+
+    .compose-action-row:has(+ .compose-quick-actions-row) {
+      padding-bottom: 4px;
+    }
+
+    .compose-quick-actions-row {
+      padding: 2px 18px 14px var(--compose-gutter);
+    }
+
+    .compose-quick-actions-close {
+      --compose-close-hang: 0.35rem;
+
+      padding: 0.3rem var(--compose-close-hang);
+      min-height: 0;
     }
   }
 
+  /* --- Language pill ------------------------------------------------------
+     Sits between the collection pill and Post, naming the language this post
+     would publish in right now. Quiet while Jant is the one reading it, and a
+     shade firmer once the author has said so themselves — the same two states
+     the collection pill uses, for the same reason: the author's own answer
+     should not look like a guess. */
+
+  .compose-language {
+    display: inline-flex;
+    position: relative;
+    /* Shrinks with the collection pill rather than pushing Post off a narrow
+       screen; the label ellipsizes and the glyph stays. */
+    min-width: 0;
+  }
+
+  .compose-language-open {
+    z-index: 100;
+  }
+
+  .compose-language-trigger {
+    display: flex;
+    align-items: center;
+    gap: 0.38rem;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 1.95rem;
+    /* Transparent border, so the box does not resize under the hover wash. */
+    border: 1px solid transparent;
+    background: transparent;
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    cursor: pointer;
+    transition:
+      background-color 0.18s ease,
+      border-color 0.18s ease,
+      color 0.18s ease;
+    color: var(--site-text-secondary);
+    font-size: var(--type-ui-control);
+  }
+
+  .compose-language-trigger:hover:not(:disabled),
+  .compose-language-trigger[data-open="true"] {
+    color: var(--site-text-primary);
+    background: var(--compose-control-bg);
+  }
+
+  .compose-language-trigger[data-chosen="true"] {
+    color: color-mix(
+      in srgb,
+      var(--site-text-primary) 88%,
+      var(--site-text-secondary)
+    );
+  }
+
+  /* Nothing to report: the globe stands alone, in a round target the size of
+     the options button on the other side of Post. */
+  .compose-language-trigger-bare {
+    justify-content: center;
+    gap: 0;
+    width: 2.2rem;
+    padding-inline: 0;
+  }
+
+  .compose-language-trigger:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .compose-language-trigger:focus-visible {
+    outline: 2px solid
+      color-mix(in srgb, var(--site-text-primary) 22%, transparent);
+    outline-offset: 2px;
+  }
+
+  .compose-language-trigger-svg {
+    display: block;
+    overflow: visible;
+    /* The header switcher's globe reads at 15px; this one carries the same
+       meridians and needs the same room. */
+    width: 0.98rem;
+    height: 0.98rem;
+    flex-shrink: 0;
+    opacity: 0.75;
+  }
+
+  .compose-language-trigger:hover:not(:disabled) .compose-language-trigger-svg,
+  .compose-language-trigger[data-open="true"] .compose-language-trigger-svg,
+  .compose-language-trigger[data-chosen="true"] .compose-language-trigger-svg {
+    opacity: 1;
+  }
+
+  /* The word only exists while the language is worth naming, so this plays
+     exactly when it starts being worth naming — which is the moment detection
+     moves the post off the page's language. That used to be a sheet stopping
+     the publish to ask; it is now a word arriving next to Post. Short and
+     small: enough to catch the eye that is already aimed at the button, and
+     not enough to be an event. */
+  @keyframes compose-language-name-in {
+    from {
+      opacity: 0;
+      transform: translateX(-3px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  .compose-language-label {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 7rem;
+    font-weight: var(--fw-medium);
+    animation: compose-language-name-in 0.22s ease both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .compose-language-label {
+      animation: none;
+    }
+  }
+
+  /* Anchored to the pill's right edge and opening upwards: it hangs over the
+     editor, never off the side of a phone. */
+  .compose-language-popover {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    z-index: 100;
+    /* Wide enough for the Detect row's hint to fall in two lines rather than
+       three — it is the one row here that carries a sentence. */
+    min-width: 14.5rem;
+    max-width: min(17rem, calc(100vw - 1.5rem));
+    padding: 0.44rem 0.48rem 0.4rem;
+    border-radius: 0.95rem;
+    border: 1px solid var(--compose-control-border);
+    background: var(--compose-floating-bg);
+    box-shadow:
+      0 18px 42px -28px rgba(15, 23, 42, 0.3),
+      inset 0 1px 0 color-mix(in srgb, white 58%, transparent);
+    backdrop-filter: blur(14px);
+  }
+
+  .compose-language-popover .compose-sheet-row {
+    --compose-icon-paper-fill: var(--compose-floating-bg);
+  }
+
   .compose-collection-select {
+    /* Optically, not geometrically, centered: the glyph meets the left padding
+       at a vertex and sits inset in its own box, so equal padding leaves the
+       icon side looking open and the label side pinched against the edge.
+       Tune the pill's side padding here and in the touch block below — both
+       set these two values rather than re-declaring `padding`, so neither
+       silently shadows the other. They live on the wrapper because the hang
+       below is measured from them and has to apply to the flex item the action
+       row lays out, not to the trigger inside it. */
+    --compose-collection-pad-icon: 0.56rem;
+    --compose-collection-pad-label: 0.85rem;
+
     display: inline-flex;
     position: relative;
     min-width: 0;
     max-width: 100%;
+    /* Hangs back by the trigger's icon-side inset plus its 1px transparent
+       border, so it is the layers glyph that lands on the text column rather
+       than the pill's edge. */
+    margin-inline-start: calc(-1 * (var(--compose-collection-pad-icon) + 1px));
   }
 
   .compose-collection-select[data-open] {
@@ -6055,14 +6656,18 @@
   .compose-collection-trigger {
     display: flex;
     align-items: center;
-    gap: 0.62rem;
+    gap: 0.38rem;
     min-width: 0;
     max-width: 100%;
-    min-height: 2.45rem;
-    border: 1px solid var(--compose-control-border);
-    background: var(--compose-control-bg);
+    min-height: 1.95rem;
+    /* No fill and no edge at rest — it was the one bordered pill left in the
+       composer, which made picking a collection look like the thing to do. It
+       keeps a transparent border so the box does not resize on hover. */
+    border: 1px solid transparent;
+    background: transparent;
     border-radius: 999px;
-    padding: 0.24rem 0.72rem 0.24rem 0.28rem;
+    padding: 0.2rem var(--compose-collection-pad-label) 0.2rem
+      var(--compose-collection-pad-icon);
     cursor: pointer;
     transition:
       background-color 0.18s ease,
@@ -6073,12 +6678,12 @@
     font-size: var(--type-ui-control);
   }
 
+  /* The same flat wash the tools row uses on hover — no lift, no edge. A chip
+     that rises off the paper is what made this read as the loud control. */
   .compose-collection-trigger:hover,
   .compose-collection-trigger[data-open="true"] {
     color: var(--site-text-primary);
-    background: var(--compose-control-bg-strong);
-    border-color: color-mix(in srgb, var(--site-text-primary) 10%, transparent);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    background: var(--compose-control-bg);
   }
 
   .compose-collection-trigger[data-selected="true"] {
@@ -6089,44 +6694,41 @@
     );
   }
 
-  .compose-collection-trigger-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.65rem;
-    height: 1.65rem;
-    border-radius: 999px;
-    background: color-mix(
-      in srgb,
-      var(--compose-paper-bg) 72%,
-      var(--compose-control-bg)
-    );
-    color: color-mix(
-      in srgb,
-      var(--site-text-primary) 58%,
-      var(--site-text-secondary)
-    );
-    flex-shrink: 0;
-  }
-
-  .compose-collection-trigger-svg,
   .compose-collection-search-icon,
   .compose-collection-add-svg,
   .compose-collection-option-check-circle,
   .compose-collection-option-plus-circle,
   .compose-collection-option-svg,
-  .compose-collection-chevron,
   .compose-collection-option-check {
     display: block;
     overflow: visible;
   }
 
-  .compose-collection-trigger-svg,
   .compose-collection-option-svg {
     width: 0.92rem;
     height: 0.92rem;
     --icon-stroke: 1.3;
     stroke-width: var(--icon-stroke);
+  }
+
+  /* Bare on the pill rather than in its own tinted circle: the pill is already
+     a container, and a chip inside it read as a button inside a button. */
+  .compose-collection-trigger-svg {
+    display: block;
+    overflow: visible;
+    width: 0.86rem;
+    height: 0.86rem;
+    flex-shrink: 0;
+    opacity: 0.75;
+    --icon-stroke: 1.4;
+    stroke-width: var(--icon-stroke);
+  }
+
+  .compose-collection-trigger:hover .compose-collection-trigger-svg,
+  .compose-collection-trigger[data-open="true"] .compose-collection-trigger-svg,
+  .compose-collection-trigger[data-selected="true"]
+    .compose-collection-trigger-svg {
+    opacity: 1;
   }
 
   .compose-collection-label {
@@ -6140,32 +6742,18 @@
     font-weight: var(--fw-medium);
   }
 
-  .compose-collection-chevron {
-    width: 0.78rem;
-    height: 0.78rem;
-    flex-shrink: 0;
-    opacity: 0.46;
-    --icon-stroke: 1.38;
-    stroke-width: var(--icon-stroke);
-    transition:
-      transform 0.18s ease,
-      opacity 0.18s ease;
-  }
-
-  .compose-collection-trigger[data-open="true"] .compose-collection-chevron {
-    transform: rotate(180deg);
-    opacity: 0.74;
-  }
-
+  /* Desktop sizing. Every dimension here has a roomier counterpart in the
+     touch block near the end of the file — a picker aimed with a cursor can be
+     tighter than one aimed with a thumb. */
   .compose-collection-select [data-popover] {
     z-index: 100;
-    min-width: 16rem;
-    max-width: 20rem;
+    min-width: 13.5rem;
+    max-width: 17rem;
   }
 
   .compose-collection-popover {
-    padding: 0.56rem 0.62rem 0.5rem;
-    border-radius: 1.08rem;
+    padding: 0.44rem 0.48rem 0.4rem;
+    border-radius: 0.95rem;
     border: 1px solid var(--compose-control-border);
     background: var(--compose-floating-bg);
     box-shadow:
@@ -6175,16 +6763,16 @@
   }
 
   .compose-collection-popover-header {
-    padding: 0.24rem 0 0.6rem;
+    padding: 0.18rem 0 0.44rem;
   }
 
   .compose-collection-search-shell {
     display: flex;
     align-items: center;
-    gap: 0.52rem;
-    min-height: 2.8rem;
-    padding: 0 0.95rem;
-    border-radius: 0.92rem;
+    gap: 0.45rem;
+    min-height: 2.25rem;
+    padding: 0 0.75rem;
+    border-radius: 0.75rem;
     border: 1px solid var(--compose-control-border);
     background: var(--compose-control-bg);
     color: var(--site-text-secondary);
@@ -6207,8 +6795,8 @@
   }
 
   .compose-collection-search-icon {
-    width: 1.15rem;
-    height: 1.15rem;
+    width: 0.98rem;
+    height: 0.98rem;
     flex-shrink: 0;
     --icon-stroke: 1.3;
     stroke-width: var(--icon-stroke);
@@ -6235,7 +6823,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.06rem;
-    max-height: 15rem;
+    max-height: 12.5rem;
     overflow-y: auto;
     padding: 0.08rem;
   }
@@ -6244,15 +6832,15 @@
     width: 100%;
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.6rem;
     min-width: 0;
-    min-height: 3rem;
+    min-height: 2.35rem;
     padding-top: 0;
     padding-bottom: 0;
-    padding-left: 0.8rem !important;
-    padding-right: 0.46rem !important;
+    padding-left: 0.62rem !important;
+    padding-right: 0.4rem !important;
     border: none;
-    border-radius: 0.88rem;
+    border-radius: 0.7rem;
     background: transparent;
     background-image: none !important;
     cursor: pointer !important;
@@ -6292,8 +6880,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 1.32rem;
-    height: 1.32rem;
+    width: 1.12rem;
+    height: 1.12rem;
     flex-shrink: 0;
   }
 
@@ -6344,7 +6932,7 @@
   }
 
   .compose-collection-empty {
-    padding: 0.95rem 0.7rem 1.05rem;
+    padding: 0.75rem 0.6rem 0.85rem;
     color: var(--site-text-secondary);
     font-size: var(--type-ui-caption);
     line-height: 1.5;
@@ -6352,8 +6940,8 @@
   }
 
   .compose-collection-footer {
-    margin-top: 0.35rem;
-    padding: 0.35rem 0.22rem 0.12rem;
+    margin-top: 0.28rem;
+    padding: 0.28rem 0.18rem 0.1rem;
     border-top: 1px solid
       color-mix(in srgb, var(--site-divider) 50%, transparent);
   }
@@ -6361,12 +6949,12 @@
   .compose-collection-add-action {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.6rem;
     width: 100%;
-    min-height: 3rem;
-    padding: 0 0.8rem;
+    min-height: 2.35rem;
+    padding: 0 0.62rem;
     border: none;
-    border-radius: 1rem;
+    border-radius: 0.7rem;
     background: transparent;
     cursor: pointer;
     text-align: left;
@@ -6447,28 +7035,7 @@
     min-width: 0;
   }
 
-  .compose-quick-actions-row {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    padding: 2px 12px 12px;
-    background-color: var(--compose-paper-bg);
-    border-bottom-left-radius: inherit;
-    border-bottom-right-radius: inherit;
-  }
-
-  .compose-action-row:has(+ .compose-quick-actions-row) {
-    padding-bottom: 4px;
-  }
-
   @media (min-width: 700px) {
-    .compose-quick-actions-row {
-      padding: 2px 18px 14px;
-    }
-
-    .compose-action-row:has(+ .compose-quick-actions-row) {
-      padding-bottom: 4px;
-    }
   }
 
   .compose-publish-quick-toggle {
@@ -6531,83 +7098,6 @@
     cursor: not-allowed;
   }
 
-  .compose-publish-summaries {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    width: 100%;
-  }
-
-  .compose-publish-summary {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.48rem;
-    min-height: 2.15rem;
-    max-width: min(100%, 17rem);
-    padding: 0.38rem 0.74rem;
-    border: 1px solid var(--compose-control-border);
-    border-radius: 999px;
-    background-color: color-mix(
-      in srgb,
-      var(--compose-control-bg) 82%,
-      var(--compose-paper-bg)
-    );
-    color: color-mix(
-      in srgb,
-      var(--site-text-primary) 70%,
-      var(--site-text-secondary)
-    );
-    font-size: var(--compose-summary-size);
-    font-weight: var(--fw-medium);
-    line-height: 1.1;
-    cursor: pointer;
-    white-space: nowrap;
-    transition:
-      background-color 0.18s ease,
-      border-color 0.18s ease,
-      color 0.18s ease,
-      transform 0.18s ease;
-  }
-
-  .compose-publish-summary:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--site-text-primary) 12%, transparent);
-    background-color: color-mix(
-      in srgb,
-      var(--compose-control-bg-strong) 84%,
-      var(--compose-paper-bg)
-    );
-    color: var(--site-text-primary);
-    transform: translateY(-1px);
-  }
-
-  .compose-publish-summary:disabled {
-    opacity: 0.6;
-    cursor: progress;
-  }
-
-  .compose-publish-summary-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1rem;
-    height: 1rem;
-    flex-shrink: 0;
-  }
-
-  .compose-publish-summary-icon svg {
-    display: block;
-    width: 100%;
-    height: 100%;
-    overflow: visible;
-  }
-
-  .compose-publish-summary-text {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   .compose-publish-group {
     position: relative;
     display: inline-flex;
@@ -6620,10 +7110,17 @@
     z-index: 100;
   }
 
-  .compose-publish-single,
-  .compose-publish-main,
-  .compose-publish-toggle {
-    min-height: 2.8rem;
+  /* Sized against the row it leads, not in isolation. Measured: Publish 33px,
+     the options trigger 33px, the collection pill 30.5px — Publish and the
+     options circle share a height so they read as one pair at the end of the
+     row, and the collection pill sits just under them. Touch gets the roomier
+     set back further down: 33px is a fine mouse target and a poor thumb one. */
+  .compose-publish-main {
+    /* `em`, not `rem`: the box is a multiple of its own label, so the ratio
+       holds if the button's type ever scales. The reference is 2.4em (36px
+       around a 15px label); ours sits a step under, which is the only place we
+       leave it — every other number in this button is traced. */
+    min-height: 2.2em;
     border: none;
     background: transparent;
     cursor: pointer;
@@ -6633,28 +7130,36 @@
       box-shadow 0.18s ease;
   }
 
-  .compose-publish-single,
+  /* Shape traced from threads.com's Post button, measured off the reference at
+     2x: 1px border, 8px radius, 18px side padding, ~15px bold label, content
+     width with no `min-width` — the reference sizes to its word. Height is the
+     one number we take a step under; see above.
+
+     Where we part from it: threads outlines Post in *both* states, and we only
+     borrow that for disabled (below). Once there is something to post the
+     button fills with ink rather than firming up an outline — a composer this
+     flat can carry one solid object, and it should be the send. Weight and
+     tracking hold across both states so the box does not resize the moment the
+     post becomes postable. */
   .compose-publish-main {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 0.3rem;
     white-space: nowrap;
-    min-width: 6rem;
     padding: 0 18px;
     background-color: var(--site-text-primary);
     color: var(--site-elevated-bg);
     font-size: var(--compose-primary-button-size);
-    font-weight: var(--fw-semibold);
-    letter-spacing: 0.01em;
+    font-weight: var(--fw-bold);
+    letter-spacing: 0;
     box-shadow: none;
   }
 
-  .compose-publish-single:hover:not(:disabled),
   .compose-publish-main:hover:not(:disabled) {
     background-color: color-mix(
       in srgb,
-      var(--site-text-primary) 94%,
+      var(--site-text-primary) 92%,
       var(--site-elevated-bg)
     );
   }
@@ -6663,138 +7168,32 @@
     display: inline-flex;
     align-items: stretch;
     overflow: hidden;
-    border-radius: 999px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    border-radius: 8px;
   }
 
   .compose-publish-buttons .compose-publish-main {
-    border-radius: 999px 0 0 999px;
+    border-radius: 8px;
   }
 
-  .compose-publish-buttons-inactive .compose-publish-toggle:not(:disabled) {
-    color: color-mix(
-      in srgb,
-      var(--site-text-secondary) 92%,
-      var(--site-elevated-bg)
-    );
-    background-color: color-mix(
-      in srgb,
-      var(--compose-control-bg) 88%,
-      var(--compose-paper-bg)
-    );
-    --compose-publish-divider-color: color-mix(
-      in srgb,
-      var(--site-divider) 72%,
-      transparent
-    );
-  }
-
-  .compose-publish-buttons-inactive
-    .compose-publish-toggle:not(:disabled):hover,
-  .compose-publish-buttons-inactive
-    .compose-publish-toggle[aria-expanded="true"]:not(:disabled) {
-    color: color-mix(
-      in srgb,
-      var(--site-text-primary) 68%,
-      var(--site-text-secondary)
-    );
-    background-color: color-mix(
-      in srgb,
-      var(--compose-control-bg-strong) 88%,
-      var(--compose-paper-bg)
-    );
-  }
-
-  .compose-publish-buttons-inactive .compose-publish-toggle-chevron {
-    opacity: 0.62;
-  }
-
-  .compose-publish-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-    width: 2.75rem;
-    color: var(--site-elevated-bg);
-    background-color: var(--site-text-primary);
-    border-radius: 0 999px 999px 0;
-    flex-shrink: 0;
-    --compose-publish-divider-color: color-mix(
-      in srgb,
-      var(--site-elevated-bg) 14%,
-      transparent
-    );
-  }
-
-  .compose-publish-toggle::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 50%;
-    width: 1px;
-    height: 1rem;
-    transform: translateY(-50%);
-    background-color: var(--compose-publish-divider-color);
-    opacity: 0.7;
-  }
-
-  .compose-publish-toggle:hover:not(:disabled),
-  .compose-publish-toggle[aria-expanded="true"]:not(:disabled) {
-    background-color: color-mix(
-      in srgb,
-      var(--site-text-primary) 94%,
-      var(--site-elevated-bg)
-    );
-  }
-
-  .compose-publish-toggle-chevron {
-    opacity: 0.78;
-    display: block;
-    width: 0.92rem;
-    height: 0.92rem;
-    overflow: visible;
-    --icon-stroke: 1.46;
-    stroke-width: var(--icon-stroke);
-  }
-
-  .compose-publish-single:focus-visible,
-  .compose-publish-main:focus-visible,
-  .compose-publish-toggle:focus-visible,
-  .compose-publish-summary:focus-visible,
-  .compose-publish-chip:focus-visible {
-    outline: 2px solid
-      color-mix(in srgb, var(--site-text-primary) 22%, transparent);
-    outline-offset: 2px;
-  }
-
-  .compose-publish-single:disabled:not(.compose-publish-single-loading),
+  /* Nothing postable yet. Both channels step back together: the frame to
+     7% (1.10:1, the reference's #f4f4f4 on white) and the label to 46%
+     (2.12:1, its #b2b2b2). Inactive controls are exempt from the contrast
+     floors, which is the only reason a label may sit this far under 4.5:1. */
   .compose-publish-main:disabled:not(.compose-publish-main-loading) {
     opacity: 1;
-    color: var(--site-text-secondary);
-    background-color: color-mix(
-      in srgb,
-      var(--compose-control-bg) 88%,
-      var(--compose-paper-bg)
-    );
-    box-shadow: none;
+    color: color-mix(in srgb, var(--site-text-secondary) 46%, transparent);
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px
+      color-mix(in srgb, var(--site-text-secondary) 7%, transparent);
+    cursor: not-allowed;
   }
 
-  .compose-publish-toggle:disabled:not(.compose-publish-toggle-loading) {
-    opacity: 1;
-    color: var(--site-text-secondary);
-    background-color: color-mix(
-      in srgb,
-      var(--compose-control-bg) 88%,
-      var(--compose-paper-bg)
-    );
-    border-left-color: color-mix(in srgb, var(--site-divider) 80%, transparent);
-  }
-
-  .compose-publish-single-loading:disabled,
-  .compose-publish-main-loading:disabled,
-  .compose-publish-toggle-loading:disabled {
-    opacity: 1;
-    cursor: progress;
+  /* Pointing at it says so rather than doing nothing: the frame comes up a
+     step, but the label stays faded and the cursor stays barred, so the hover
+     never promises a press it will not accept. */
+  .compose-publish-main:disabled:not(.compose-publish-main-loading):hover {
+    box-shadow: inset 0 0 0 1px
+      color-mix(in srgb, var(--site-text-secondary) 18%, transparent);
   }
 
   .compose-publish-panel {
@@ -6871,162 +7270,459 @@
     padding-left: calc(1rem + env(safe-area-inset-left));
   }
 
-  .compose-publish-section {
+  /* ── Options sheet ──────────────────────────────────────────────────
+     A vertical list read top to bottom, not a toolbar of chips: muted
+     group label, one full-width row per setting, value or control on the
+     right. Every choice carries its own hint so they can be compared
+     before picking one. */
+
+  .compose-sheet {
     display: flex;
     flex-direction: column;
-    gap: 0.625rem;
   }
 
-  .compose-publish-section-header {
+  .compose-sheet-label {
+    margin: 0;
+    padding: 0.35rem 0.35rem 0.3rem;
+    color: var(--site-text-secondary);
+    font-size: 0.79rem;
+    font-weight: var(--fw-semibold);
+  }
+
+  /* Context line under a section label — says what this post is, without
+     competing with the choices below it. */
+  .compose-sheet-note {
+    margin: 0;
+    padding: 0 0.35rem 0.4rem;
+    color: color-mix(in srgb, var(--site-text-secondary) 82%, transparent);
+    font-size: 0.79rem;
+    line-height: 1.45;
+  }
+
+  .compose-sheet-row {
+    --compose-icon-paper-fill: var(--compose-paper-bg);
+
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 0.75rem;
+    align-items: center;
+    gap: 0.7rem;
+    width: 100%;
+    padding: 0.5rem 0.45rem;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--site-text-primary);
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
   }
 
-  .compose-publish-section-copy {
+  .compose-sheet-row:hover:not(:disabled) {
+    --compose-icon-paper-fill: var(--compose-control-bg);
+    background-color: var(--compose-control-bg);
+  }
+
+  /* Sized to the visibility glyphs it sits in a list with, so the session rows
+     at the foot of the panel read as the same kind of row. */
+  .compose-sheet-row-icon {
+    display: block;
+    width: 0.98rem;
+    height: 0.98rem;
+    --icon-stroke: 1.3;
+    stroke-width: var(--icon-stroke);
+    flex-shrink: 0;
+    overflow: visible;
+    color: var(--site-text-secondary);
+  }
+
+  .compose-sheet-row:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .compose-sheet-row:focus-visible {
+    outline: 2px solid
+      color-mix(in srgb, var(--site-text-primary) 22%, transparent);
+    outline-offset: 1px;
+  }
+
+  .compose-sheet-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.08rem;
+    flex: 1;
     min-width: 0;
   }
 
-  .compose-publish-section-label {
-    color: color-mix(
-      in srgb,
-      var(--site-text-primary) 84%,
-      var(--site-text-secondary)
-    );
-    font-size: var(--compose-panel-label-size);
+  .compose-sheet-title {
+    font-size: 0.9rem;
     font-weight: var(--fw-medium);
-    letter-spacing: 0.01em;
-    line-height: 1.24;
   }
 
-  .compose-publish-section-hint {
-    margin-top: 0.25rem;
+  .compose-sheet-sub {
     color: var(--site-text-secondary);
-    font-size: var(--compose-panel-hint-size);
-    line-height: 1.45;
-    text-wrap: pretty;
+    font-size: 0.75rem;
+    line-height: 1.4;
   }
 
-  .compose-publish-section-action {
+  .compose-sheet-check,
+  .compose-sheet-caret {
+    display: inline-flex;
     flex-shrink: 0;
-    min-height: 2.1rem;
-    padding: 0.42rem 0.78rem;
-    border: 1px solid var(--compose-control-border);
+    align-items: center;
+  }
+
+  .compose-sheet-caret {
+    color: var(--site-text-secondary);
+    opacity: 0.75;
+  }
+
+  .compose-sheet-hint {
+    margin: 0;
+    color: var(--site-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.45;
+  }
+
+  .compose-sheet-divider {
+    height: 1px;
+    margin: 0.45rem 0.1rem;
+    background-color: var(--site-divider);
+  }
+
+  .compose-sheet-row-switch {
+    cursor: default;
+  }
+
+  .compose-sheet-row-switch > .input[role="switch"] {
+    flex-shrink: 0;
+  }
+
+  /* ── Per-post date / permalink ──────────────────────────────────────
+     Sits on the post it describes, not in the publish panel. Quiet until the
+     post is hovered or focused, or the values are non-default. Uses
+     margin-left:auto so appearing and disappearing never shifts the × next
+     to it. */
+
+  .compose-post-meta {
+    position: relative;
+    margin-left: auto;
+    /* Without this the flex item cannot shrink past its content's min-content
+       width, so the header row overflows on narrow screens instead of
+       ellipsising the permalink. */
+    min-width: 0;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+  }
+
+  /* Narrow screens show the pill outright instead of revealing it. "Quiet until
+     approached" needs a pointer to approach with, and this width is mostly
+     touch, where there is none — an invisible-until-focused control is just a
+     missing one.
+
+     It must also stay in the layout. Gating `display` on
+     `jant-compose-editor:focus-within` made pressing the pill destroy it:
+     pointerdown moves focus off the editor, the pill unmounts before mouseup,
+     and a press that starts and ends on different elements never becomes a
+     click. The pill was unclickable at this width — only `.click()` from script
+     could open the panel. */
+  @media (max-width: 760px) {
+    .compose-post-meta {
+      opacity: 1;
+    }
+  }
+
+  /* Phone width cannot seat the whole post header: the format switcher alone
+     takes more than half of it, so the pill wrapped to a second line and sat
+     there under empty space — a row spent on a control that, at its defaults,
+     reports nothing. "Now · /…" only says "publishing now, link to be
+     assigned", so it is the one part of the header that can give up its words.
+     The icon stays and takes the outline the words used to imply, since an
+     unlabelled glyph has to look like a button to read as one; the text is
+     clipped rather than removed so the control keeps its accessible name. A
+     post carrying a date or link of its own still says so in full and may
+     still wrap — that line has something to report, the default does not. */
+  @media (max-width: 480px) {
+    .compose-post-meta:not(.compose-post-meta-set) .compose-post-meta-value,
+    .compose-post-meta:not(.compose-post-meta-set) .compose-post-meta-sep {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    /* Square padding around the icon, sized to the × it sits beside. */
+    .compose-post-meta:not(.compose-post-meta-set) .compose-post-meta-pill {
+      padding: 6px;
+      border-color: var(--compose-control-border);
+    }
+
+    /* The other half of the same trade. A post carrying its own date or link
+       has something to report and keeps its words — but the row still cannot
+       seat them beside the switcher, so it wrapped and landed right-aligned
+       under empty space, reading like something that fell off the row above.
+       Given a line of its own at the head of the text column it reads as what
+       it is: a caption for the post beneath it. The line is taken outright
+       rather than by overflow, so every dated post looks the same instead of
+       depending on how long its slug happens to be. */
+    .compose-post-meta-set {
+      order: 1;
+      flex-basis: 100%;
+      margin-inline: 0;
+    }
+
+    /* The × and the close button take the free space back, now that the pill
+       has left the line they used to share with it. */
+    .compose-post-meta-set ~ .compose-thread-post-remove,
+    .compose-post-meta-set ~ .compose-close-btn {
+      margin-left: auto;
+    }
+  }
+
+  /* Only the first trailing control claims the free space. Two `auto` margins
+     would split it and strand the pill mid-row. */
+  .compose-post-meta ~ .compose-thread-post-remove,
+  .compose-post-meta ~ .compose-close-btn {
+    margin-left: 0;
+  }
+
+  /* Scoped to the editor element rather than a layout row: single-post mode
+     has no `.compose-editor-row` wrapper to hang this off. */
+  jant-compose-editor:hover .compose-post-meta,
+  jant-compose-editor:focus-within .compose-post-meta,
+  .compose-post-meta-set,
+  .compose-post-meta-open,
+  .compose-post-meta:hover,
+  .compose-post-meta:focus-within {
+    opacity: 1;
+  }
+
+  /* A lone post shows its pill outright. "Quiet until approached" only pays
+     off when several rows would each carry one — with a single pill there is
+     no noise to save, and hiding it made the date/permalink fade out exactly
+     when focus moved to the publish controls, where that metadata matters
+     most. The child combinator is the single-post detector: only that mode
+     renders the editor as a direct child of `.compose-scroll`; reply and
+     thread rows sit inside `.compose-editor-row` and stay quiet. */
+  .compose-scroll > jant-compose-editor .compose-post-meta {
+    opacity: 1;
+  }
+
+  /* Defaults are the common case, so at rest this is a caption rather than a
+     control: no chrome, and dimmer than the format selector it shares the row
+     with. The outline arrives on hover, once it is being aimed at. */
+  .compose-post-meta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: min(17rem, 52vw);
+    min-width: 0;
+    padding: 3px 10px 3px 8px;
+    border: 1px solid transparent;
     border-radius: 999px;
-    background-color: var(--compose-control-bg);
-    color: color-mix(
-      in srgb,
-      var(--site-text-primary) 74%,
-      var(--site-text-secondary)
-    );
-    font-size: var(--compose-panel-control-size);
-    font-weight: var(--fw-medium);
-    line-height: 1;
+    background-color: transparent;
+    color: color-mix(in srgb, var(--site-text-secondary) 62%, transparent);
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-caption);
+    white-space: nowrap;
     cursor: pointer;
     transition:
-      color 0.16s ease,
-      background-color 0.16s ease,
-      border-color 0.16s ease,
-      transform 0.16s ease;
+      background-color 0.15s ease,
+      border-color 0.15s ease,
+      color 0.15s ease;
+  }
+
+  .compose-post-meta-pill:hover,
+  .compose-post-meta-pill[aria-expanded="true"] {
+    border-color: var(--compose-control-border);
+    background-color: var(--compose-control-bg);
+    color: var(--site-text-primary);
+  }
+
+  /* A date or permalink the author chose is real information, not a default —
+     it gets the chrome back and full contrast. */
+  .compose-post-meta-set .compose-post-meta-pill {
+    border-color: color-mix(in srgb, var(--site-text-primary) 32%, transparent);
+    background-color: var(--compose-paper-bg);
+    color: var(--site-text-primary);
+    font-weight: var(--fw-medium);
+  }
+
+  /* No extra dimming: the pill's own colour is already mixed down to 62%, and
+     the icon is drawn a hair lighter than its siblings to stay on the pixel
+     grid. Fading it again on top of both left it looking smudged rather than
+     quiet. */
+  .compose-post-meta-icon {
+    flex-shrink: 0;
+  }
+
+  .compose-post-meta-sep {
+    color: color-mix(in srgb, currentcolor 45%, transparent);
+  }
+
+  /* Only the permalink gives ground when space runs out — the date is short and
+     already as terse as it gets. Without `overflow: hidden` a shrunk flex item
+     still paints its full text, so a long slug used to run under the date. */
+  .compose-post-meta-value {
+    flex-shrink: 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .compose-post-meta-value-slug {
+    flex-shrink: 1;
+    text-overflow: ellipsis;
+  }
+
+  /* Fixed, not absolute. The pill it hangs from lives inside `.compose-scroll`,
+     and an absolute panel is clipped by that box — an empty post makes the box
+     shorter than the panel every time, so the footer went missing and focusing
+     the panel scrolled the format switcher off the top to compensate. Fixed
+     leaves the scroller behind; `_updatePostMetaPanelLayout` supplies top/left
+     and the max-height, since only script can know where the pill ended up. */
+  .compose-post-meta-panel {
+    position: fixed;
+    z-index: 100;
+    top: 0;
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    width: min(20rem, calc(100vw - 3rem));
+    /* A window too short for the whole panel scrolls the panel, never crops it.
+       Unset until script measures, so the panel is never briefly 1px tall. */
+    max-height: var(--compose-post-meta-panel-max-height, none);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0.8rem 0.85rem 0.85rem;
+    border: 1px solid var(--compose-control-border);
+    border-radius: 12px;
+    /* Same surface treatment as .compose-publish-panel — it is the same kind
+       of floating panel, and --compose-floating-bg is what adapts to dark. */
+    background-color: var(--compose-floating-bg);
+    box-shadow:
+      0 10px 28px rgba(0, 0, 0, 0.08),
+      0 1px 3px rgba(0, 0, 0, 0.05);
+  }
+
+  /* It takes focus when it opens so the dialog is announced and Tab lands in
+     the fields, but it is a container, not a control — no focus ring. */
+  .compose-post-meta-panel:focus {
+    outline: none;
+  }
+
+  /* ── Date / permalink form ──────────────────────────────────────────
+     Two settings, so they are both just open: a drill row per field meant
+     the panel restated each value directly above the input showing it, and
+     changed height every time one was opened. */
+
+  .compose-meta-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .compose-meta-field-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.6rem;
+    min-height: 1.15rem;
+  }
+
+  .compose-meta-label {
+    color: var(--site-text-primary);
+    font-size: 0.82rem;
+    font-weight: var(--fw-medium);
+  }
+
+  /* The panel's own way out. Escape and a click outside both close it, but
+     neither announces itself, and on touch there is no Escape key at all. It
+     spans the panel's padding so the divider reads as the foot of the panel
+     rather than a line drawn inside it. */
+  .compose-post-meta-footer {
+    display: flex;
+    justify-content: flex-end;
+    margin: -0.1rem -0.85rem -0.85rem;
+    padding: 0.4rem 0.6rem 0.5rem;
+    border-top: 1px solid
+      color-mix(in srgb, var(--site-divider) 60%, transparent);
+  }
+
+  .compose-post-meta-open {
+    z-index: 100;
+  }
+
+  /* Options trigger: its own button past Publish, never a chevron welded to
+     it. A split button reads as one button. */
+  .compose-options-trigger {
+    display: inline-grid;
+    flex-shrink: 0;
+    place-items: center;
+    width: 2.2rem;
+    height: 2.2rem;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--site-text-secondary);
+    cursor: pointer;
+    transition:
+      background-color 0.18s ease,
+      color 0.18s ease;
+  }
+
+  .compose-options-trigger:hover:not(:disabled),
+  .compose-options-trigger-open {
+    background-color: var(--compose-control-bg);
+    color: var(--site-text-primary);
+  }
+
+  .compose-options-trigger:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .compose-options-trigger:focus-visible {
+    outline: 2px solid
+      color-mix(in srgb, var(--site-text-primary) 22%, transparent);
+    outline-offset: 2px;
+  }
+
+  .compose-options-trigger-icon {
+    width: 1.35rem;
+    height: 1.35rem;
+  }
+
+  /* Sits on the field's label row, so it reads as an aside to that label rather
+     than a second thing to do. It only appears once there is a value to undo,
+     which is why it can afford to be this quiet. */
+  .compose-publish-section-action {
+    flex-shrink: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--site-text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.2;
+    text-underline-offset: 2px;
+    cursor: pointer;
+    transition: color 0.16s ease;
   }
 
   .compose-publish-section-action:hover {
     color: var(--site-text-primary);
-    border-color: color-mix(in srgb, var(--site-text-primary) 14%, transparent);
-    background-color: var(--compose-control-bg-strong);
-    transform: translateY(-1px);
+    text-decoration: underline;
   }
 
   .compose-publish-section-action:focus-visible {
     outline: 2px solid
       color-mix(in srgb, var(--site-text-primary) 18%, transparent);
-    outline-offset: 2px;
-  }
-
-  .compose-publish-switch-row {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 0.75rem;
-    cursor: pointer;
-  }
-
-  .compose-publish-switch-row > .input[role="switch"] {
-    flex-shrink: 0;
-    margin-top: 0.1rem;
-  }
-
-  .compose-publish-divider {
-    height: 1px;
-    margin: 0.75rem 0;
-    background-color: color-mix(
-      in srgb,
-      var(--site-text-primary) 8%,
-      transparent
-    );
+    outline-offset: 3px;
+    border-radius: 4px;
   }
 
   /* --- Visibility segmented control --------------------------------------- */
-
-  .compose-publish-chips {
-    display: flex;
-    border-radius: 12px;
-    padding: 4px;
-    background-color: var(--compose-control-bg);
-    box-shadow: inset 0 0 0 1px var(--compose-control-border);
-  }
-
-  .compose-publish-chip {
-    flex: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.3rem;
-    min-height: 2.45rem;
-    padding: 0.46rem 0.5rem;
-    border-radius: 10px;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    white-space: nowrap;
-    color: var(--site-text-secondary);
-    transition:
-      background-color 0.18s ease,
-      box-shadow 0.18s ease,
-      color 0.18s ease;
-  }
-
-  .compose-publish-chip:hover:not(:disabled):not(
-      .compose-publish-chip-selected
-    ) {
-    color: var(--site-text-primary);
-  }
-
-  .compose-publish-chip:disabled {
-    cursor: default;
-    opacity: 0.72;
-  }
-
-  .compose-publish-chip-selected {
-    background-color: var(--compose-paper-bg);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-    color: var(--site-text-primary);
-  }
-
-  .compose-publish-chip-label {
-    font-size: 0.875rem;
-    font-weight: var(--fw-medium);
-    letter-spacing: 0.005em;
-    line-height: 1.28;
-  }
-
-  .compose-publish-chip-hint {
-    color: var(--site-text-secondary);
-    font-size: var(--compose-panel-hint-size);
-    line-height: 1.45;
-    text-wrap: pretty;
-  }
 
   .compose-publish-visibility-icon {
     display: inline-flex;
@@ -7140,90 +7836,46 @@
     background-color: var(--compose-control-border);
   }
 
+  /* One line, no card: a card holding a chip holding the slug was three nested
+     frames for what is a single tap-to-accept. */
   .compose-slug-suggestion {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 0.65rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
     width: 100%;
-    padding: 0.62rem 0.68rem;
-    border: 1px solid var(--compose-control-border);
-    border-radius: 10px;
-    background-color: color-mix(
-      in srgb,
-      var(--compose-control-bg) 72%,
-      var(--compose-paper-bg)
-    );
-    box-shadow:
-      inset 0 1px 0 color-mix(in srgb, var(--compose-paper-bg) 88%, transparent),
-      0 1px 2px rgba(0, 0, 0, 0.03);
+    margin: -0.05rem -0.35rem;
+    padding: 0.3rem 0.35rem;
+    border: none;
+    border-radius: 7px;
+    background: none;
     cursor: pointer;
     text-align: left;
-    transition:
-      background-color 0.16s ease,
-      border-color 0.16s ease,
-      transform 0.16s ease,
-      box-shadow 0.16s ease;
+    transition: background-color 0.16s ease;
   }
 
   .compose-slug-suggestion:hover {
-    border-color: color-mix(in srgb, var(--site-text-primary) 14%, transparent);
-    background-color: color-mix(
-      in srgb,
-      var(--compose-control-bg-strong) 78%,
-      var(--compose-paper-bg)
-    );
-    transform: translateY(-1px);
-    box-shadow:
-      inset 0 1px 0 color-mix(in srgb, var(--compose-paper-bg) 88%, transparent),
-      0 4px 14px rgba(0, 0, 0, 0.045);
+    background-color: var(--compose-control-bg);
   }
 
   .compose-slug-suggestion:focus-visible {
     outline: 2px solid
       color-mix(in srgb, var(--site-text-primary) 18%, transparent);
-    outline-offset: 2px;
-  }
-
-  .compose-slug-suggestion-copy {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.45rem;
+    outline-offset: 1px;
   }
 
   .compose-slug-suggestion-label {
+    flex-shrink: 0;
     color: var(--site-text-secondary);
-    font-size: var(--type-ui-micro);
-    font-weight: var(--fw-medium);
-    letter-spacing: 0.01em;
-    line-height: 1.2;
-  }
-
-  .compose-slug-suggestion-chip {
-    display: inline-flex;
-    align-items: center;
-    min-width: 0;
-    max-width: 100%;
-    padding: 0.25rem 0.48rem;
-    border-radius: 999px;
-    border: 1px solid var(--compose-control-border);
-    background-color: color-mix(
-      in srgb,
-      var(--compose-paper-bg) 92%,
-      var(--compose-control-bg)
-    );
-    box-shadow: inset 0 1px 0
-      color-mix(in srgb, var(--compose-paper-bg) 88%, transparent);
+    font-size: 0.75rem;
+    line-height: 1.3;
   }
 
   .compose-slug-suggestion-value {
-    display: block;
+    min-width: 0;
     color: var(--site-text-primary);
     font-size: var(--type-ui-caption);
     font-weight: var(--fw-medium);
-    line-height: 1.2;
+    line-height: 1.3;
     font-family:
       ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
       "Courier New", monospace;
@@ -7234,101 +7886,61 @@
 
   .compose-slug-suggestion-icon {
     display: inline-flex;
+    flex-shrink: 0;
     align-items: center;
-    justify-content: center;
-    width: 1.65rem;
-    height: 1.65rem;
-    border-radius: 999px;
-    background-color: color-mix(
-      in srgb,
-      var(--compose-paper-bg) 88%,
-      var(--compose-control-bg)
-    );
-    color: color-mix(
-      in srgb,
-      var(--site-text-primary) 72%,
-      var(--site-text-secondary)
-    );
+    margin-left: auto;
+    color: var(--site-text-secondary);
+    transform: translateY(0.1em);
     transition:
       transform 0.16s ease,
-      background-color 0.16s ease,
       color 0.16s ease;
   }
 
   .compose-slug-suggestion:hover .compose-slug-suggestion-icon {
-    transform: translateX(1px);
-    background-color: color-mix(
-      in srgb,
-      var(--compose-paper-bg) 66%,
-      var(--compose-control-bg-strong)
-    );
+    transform: translate(2px, 0.1em);
     color: var(--site-text-primary);
   }
 
-  .compose-publish-slug-field,
-  .compose-publish-date-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.55rem;
-  }
-
+  /* Scaled to the panel it sits in. The old field was 3rem tall with a 14px
+     radius, a gradient, an inset highlight and a drop shadow — more chrome than
+     the dialog's own controls carry. */
   .compose-publish-slug-input-wrap,
   .compose-publish-date-input-wrap {
     display: flex;
     align-items: center;
-    gap: 0.78rem;
-    min-height: 3rem;
-    padding: 0 0.95rem;
+    gap: 0.5rem;
+    min-height: 2.3rem;
+    padding: 0 0.6rem;
     border: 1px solid var(--compose-control-border);
-    border-radius: 14px;
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--compose-paper-bg) 94%, transparent),
-        color-mix(in srgb, var(--compose-control-bg) 16%, transparent)
-      ),
-      color-mix(in srgb, var(--compose-paper-bg) 97%, var(--compose-control-bg));
-    box-shadow:
-      inset 0 1px 0 color-mix(in srgb, var(--compose-paper-bg) 92%, transparent),
-      0 1px 2px rgba(0, 0, 0, 0.02);
+    border-radius: 9px;
+    background-color: color-mix(
+      in srgb,
+      var(--compose-control-bg) 55%,
+      var(--compose-paper-bg)
+    );
     transition:
       border-color 0.16s ease,
-      background-color 0.16s ease,
       box-shadow 0.16s ease;
   }
 
   .compose-publish-slug-input-wrap:focus-within,
   .compose-publish-date-input-wrap:focus-within {
-    border-color: color-mix(in srgb, var(--site-text-primary) 16%, transparent);
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--compose-paper-bg) 96%, transparent),
-        color-mix(in srgb, var(--compose-control-bg-strong) 24%, transparent)
-      ),
-      color-mix(
-        in srgb,
-        var(--compose-paper-bg) 96%,
-        var(--compose-control-bg-strong)
-      );
-    box-shadow:
-      inset 0 1px 0 color-mix(in srgb, var(--compose-paper-bg) 94%, transparent),
-      0 0 0 3px color-mix(in srgb, var(--site-text-primary) 6%, transparent);
+    border-color: color-mix(in srgb, var(--site-text-primary) 22%, transparent);
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--site-text-primary) 7%, transparent);
+  }
+
+  /* The message under the field is red; the field it belongs to should say so
+     too, rather than leaving the reader to pair them up. */
+  .compose-publish-slug-input-wrap:has([aria-invalid="true"]),
+  .compose-publish-date-input-wrap:has([aria-invalid="true"]) {
+    border-color: color-mix(in srgb, var(--destructive) 42%, transparent);
   }
 
   .compose-publish-slug-prefix {
     flex-shrink: 0;
-    min-width: 1.25rem;
-    padding-right: 0.78rem;
-    border-right: 1px solid
-      color-mix(in srgb, var(--site-text-primary) 8%, transparent);
-    color: color-mix(
-      in srgb,
-      var(--site-text-primary) 52%,
-      var(--site-text-secondary)
-    );
-    font-size: var(--compose-panel-control-size);
-    font-weight: var(--fw-medium);
+    color: var(--site-text-secondary);
+    font-size: var(--type-ui-caption);
     line-height: 1;
     font-family:
       ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
@@ -7344,9 +7956,8 @@
     padding: 0;
     box-shadow: none;
     color: var(--site-text-primary);
-    font-size: var(--compose-inline-input-size);
-    font-weight: var(--fw-medium);
-    line-height: 1.35;
+    font-size: var(--type-ui-caption);
+    line-height: 1.4;
     font-family:
       ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
       "Courier New", monospace;
@@ -7356,13 +7967,56 @@
     font-family: inherit;
   }
 
+  /* The browser paints `yyyy-mm-dd` in the value's own colour, so an untouched
+     field reads as a date that was chosen. Only the empty state is dimmed. */
+  .compose-publish-date-input-empty::-webkit-datetime-edit {
+    color: var(--site-text-secondary);
+    opacity: 0.75;
+  }
+
+  /* Replaced by .compose-publish-date-picker, which drives the same picker from
+     a target the height of the field instead of a ~13px UA glyph. */
+  .compose-publish-date-input::-webkit-calendar-picker-indicator {
+    display: none;
+  }
+
+  .compose-publish-date-picker {
+    display: inline-grid;
+    flex-shrink: 0;
+    place-items: center;
+    width: 1.7rem;
+    height: 1.7rem;
+    margin-right: -0.35rem;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--site-text-secondary);
+    cursor: pointer;
+    transition:
+      background-color 0.16s ease,
+      color 0.16s ease;
+  }
+
+  .compose-publish-date-picker:hover {
+    background-color: var(--compose-control-bg-strong);
+    color: var(--site-text-primary);
+  }
+
+  .compose-publish-date-picker:focus-visible {
+    outline: 2px solid
+      color-mix(in srgb, var(--site-text-primary) 22%, transparent);
+    outline-offset: 1px;
+  }
+
+  .compose-publish-date-picker-icon {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+
   .compose-publish-slug-input::placeholder,
   .compose-publish-date-input::placeholder {
-    color: color-mix(
-      in srgb,
-      var(--site-text-secondary) 82%,
-      var(--compose-paper-bg)
-    );
+    color: var(--site-text-secondary);
+    opacity: 0.75;
   }
 
   .compose-publish-slug-input:focus,
@@ -7383,21 +8037,13 @@
     color: var(--destructive);
   }
 
+  /* The URL a slug resolves to is a confirmation, not a control — a bordered
+     box for it made a third framed thing in a panel with two fields. */
   .compose-publish-slug-preview {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0.04rem;
-    padding: 0.48rem 0.62rem;
-    border-radius: 9px;
-    border: 1px solid var(--compose-control-border);
-    background-color: color-mix(
-      in srgb,
-      var(--compose-control-bg) 58%,
-      var(--compose-paper-bg)
-    );
-    font-size: var(--type-ui-caption);
-    line-height: 1.35;
+    margin: 0;
+    color: var(--site-text-secondary);
+    font-size: var(--type-ui-micro);
+    line-height: 1.4;
     word-break: break-word;
     font-family:
       ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
@@ -7405,19 +8051,11 @@
   }
 
   .compose-publish-slug-preview-origin {
-    color: color-mix(
-      in srgb,
-      var(--site-text-secondary) 92%,
-      var(--compose-paper-bg)
-    );
-    font-size: var(--type-ui-micro);
-    font-weight: var(--fw-normal);
+    opacity: 0.75;
   }
 
   .compose-publish-slug-preview-path {
     color: var(--site-text-primary);
-    font-size: var(--type-ui-caption);
-    font-weight: var(--fw-medium);
     overflow-wrap: anywhere;
   }
 
@@ -7516,10 +8154,13 @@
     transform: scale(1.02);
   }
 
+  /* Sized to be looked at, not to leave room for a pinned toolbar. Nothing
+     clips the dock any more, so a tall preview just makes `.compose-scroll`
+     longer. The dvh half keeps it from filling a short window on its own. */
   .compose-attachment-img {
     display: block;
     border-radius: var(--media-radius, 0.5rem);
-    max-height: min(160px, 18dvh);
+    max-height: min(420px, 46dvh);
     object-fit: contain;
   }
 
@@ -7576,7 +8217,7 @@
      cropped from the top (object-fit: cover) instead of shrinking to a sliver. */
   .compose-attachment:only-child .compose-attachment-img {
     max-width: 100%;
-    max-height: min(200px, 22dvh);
+    max-height: min(460px, 52dvh);
     min-width: 48px;
     object-fit: cover;
     object-position: center top;
@@ -7587,9 +8228,9 @@
     aspect-ratio: 4 / 3;
   }
 
-  /* Multiple images: fixed height, cover */
+  /* Multiple images: one shared height so the row reads as a strip, cover */
   .compose-attachment:not(:only-child) .compose-attachment-img {
-    height: 200px;
+    height: min(340px, 40dvh);
     width: auto;
     min-width: 120px;
     object-fit: cover;
@@ -7928,22 +8569,26 @@
     --compose-thread-padding-left: 16px;
     --compose-thread-padding-right: 16px;
     --compose-thread-gap: 12px;
-    --compose-thread-rail-left: calc(var(--compose-thread-padding-left) + 5px);
-    --site-thread-marker-surface: var(--compose-paper-bg);
+    /* Fixed track every rail child sits in and centres its circle inside, so the
+       line's x depends on the track alone and no dot size can pull it off centre.
+       The constant this replaced was half the *feed's* 10px marker and stayed
+       behind when compose dropped to 7px, leaving the line down the dot's edge. */
+    --compose-thread-rail-width: 10px;
+    --compose-thread-rail-left: calc(
+      var(--compose-thread-padding-left) + var(--compose-thread-rail-width) / 2
+    );
     display: flex;
     flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
     position: relative;
   }
 
   .compose-reply-compose-layout {
-    --compose-title-input-size: var(--type-content-subtitle);
+    --compose-title-input-size: calc(var(--type-content-body) * 1.2);
     --compose-title-input-leading: 1.35;
     --compose-quote-input-size: calc(var(--type-content-body) * 1.06);
     --compose-quote-input-leading: 1.42;
     --compose-inline-input-size: var(--type-base);
+    --compose-quote-source-size: calc(var(--compose-inline-input-size) * 0.88);
   }
 
   .compose-reply-compose-layout .compose-quote-wrap {
@@ -7962,8 +8607,9 @@
     width: 1.55rem;
   }
 
+  /* Height comes from the shared four-line floor, which already reads this
+     layout's own leading and type size — only the lead-in changes here. */
   .compose-reply-compose-layout .compose-quote-text {
-    min-height: 6.5rem;
     padding-top: 0.35rem;
   }
 
@@ -7978,28 +8624,68 @@
       left: 1rem;
       width: 1.6rem;
     }
-
-    .compose-reply-compose-layout .compose-quote-text {
-      min-height: 6.5rem;
-      padding-top: 0.35rem;
-    }
   }
 
-  /* Continuous vertical line through the rail */
-  .compose-thread-layout::before {
+  /* The rail is drawn one row at a time rather than as a single strip down the
+     layout, so the two ends can be trimmed: it starts at the first dot and
+     stops at the last post's. Under the last post it used to keep going —
+     that's the tallest row in the layout, so it was a long line pointing at
+     nothing. */
+  /* Distance from a row's top edge to the centre of its dot: where the rail
+     has to start or stop, and where the dot itself has to land. The dot derives
+     its own margin from this pair (see `.compose-thread-dot`) rather than
+     restating it, so resizing the marker cannot drift the line off the dot. */
+  .compose-thread-layout > * {
+    position: relative;
+    --compose-thread-row-padding-top: 0px;
+    --compose-thread-dot-center: calc(0.65rem + 5px);
+  }
+
+  .compose-thread-layout > .compose-editor-row {
+    --compose-thread-row-padding-top: 14px;
+    --compose-thread-dot-center: calc(14px + 1rem + 7px);
+  }
+
+  .compose-thread-compose-layout > .compose-editor-row {
+    --compose-thread-row-padding-top: 4px;
+    --compose-thread-dot-center: calc(4px + 1.05rem + 7px);
+  }
+
+  .compose-thread-layout > *::before {
     content: "";
     position: absolute;
     left: var(--compose-thread-rail-left);
     top: 0;
     bottom: 0;
-    width: 1px;
-    background: linear-gradient(
-      180deg,
-      transparent 0,
-      color-mix(in srgb, var(--site-threadline) 85%, transparent) 8%,
-      color-mix(in srgb, var(--site-threadline) 55%, transparent) 100%
+    width: var(--site-thread-rail-line-width);
+    margin-left: calc(var(--site-thread-rail-line-width) / -2);
+    border-radius: 1px;
+    /* Matched to the weight of the reading rail's gradient rather than its
+       implementation. That one runs 85% → 55% down its length, so ~70% flat
+       reads at the same strength here. It can't literally share the gradient:
+       this rail is drawn per row so both ends can be trimmed, and a per-row
+       gradient would fade in once per post instead of once per thread. */
+    background-color: color-mix(
+      in srgb,
+      var(--site-threadline) 70%,
+      transparent
     );
-    z-index: 0;
+  }
+
+  .compose-thread-layout > :first-child::before {
+    top: var(--compose-thread-dot-center);
+  }
+
+  /* The last post ends the rail. `.compose-thread-add-row` sits below it and is
+     a placeholder, not a post, so its dashed dot is left unconnected. */
+  .compose-thread-layout
+    > .compose-editor-row:not(:has(~ .compose-editor-row))::before {
+    bottom: auto;
+    height: var(--compose-thread-dot-center);
+  }
+
+  .compose-thread-layout > .compose-thread-add-row::before {
+    display: none;
   }
 
   /* Row containing dot + reply context */
@@ -8013,152 +8699,72 @@
 
   /* Row containing dot + editor */
   .compose-editor-row {
+    /* The rail already indents this row from outside the editor, so nothing
+       inside it adds a gutter of its own. */
+    --compose-gutter: 0px;
+
     display: flex;
     align-items: flex-start;
     gap: var(--compose-thread-gap);
     padding-right: var(--compose-thread-padding-right);
     padding-left: var(--compose-thread-padding-left);
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
+    padding-top: 4px;
+    padding-bottom: 4px;
   }
 
+  /* `flex: 1` here is horizontal — it claims the width left by the rail dot.
+     The row's height comes from the editor's own content; nothing in this
+     chain clips or scrolls, that is `.compose-scroll`'s job. */
   .compose-editor-row > jant-compose-editor {
     flex: 1;
-    min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    align-self: stretch;
-    overflow: hidden;
     position: relative;
   }
 
-  /* Reduce editor body left padding — the thread rail already provides indent */
-  .compose-editor-row .compose-body {
-    padding-left: 0;
-  }
-
   .compose-editor-row .compose-attachments-dock {
-    flex: 0 1 auto;
-    min-height: 0;
-    max-height: min(240px, 34dvh);
-    overflow-y: auto;
-    padding-inline: 0;
+    padding-inline-end: 0;
     background: transparent;
   }
 
-  .compose-reply-compose-layout .compose-editor-row .compose-attachments-dock {
-    --compose-reply-attachment-width: 96px;
-    --compose-reply-attachment-height: 72px;
-
-    max-height: min(116px, 18dvh);
-    padding-block: 4px 2px;
-  }
-
-  .compose-reply-compose-layout .compose-editor-row .compose-attachments {
-    gap: 6px;
-    padding-block: 0;
-  }
-
-  .compose-reply-compose-layout .compose-editor-row .compose-attachment {
-    gap: 2px;
-    max-width: none;
-  }
-
-  .compose-reply-compose-layout
-    .compose-editor-row
-    .compose-attachment:has(.compose-attachment-preview-fallback) {
-    width: var(--compose-reply-attachment-width);
-  }
-
-  .compose-reply-compose-layout
-    .compose-editor-row
-    .compose-attachment:only-child
-    .compose-attachment-img,
-  .compose-reply-compose-layout
-    .compose-editor-row
-    .compose-attachment:not(:only-child)
-    .compose-attachment-img {
-    width: var(--compose-reply-attachment-width);
-    height: var(--compose-reply-attachment-height);
-    min-width: 0;
-    max-width: var(--compose-reply-attachment-width);
-    max-height: var(--compose-reply-attachment-height);
-    object-fit: cover;
-    object-position: center;
-  }
-
-  .compose-reply-compose-layout
-    .compose-editor-row
-    .compose-attachment-preview-fallback,
-  .compose-reply-compose-layout
-    .compose-editor-row
-    .compose-attachment-processing {
-    width: var(--compose-reply-attachment-width);
-    height: var(--compose-reply-attachment-height);
-    aspect-ratio: auto;
-  }
-
-  .compose-reply-compose-layout
-    .compose-editor-row
-    .compose-attachment-preview-fallback
-    svg {
-    width: 28px;
-    height: 28px;
-  }
-
-  .compose-reply-compose-layout
-    .compose-editor-row
-    .compose-attachment-file-card,
-  .compose-reply-compose-layout
-    .compose-editor-row
-    .compose-attachment:not(:only-child)
-    .compose-attachment-file-card {
-    width: 112px;
-    height: var(--compose-reply-attachment-height);
-    gap: 4px;
-    padding: 8px 10px;
-  }
-
-  .compose-reply-compose-layout .compose-editor-row .compose-attachment-alt {
-    padding: 1px 3px;
-    font-size: var(--type-ui-micro);
-    line-height: 1.2;
-  }
-
-  .compose-reply-compose-layout .compose-editor-row .compose-attachment-remove {
-    top: 4px;
-    right: 4px;
-    width: 20px;
-    height: 20px;
-  }
-
-  /* Dot marker for thread positions */
+  /* Dot marker for thread positions. Sits above the rail so it reads as a joint
+     in the line, and takes its offset from the row's declared dot centre so the
+     two ends of the rail always meet it. The element is the full rail track and
+     only centres the circle inside it, which is what keeps the line through the
+     dot's middle no matter how the marker is resized. */
   .compose-thread-dot {
-    width: var(--site-thread-marker-size);
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: center;
+    width: var(--compose-thread-rail-width);
     height: var(--site-thread-marker-size);
-    margin-top: 0.65rem;
-    border-radius: 50%;
-    border: var(--site-thread-marker-border-width) solid
-      var(--site-thread-marker-surface);
-    background-color: var(--site-threadline);
+    margin-top: calc(
+      var(--compose-thread-dot-center) - var(--compose-thread-row-padding-top) -
+        var(--site-thread-marker-size) / 2
+    );
     flex-shrink: 0;
     align-self: flex-start;
-    box-shadow: 0 0 0 var(--site-thread-marker-ring-width)
-      var(--site-thread-dot-ring);
-    z-index: 1;
   }
 
-  .compose-editor-row .compose-thread-dot {
-    margin-top: 1rem;
-    margin-left: calc(
-      (var(--site-thread-marker-size) - var(--site-thread-marker-hero-size)) / 2
-    );
+  .compose-thread-dot::before {
+    content: "";
+    width: var(--site-thread-marker-size);
+    height: var(--site-thread-marker-size);
+    border-radius: 50%;
+    background-color: var(--site-threadline);
+    box-shadow: 0 0 0 var(--site-thread-marker-gap)
+      var(--site-thread-marker-surface);
+    transition: background-color 0.15s ease;
   }
 
-  /* In thread compose mode, dot aligns with the post header row */
-  .compose-thread-compose-layout .compose-editor-row .compose-thread-dot {
-    margin-top: 1.05rem;
+  /* Every post in a thread is equally new, so accenting all of them says nothing
+     — it just makes the rail loud. The accent marks where you are on the chain
+     instead: the one post holding the cursor. The reply context above stays on
+     the line's own colour. */
+  .compose-editor-row.is-current .compose-thread-dot::before {
+    background-color: var(--site-thread-marker-current);
   }
 
   .compose-reply-context {
@@ -8168,12 +8774,15 @@
     overflow: hidden;
     position: relative;
     padding: 0.08rem 0 0.18rem;
-    transition: max-height 0.3s ease;
   }
 
+  /* "Show more" means show it: expanding hands the post its full height rather
+     than a taller box with a second scrollbar in it. That inner scrollbar is
+     what made the parent's pictures thumbnails — there was never room for one
+     at full size. Length is the toggle's job now, not the preview's. */
   .compose-reply-context.expanded {
-    max-height: min(400px, 35dvh);
-    overflow-y: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .compose-reply-context-body {
@@ -8193,7 +8802,9 @@
   /*
    * Reply context clones feed/detail card internals into a much narrower shell.
    * Scale headings to the thread context ladder instead of the original
-   * page/card layout.
+   * page/card layout. Deliberately *not* shared with the translation context,
+   * which renders the original at its normal `prose` scale — there the
+   * structure is part of what is being translated.
    */
   .compose-reply-context-body
     :is(.post-detail-title, .feed-note-title, .feed-link-title),
@@ -8205,12 +8816,12 @@
     margin-bottom: 0.18rem;
   }
 
-  .compose-reply-context-body .prose,
-  .compose-reply-context-body .e-content {
-    font-size: inherit;
-  }
-
-  .compose-reply-context-body .feed-quote {
+  /* `.feed-quote-content` is listed explicitly: it used to be caught by
+     `.e-content`, which a quote's `<div>` no longer carries — the entry's
+     content is the commentary, and the quotation is the h-cite's `p-content`.
+     Without it the quote would out-size the panel it is embedded in. */
+  .compose-reply-context-body
+    :is(.prose, .e-content, .feed-quote, .feed-quote-content) {
     font-size: inherit;
   }
 
@@ -8228,32 +8839,31 @@
     background-color: transparent;
   }
 
+  /* The parent reads at the same scale as the reply being written — the same
+     ceiling as `.compose-attachment-img`, the same radius token — so the two
+     halves of the exchange look like the same material. This is the only size
+     rule for pictures in the context: it covers both the ones inside the post's
+     own HTML and the media strip below it, which sits in here too. */
   .compose-reply-context-body img,
   .compose-reply-context-body video {
     width: auto !important;
     height: auto !important;
-    max-height: 120px;
-    border-radius: 6px;
+    max-height: min(420px, 46dvh);
+    border-radius: var(--media-radius, 0.5rem);
     object-fit: contain;
     background-image: none !important;
   }
 
   .compose-reply-context-media {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
-    margin-top: 6px;
+    margin-top: 8px;
   }
 
   .compose-reply-context-media-link {
     display: block;
     cursor: pointer;
-  }
-
-  .compose-reply-context-media-img {
-    max-height: 80px;
-    border-radius: 6px;
-    object-fit: contain;
   }
 
   .compose-reply-fade {
@@ -8273,7 +8883,8 @@
     padding-top: 4px;
     padding-right: var(--compose-thread-padding-right);
     padding-left: calc(
-      var(--compose-thread-padding-left) + var(--compose-thread-gap) + 10px
+      var(--compose-thread-padding-left) + var(--compose-thread-gap) +
+        var(--compose-thread-rail-width)
     );
     font-size: var(--type-thread-context-meta);
     color: var(--site-text-secondary);
@@ -8291,6 +8902,224 @@
 
   .compose-reply-toggle:hover {
     color: var(--site-text-primary);
+  }
+
+  /* --- Translation context in compose dialog ----------------------------- */
+
+  /* The original is a different post, not the one above this one on a chain,
+     so it gets no thread rail — every other direct child of the layout does. */
+  .compose-thread-layout > .compose-translation-context::before {
+    display: none;
+  }
+
+  .compose-translation-context {
+    /* Thread mode hands every row its own gutter through those variables;
+       the single-post composer has no thread layout around it, so the
+       fallback matches what the format selector is inset by. */
+    margin: 0.6rem var(--compose-thread-padding-right, 16px) 0.15rem
+      var(--compose-thread-padding-left, 16px);
+  }
+
+  /* The original, rendered by the server as its own page renders it, inside a
+     frame the composer owns. Everything here is about making a page-scale
+     rendering behave as a panel: it must not set the composer's width, and it
+     must not out-shout the editor below it.
+     An outline and no fill: the border is load-bearing — it is what says the
+     text scrolls and where it stops — but a tint on top of that would be a
+     second signal for the same thing, in a composer that already stacks a
+     quote box and a code block inside the editor below. */
+  .compose-translation-original {
+    max-height: min(10rem, 34dvh);
+    padding: 0.15rem 0.9rem 0.35rem;
+    border: 1px solid color-mix(in srgb, var(--site-divider) 60%, transparent);
+    border-radius: 0.9rem;
+    overflow-y: auto;
+    /* Belt and braces with the child rules below: a page-width table or an
+       unbroken URL must scroll or wrap inside this frame, never widen the
+       dialog. */
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--site-divider) 90%, transparent)
+      transparent;
+  }
+
+  .compose-translation-original:focus-visible {
+    outline: 2px solid
+      color-mix(in srgb, var(--site-text-primary) 32%, transparent);
+    outline-offset: 2px;
+  }
+
+  /* The whole rendering, a size down, so the reference does not out-shout the
+     post being written.
+     `zoom` rather than the type tokens, for two reasons. It scales spacing and
+     rules along with the text, which is what "the page, smaller" means — type
+     alone leaves page-scale margins around shrunken words. And
+     `--type-content-scale` cannot do this from here anyway: `:root`
+     substitutes it into `--type-content-body` and friends *where those are
+     declared*, so descendants inherit resolved lengths, and lowering the scale
+     downstream changes nothing. Restating each derived token here works, but
+     copies the root's formulas into a second place to drift from.
+     Where `zoom` is unsupported the preview simply renders at page scale —
+     larger than intended, still correct. */
+  .compose-translation-preview {
+    --layout-content-width: 100%;
+
+    zoom: 0.9;
+    min-width: 0;
+    /* Long unbroken strings — URLs, IDs, CJK-free code — are the usual cause of
+       a preview that scrolls sideways when the window narrows. */
+    overflow-wrap: anywhere;
+  }
+
+  /* The post markup expects to be the page: it opens with the page's own top
+     padding and reserves a sidenote gutter. Neither applies in a panel. */
+  .compose-translation-preview article {
+    padding: 0.55rem 0 0.2rem !important;
+  }
+
+  /* `preset.css` sizes a post's blocks to the page's *reading column*, three
+     different ways: `--layout-content-width` for most of them, a hardcoded
+     `min(80%, 45rem)` for the title (Tufte's narrower title measure), and a
+     hardcoded `min(100%, 35rem)` for all of them under a 1024px **viewport**
+     media query. All three are about the page. In a panel the column is the
+     panel, at every window size — a viewport query knows nothing about how
+     wide this frame happens to be.
+     The list mirrors the one in `preset.css`; if that grows, this has to.
+     `!important` because those rules sit after `preset.css` closes its
+     `@layer components`, and an unlayered declaration outranks anything
+     layered whatever its specificity — an `!important` one does not. */
+  .compose-translation-preview
+    :is(
+      .post-detail-title,
+      .post-detail-body,
+      .post-body-summary,
+      .feed-note-title,
+      .feed-link-title,
+      .feed-quote,
+      .feed-quote-attribution,
+      .feed-quote-commentary,
+      .feed-link-domain,
+      .feed-continue-link,
+      [data-post-body],
+      [data-post-meta],
+      [data-post-end]
+    ) {
+    width: 100% !important;
+  }
+
+  /* Same story, different property: the media block floors this wrapper at
+     35rem so a gallery never sits narrower than the page's column. In a panel
+     that floor can exceed the frame, and `overflow-x: hidden` would clip the
+     overflow rather than let it scroll. */
+  .compose-translation-preview .post-attached-group {
+    min-width: 0 !important;
+    max-width: 100%;
+  }
+
+  /* A post's own title is set at `--type-content-display` — the size of a
+     banner for the page you are on. Here the post is not the page; it is an
+     item shown inside one, which is what `--feed-note-title-size` is already
+     the size for. Borrowing it keeps the title a title without letting it
+     tower over the body, and keeps tracking the body scale rather than
+     freezing at whatever the zoom happens to be. Notes and Links share the
+     class, so one rule covers both; Quotes have no title. */
+  .compose-translation-preview .post-detail-title {
+    font-size: var(--feed-note-title-size);
+    line-height: var(--feed-note-title-leading);
+  }
+
+  .compose-translation-preview > :first-child > :first-child {
+    margin-top: 0;
+  }
+
+  /* Wide blocks scroll on their own rather than pushing the frame open. */
+  .compose-translation-preview :is(pre, table) {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .compose-translation-preview :is(img, video, iframe, svg) {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* A page-scale picture inside a 15rem frame is just a scroll tax. */
+  .compose-translation-preview :is(img, video) {
+    max-height: min(180px, 24dvh);
+    object-fit: contain;
+  }
+
+  /* Shown only when the rendering could not be fetched — the post still needs
+     a name and a way in. */
+  .compose-translation-fallback {
+    margin: 0;
+    padding: 0.55rem 0.9rem;
+    border: 1px solid color-mix(in srgb, var(--site-divider) 60%, transparent);
+    border-radius: 0.9rem;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-meta);
+    color: var(--site-text-secondary);
+    text-wrap: pretty;
+  }
+
+  /* The seam: what is above, turned into what is written below. It used to sit
+     on a hairline; the space around it does the same job with one less line on
+     screen, so long as there is enough of it — hence the padding, which is the
+     whole separator now. */
+  .compose-translation-seam {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.85rem 0.15rem 0.7rem;
+  }
+
+  .compose-translation-seam-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-caption);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.03em;
+    color: color-mix(in srgb, var(--site-text-secondary) 76%, transparent);
+    text-wrap: pretty;
+  }
+
+  /* Reads as one centred phrase — "↓ Translating into English · Hide" — the
+     same shape the reply context uses for "Aug 3 · Show more", so folding the
+     original costs no row and no box of its own. */
+  .compose-translation-seam-dot {
+    margin: 0 0.4rem;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-caption);
+    color: color-mix(in srgb, var(--site-text-secondary) 50%, transparent);
+  }
+
+  .compose-translation-seam-toggle {
+    padding: 0;
+    border: none;
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-caption);
+    font-weight: var(--fw-semibold);
+    letter-spacing: 0.03em;
+    color: color-mix(in srgb, var(--site-text-secondary) 76%, transparent);
+    cursor: pointer;
+  }
+
+  .compose-translation-seam-toggle:hover,
+  .compose-translation-seam-toggle:focus-visible {
+    color: var(--site-text-primary);
+  }
+
+  .compose-translation-seam-icon {
+    flex: 0 0 auto;
+    width: 0.82rem;
+    height: 0.82rem;
+    opacity: 0.75;
   }
 
   @media (max-width: 760px), (hover: none) and (pointer: coarse) {
@@ -8338,7 +9167,8 @@
       max-width: min(19.5rem, calc(100vw - 1rem));
     }
 
-    .post-menu-panel:has(.post-menu-collection-picker) {
+    .post-menu-panel:has(.post-menu-collection-picker),
+    .post-menu-panel:has(.post-menu-language-panel) {
       width: min(20rem, calc(100vw - 1rem));
       min-width: min(20rem, calc(100vw - 1rem));
       max-width: min(21rem, calc(100vw - 1rem));
@@ -8360,6 +9190,12 @@
       min-height: 3.25rem;
     }
 
+    /* Grows with the rows around it, which the rule above just made taller. */
+    .post-menu-panel .post-menu-row .post-menu-row-action {
+      min-height: 2.75rem;
+      padding: 0 0.75rem;
+    }
+
     .post-menu-item-icon,
     .post-menu-item-trailing,
     .post-menu-picker-icon,
@@ -8373,14 +9209,46 @@
       padding: 0.78rem 0.9rem;
     }
 
-    .compose-collection-trigger {
-      min-height: 2.65rem;
-      padding-right: 0.82rem;
+    /* Touch keeps the roomier set: the reference's 36px box is tuned for a
+       cursor, and a thumb needs the millimetres back. Width still comes from
+       the word — only the box around it grows. */
+    .compose-publish-main {
+      min-height: 2.8em;
+      padding-inline: 22px;
     }
 
-    .compose-collection-trigger-icon {
-      width: 1.75rem;
-      height: 1.75rem;
+    .compose-options-trigger {
+      width: 2.5rem;
+      height: 2.5rem;
+    }
+
+    .compose-collection-select {
+      --compose-collection-pad-icon: 0.68rem;
+      --compose-collection-pad-label: 0.85rem;
+    }
+
+    .compose-collection-trigger {
+      min-height: 2.5rem;
+    }
+
+    .compose-language-trigger {
+      min-height: 2.5rem;
+      padding-inline: 0.8rem;
+    }
+
+    .compose-language-trigger-bare {
+      width: 2.5rem;
+      padding-inline: 0;
+    }
+
+    .compose-language-popover {
+      min-width: min(16rem, calc(100vw - 1rem));
+      max-width: min(20rem, calc(100vw - 1rem));
+      padding: 0.62rem 0.68rem 0.58rem;
+    }
+
+    .compose-language-popover .compose-sheet-row {
+      padding: 0.66rem 0.6rem;
     }
 
     .compose-collection-select [data-popover] {
@@ -8388,13 +9256,24 @@
       max-width: min(20rem, calc(100vw - 1rem));
     }
 
+    .compose-collection-search-icon {
+      width: 1.15rem;
+      height: 1.15rem;
+    }
+
+    .compose-collection-options {
+      max-height: 15rem;
+    }
+
     .compose-collection-popover {
       padding: 0.62rem 0.68rem 0.58rem;
     }
 
     .compose-collection-search-shell {
+      gap: 0.52rem;
       min-height: 3rem;
       padding: 0 1rem;
+      border-radius: 0.92rem;
     }
 
     .compose-collection-options {
@@ -8413,12 +9292,20 @@
       height: 1.5rem;
     }
 
-    .compose-thread-layout {
-      padding-top: 0.75rem;
+    .compose-collection-add-action {
+      gap: 0.82rem;
+      min-height: 3rem;
+      padding: 0 0.92rem;
+      border-radius: 1rem;
     }
 
-    .compose-thread-layout::before {
-      top: 0.75rem;
+    .compose-collection-footer {
+      margin-top: 0.35rem;
+      padding: 0.35rem 0.22rem 0.12rem;
+    }
+
+    .compose-thread-layout {
+      padding-top: 0.75rem;
     }
 
     .compose-reply-context {
@@ -8441,35 +9328,14 @@
     }
   }
 
-  /* --- Thread compose layout (multi-post, scrollable) --------------------- */
+  /* --- Thread compose layout (multi-post) --------------------------------- */
 
-  /* Scrollable variant for composing a new thread (vs reply thread which is
-     fixed-height). Each editor item grows naturally; the whole layout scrolls. */
-  .compose-thread-compose-layout {
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
+  /* `.compose-thread-compose-layout` carries no layout rules of its own: the
+     grow-naturally-and-scroll-as-one behaviour it used to opt into is now what
+     every mode does, under `.compose-scroll`. It survives as a hook for the
+     rail geometry above.
 
-  .compose-thread-compose-layout .compose-editor-row {
-    flex: none;
-    overflow: visible;
-    align-items: flex-start;
-    padding-top: 4px;
-    padding-bottom: 4px;
-  }
-
-  .compose-thread-compose-layout .compose-editor-row > jant-compose-editor {
-    overflow: visible;
-    min-width: 0;
-  }
-
-  .compose-thread-compose-layout .compose-body {
-    flex: none;
-    overflow-y: visible;
-    min-height: 72px;
-  }
-
-  /* Focused thread post gets a subtle left accent. Use an inset box-shadow, not
+     Focused thread post gets a subtle left accent. Use an inset box-shadow, not
      a border: a border adds 2px of layout width only while focused, so switching
      focus between thread posts shifted each one sideways ("jitter"). box-shadow
      paints in the same spot without affecting layout. */
@@ -8477,7 +9343,8 @@
     box-shadow: inset 2px 0 0 transparent;
   }
 
-  /* "Add to thread" row inside thread compose layout */
+  /* "Add to thread" on the rail — thread compose, and a reply before it has
+     grown a second post. */
   .compose-thread-add-row {
     display: flex;
     align-items: center;
@@ -8488,92 +9355,63 @@
     padding-bottom: 10px;
   }
 
+  /* Fills the rail track exactly, so it lands on the same centre line as the
+     post dots without any offset of its own. */
   .compose-thread-add-dot {
-    width: 10px;
-    height: 10px;
+    width: var(--compose-thread-rail-width);
+    height: var(--compose-thread-rail-width);
     border-radius: 50%;
     border: 1.5px dashed
       color-mix(in srgb, var(--site-threadline) 60%, transparent);
     flex-shrink: 0;
     margin-top: 1px;
-    margin-left: calc(
-      (var(--site-thread-marker-hero-size) - var(--site-thread-marker-size)) / 2
-    );
   }
 
-  .compose-thread-add-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--type-ui-caption);
-    font-family: var(--font-ui);
-    color: var(--site-text-secondary);
-    padding: 4px 12px 4px 9px;
-    border-radius: 20px;
-    border: 1.5px dashed
-      color-mix(in srgb, var(--site-threadline) 70%, transparent);
-    background: transparent;
-    cursor: pointer;
-    transition:
-      color 0.15s ease,
-      background-color 0.15s ease,
-      border-color 0.15s ease;
-  }
-
-  .compose-thread-compose-layout .compose-thread-add-btn {
-    margin-inline-start: -8px;
-  }
-
-  .compose-thread-add-btn:hover:not(:disabled) {
-    color: var(--site-text-primary);
-    background-color: var(--compose-control-bg);
-    border-color: var(--site-threadline);
-    border-style: solid;
-  }
-
-  .compose-thread-add-btn:disabled,
-  .compose-add-thread-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  /* "Add to thread" trigger below single-post editor */
+  /* "Add to thread" trigger with no rail under it — a single post, which has
+     no next slot to point at yet. */
   .compose-add-thread-trigger {
-    padding: 1px 10px 4px;
+    padding: 1px 10px 4px var(--compose-gutter);
     display: flex;
     align-items: center;
   }
 
   @media (min-width: 700px) {
     .compose-add-thread-trigger {
-      padding-inline: 16px;
+      padding-inline: var(--compose-gutter) 16px;
     }
   }
 
-  .compose-add-thread-btn {
+  /* No glyph of its own: on the rail the dashed dot already says "next slot",
+     and on a single post the row's position says it. The label is all that is
+     left, so it sits at the row's own quiet weight — and hangs back by its own
+     side padding so the label, not the hover chip, starts on the text column. */
+  .compose-thread-add-btn {
+    --compose-add-hang: 8px;
+
     display: inline-flex;
     align-items: center;
-    gap: 6px;
     font-size: var(--type-ui-caption);
     font-family: var(--font-ui);
     color: var(--site-text-secondary);
-    padding: 4px 12px 4px 9px;
-    border-radius: 20px;
-    border: 1.5px dashed
-      color-mix(in srgb, var(--site-threadline) 70%, transparent);
+    padding: 5px var(--compose-add-hang);
+    margin-inline-start: calc(-1 * var(--compose-add-hang));
+    border-radius: 9px;
+    border: none;
     background: transparent;
     cursor: pointer;
     transition:
       color 0.15s ease,
-      background-color 0.15s ease,
-      border-color 0.15s ease;
+      background-color 0.15s ease;
   }
 
-  .compose-add-thread-btn:hover:not(:disabled) {
+  .compose-thread-add-btn:hover:not(:disabled) {
     color: var(--site-text-primary);
     background-color: var(--compose-control-bg);
-    border-color: var(--site-threadline);
-    border-style: solid;
+  }
+
+  .compose-thread-add-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   /* --- Thread post header: format tag switcher + × on right --------------- */
@@ -8581,8 +9419,45 @@
   .compose-thread-post-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 6px 0 4px;
+    /* The format selector will not shrink, so on a narrow screen let the
+       date/permalink pill drop to its own line rather than clip. */
+    flex-wrap: wrap;
+    row-gap: 4px;
+    gap: 8px;
+    /* Left is the shared text column: the switcher hangs back out of it by its
+       own item padding, so it is the label that starts on the edge. Right keeps
+       the tools row's 16px so × and the date pill stay over the tool buttons
+       bracketing the editor from below. */
+    padding: 10px 16px 2px var(--compose-gutter);
+  }
+
+  .compose-editor-row .compose-thread-post-header {
+    padding-block: 6px 4px;
+  }
+
+  /* "1/3" position marker. Identity comes before attribute, so it leads the
+     row; it pairs visually with the thread rail dot to its left. */
+  .compose-post-position {
+    flex-shrink: 0;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--compose-control-bg);
+    color: var(--site-text-secondary);
+    font-size: 0.68rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
+  }
+
+  /* "Editing" — the one thing a compose title ever said that you could not read
+     off the composer itself: this post is already live. New / reply / thread
+     all announce themselves through the parent post, the 2/3 markers and the
+     submit label, so only this case earns a word.
+     It takes the position marker's weight rather than an accent tint: it sits
+     in that marker's slot, and everything else in this row that is not the
+     format selector is deliberately quiet. Only the numerals are reset. */
+  .compose-post-badge {
+    font-variant-numeric: normal;
+    letter-spacing: 0.02em;
   }
 
   /* Reply / edit-reply compose (a .compose-editor-row directly under
@@ -8597,7 +9472,8 @@
     padding-top: 14px;
   }
 
-  .compose-thread-post-header + .compose-body {
+  /* The header now sits above every post, so it owns the gap to the body. */
+  .compose-editor-row .compose-thread-post-header + .compose-body {
     padding-top: 8px;
   }
 
@@ -8605,55 +9481,12 @@
     padding-top: 12px;
   }
 
-  /* Thread format selector: pill-tag style (lighter than the main segmented) */
-  .compose-thread-segmented {
-    background: transparent;
-    box-shadow: none;
-    padding: 0;
-    gap: 4px;
-  }
-
-  .compose-thread-segmented .compose-format-pill {
-    display: none;
-  }
-
-  .compose-thread-segmented .compose-segmented-item {
-    flex: none;
-    font-size: var(--type-ui-caption);
-    padding: 3px 10px;
-    border-radius: 20px;
-    border: 1.5px solid
-      color-mix(in srgb, var(--site-text-secondary) 22%, transparent);
-    letter-spacing: 0.01em;
-    transition:
-      border-color 0.15s ease,
-      color 0.15s ease,
-      background-color 0.15s ease;
-  }
-
-  .compose-thread-segmented
-    .compose-segmented-item:hover:not(.compose-segmented-item-active) {
-    border-color: color-mix(
-      in srgb,
-      var(--site-text-secondary) 50%,
-      transparent
-    );
-    color: var(--site-text-primary);
-    background: transparent;
-  }
-
-  .compose-thread-segmented .compose-segmented-item-active {
-    color: var(--site-text-primary);
-    font-weight: var(--fw-medium);
-    border-color: color-mix(in srgb, var(--site-text-primary) 55%, transparent);
-    background: color-mix(in srgb, var(--site-text-primary) 7%, transparent);
-  }
-
   /* Remove button (×) — hidden by default, revealed on thread post hover/focus */
   .compose-thread-post-remove {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    margin-left: auto;
     width: 28px;
     height: 28px;
     border-radius: 8px;
@@ -8681,11 +9514,6 @@
     opacity: 1;
     background-color: var(--compose-control-bg);
     color: var(--site-text-primary);
-  }
-
-  /* In thread compose, toolbar padding matches thread indent */
-  .compose-thread-compose-layout .compose-tools-row {
-    padding-inline-start: 0;
   }
 
   /* --- Alt text overlay panel (Threads-style, covers entire dialog) ------- */
@@ -8859,9 +9687,16 @@
   }
 
   .compose-draft-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
     font-size: var(--type-ui-caption);
     color: var(--site-text-secondary);
     margin-top: 4px;
+  }
+
+  .compose-draft-format {
+    font-weight: 500;
   }
 
   .compose-draft-more {
@@ -8938,6 +9773,357 @@
 
   body:has(.text-preview-dialog--ssr[open]) {
     overflow: hidden;
+  }
+
+  /* --- Shared post picker ------------------------------------------------- */
+
+  .picker-dialog {
+    margin: 0;
+  }
+
+  .picker-dialog > .picker-dialog-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    width: min(32rem, calc(100vw - 2rem));
+    max-height: min(32rem, calc(100vh - 4rem));
+    outline: none;
+  }
+
+  .picker-dialog-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .picker-dialog-title {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 1.05rem;
+    font-weight: var(--fw-semibold);
+    text-wrap: balance;
+  }
+
+  .picker-dialog-hint {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-meta);
+    line-height: 1.45;
+    text-wrap: pretty;
+    color: var(--site-text-secondary);
+  }
+
+  /* The results scroll, not the dialog: the search field has to stay reachable
+     while the author reads down a long list. */
+  .picker-dialog-results {
+    display: flex;
+    flex-direction: column;
+    min-height: 3rem;
+    max-height: 18rem;
+    overflow-y: auto;
+  }
+
+  .picker-dialog-option {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.55rem 0.65rem;
+    border: none;
+    border-radius: 0.55rem;
+    background: transparent;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 0.9rem;
+    text-align: left;
+    color: var(--site-text-primary);
+  }
+
+  .picker-dialog-option:hover,
+  .picker-dialog-option:focus-visible {
+    outline: none;
+    background: color-mix(in srgb, var(--site-nav-hover-bg) 70%, transparent);
+  }
+
+  .picker-dialog-option-label {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .picker-dialog-option-meta {
+    flex: 0 0 auto;
+    font-size: var(--type-ui-meta);
+    color: var(--site-text-secondary);
+  }
+
+  .picker-dialog-status {
+    margin: 0;
+    padding: 0.55rem 0.65rem;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-meta);
+    line-height: 1.45;
+    text-wrap: pretty;
+    color: var(--site-text-secondary);
+  }
+
+  .picker-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  /* --- Collection editing dialogs ---------------------------------------- */
+  /* One shell for both: a collection and a smart collection are edited in the
+     same kind of dialog, and only the conditions below belong to one of them. */
+
+  /* The panel is styled by `.dialog > *` alone. It used to also carry `.card`,
+     which pads its own header and footer — that is why the title sat indented
+     from every field under it. */
+  .collection-dialog {
+    margin: 0;
+  }
+
+  .collection-dialog > .collection-dialog-panel {
+    width: min(34rem, calc(100vw - 2rem));
+    max-height: calc(100dvh - 4rem);
+    display: flex;
+    flex-direction: column;
+    gap: 1.15rem;
+    outline: none;
+  }
+
+  .collection-dialog-header .collection-dialog-title {
+    margin: 0;
+    font-family: var(--font-heading);
+    font-size: 1.15rem;
+    font-weight: var(--type-heading-weight);
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+
+  .collection-dialog-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1.15rem;
+    overflow-y: auto;
+    /* The focus ring on an edge control is drawn outside its box; without the
+       breathing room the scroll container clips it. */
+    margin-inline: -0.25rem;
+    padding-inline: 0.25rem;
+  }
+
+  .collection-dialog-body .settings-tiptap-editor {
+    min-height: 5rem;
+  }
+
+  .collection-dialog-panel > .collection-dialog-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding-top: 1.15rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .smart-collection-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding-top: 1.15rem;
+    border-top: 1px solid var(--border);
+    /* One line height for the whole section: the label and the remove button
+       centre on the control's first line, so a control that stacks (media)
+       does not drag them down with it. */
+    --smart-condition-line: 2.25rem;
+  }
+
+  .smart-collection-section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .smart-collection-section-title {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-hint);
+    font-weight: var(--fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--site-text-secondary);
+  }
+
+  .smart-collection-section-hint,
+  .collection-dialog-note,
+  .field > .collection-dialog-link-help,
+  .field > .collection-dialog-link-preview,
+  .field > .collection-dialog-link-problem,
+  .collection-quick-link-box > .collection-dialog-link-problem {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-hint);
+    line-height: 1.45;
+    text-wrap: pretty;
+    color: var(--site-text-secondary);
+  }
+
+  .field > .collection-dialog-link-preview {
+    overflow-wrap: anywhere;
+  }
+
+  /* Scoped past `.field > p`, which is muted: a refusal has to read as one. */
+  .field > .collection-dialog-link-problem,
+  .collection-quick-link-box > .collection-dialog-link-problem {
+    color: var(--destructive);
+  }
+
+  .collection-quick-link-box > .collection-dialog-link-problem {
+    padding-top: 0.35rem;
+  }
+
+  /* The live count is the only thing in the dialog that answers "and what does
+     that gather" — it reads as a value, not as another hint. */
+  .smart-collection-count {
+    margin: 0;
+    flex: 0 0 auto;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: var(--muted);
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-hint);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--muted-foreground);
+  }
+
+  .smart-condition-rows {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+
+  .smart-condition-row {
+    display: grid;
+    grid-template-columns: 6rem minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 0.4rem 0.75rem;
+    padding: 0.4rem 0.4rem 0.4rem 0.7rem;
+  }
+
+  .smart-condition-row + .smart-condition-row {
+    border-top: 1px solid var(--border);
+  }
+
+  .smart-condition-label {
+    display: flex;
+    align-items: center;
+    min-height: var(--smart-condition-line);
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-hint);
+    color: var(--site-text-secondary);
+  }
+
+  .smart-condition-control {
+    min-width: 0;
+  }
+
+  .smart-condition-select {
+    max-width: 100%;
+  }
+
+  /* Scoped past BaseCoat's `.input[type=number]`, which is full width. */
+  .smart-condition-control .smart-condition-year {
+    width: 7rem;
+  }
+
+  /* Taller than a `size-8` icon button so it centres on the control beside it. */
+  .smart-condition-remove {
+    height: var(--smart-condition-line);
+    color: var(--site-text-secondary);
+    cursor: pointer;
+  }
+
+  .smart-condition-remove:hover,
+  .smart-condition-remove:focus-visible {
+    color: var(--destructive);
+  }
+
+  .smart-condition-media {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.45rem;
+  }
+
+  .smart-condition-media-kinds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.9rem;
+    padding-bottom: 0.2rem;
+  }
+
+  .smart-condition-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--font-ui);
+    font-size: var(--type-ui-hint);
+    cursor: pointer;
+  }
+
+  .smart-condition-kind input {
+    cursor: pointer;
+  }
+
+  .smart-condition-add {
+    position: relative;
+  }
+
+  /* Full width, under the rows: it reads as the next row, which is what it is. */
+  .smart-condition-add-trigger {
+    width: 100%;
+  }
+
+  .smart-condition-add-trigger[disabled] {
+    cursor: not-allowed;
+  }
+
+  /* The shared menu, anchored to this trigger's left edge and capped so a long
+     list cannot outgrow the scrolling body it opens inside. */
+  .smart-condition-menu {
+    right: auto;
+    left: 0;
+    max-height: 15rem;
+    overflow-y: auto;
+  }
+
+  .smart-collection-display {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .smart-collection-display .field > select {
+    width: 100%;
+  }
+
+  @media (max-width: 30rem) {
+    .smart-condition-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .smart-condition-label {
+      grid-column: 1 / -1;
+      min-height: 0;
+    }
+
+    .smart-collection-display {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 
   /* --- Shared confirm dialog --------------------------------------------- */
@@ -9354,9 +10540,14 @@
     min-height: 0;
   }
 
+  /* The floor is two lines, written as two lines. It is a target to click into
+     on an empty post, not a reserved shape, so it should follow the type
+     instead of a pixel count that goes stale when the leading moves. Every
+     compose text surface shares it: a note's body and the "thoughts" under a
+     link or a quote all open the same way and grow from there. */
   .compose-tiptap-body .tiptap {
     outline: none;
-    min-height: 120px;
+    min-height: calc(var(--type-body-leading) * 2em);
     min-width: 0;
     max-width: 100%;
     overflow-x: auto;
@@ -9370,14 +10561,6 @@
   .compose-reply-compose-layout .compose-tiptap-body .tiptap {
     font-size: var(--type-content-body);
     line-height: var(--type-body-leading);
-  }
-
-  .compose-tiptap-thoughts .tiptap {
-    min-height: 72px;
-  }
-
-  .compose-tiptap-thoughts-quote .tiptap {
-    min-height: 56px;
   }
 
   .compose-tiptap-link .tiptap {
@@ -9440,12 +10623,12 @@
     margin-bottom: 1rem;
   }
 
-  /* In inline-format compose (reply / edit-reply / thread — the editors wrapped
-     in .compose-editor-row), the format header sits right above the body, so the
-     first block's 1.4rem top margin reads as a gap between the format pills and
-     the input. Drop it there so the text hugs the header. Standalone new/edit
-     editors keep their natural lead-in. */
-  .compose-editor-row .compose-tiptap-body .tiptap > :first-child {
+  /* The first block's 1.4rem top margin is a lead-in that only made sense when
+     the body was the first thing in the editor. Every editor now renders a
+     format header above it — and notes a title field too — so it reads as a gap
+     instead. (This used to be scoped to .compose-editor-row, back when
+     standalone new/edit editors did start with the body.) */
+  .compose-tiptap-body .tiptap > :first-child {
     margin-top: 0;
   }
 
@@ -11276,12 +12459,16 @@
       var(--site-page-bg) 88%,
       var(--site-elevated-bg) 12%
     );
+  }
 
-    overflow: visible;
+  /* Scoped to the collapsed state. Unscoped it also outranked
+     `.compose-reply-context.expanded` — same specificity, declared later — so
+     fullscreen's "Show more" expanded a box that was still pinned at 140px. */
+  .compose-fullscreen-thread-layout .compose-reply-context:not(.expanded) {
+    max-height: 140px;
   }
 
   .compose-fullscreen-thread-layout .compose-reply-context {
-    max-height: 140px;
     padding: 0.08rem 0 0.08rem;
   }
 
@@ -11295,12 +12482,7 @@
     color: var(--site-text-secondary);
   }
 
-  .compose-fullscreen-thread-layout .compose-thread-dot {
-    margin-top: 0.6rem;
-  }
-
   .compose-fullscreen-editor-row {
-    overflow: visible;
     padding-top: 1.5rem;
   }
 
@@ -11316,10 +12498,9 @@
     gap: 0.7rem;
   }
 
-  .compose-fullscreen-editor-row .compose-thread-dot {
-    margin-top: 0.95rem;
-  }
-
+  /* Stand-in for a hidden title: reads as the field's own placeholder, and
+     clicking it swaps in the real input. Fullscreen has no toolbar to put the
+     `T` toggle on, so this is the way back to a title from here. */
   .compose-fullscreen-title-placeholder {
     display: block;
     width: 100%;
@@ -11453,7 +12634,12 @@
 
   /* --- Filter bar (single row of BaseCoat selects) ----------------------- */
 
+  /* The bar has two shapes. While the whole thing fits on one line it stays a
+     single row. Once it doesn't, it splits into two groups — see the container
+     query further down. The bar is its own query container, so the split is
+     driven by the width it actually has rather than by the viewport. */
   .archive-filters {
+    container: archive-filters / inline-size;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -11551,6 +12737,17 @@
 
   /* --- View toggle -------------------------------------------------------- */
 
+  .archive-toolbar-toggles {
+    display: flex;
+    /* Side by side when the group has room, stacked when it doesn't. Either
+       way the pair hugs the right edge. */
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
   .archive-view-toggle {
     display: flex;
     align-items: center;
@@ -11581,6 +12778,40 @@
     background: var(--background);
     color: var(--site-text-primary);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+
+  /* --- Split shape: too narrow for one line ------------------------------- */
+
+  /* 39rem is where the full bar — six touch-sized chips, the gap, and both
+     toggle pills — stops fitting on one line. Under it the two halves stop
+     competing for that line and become two groups: chips three-up on the left
+     at their natural width, toggles taking whatever is left on the right. That
+     leftover holds both pills side by side when there's room and stacks them
+     one above the other when there isn't. Without this the chips would be
+     squeezed into a two-per-row column beside a full-height toggle cluster. */
+  @container archive-filters (max-width: 39rem) {
+    .archive-filters-chips {
+      display: grid;
+      grid-template-columns: repeat(3, auto);
+      justify-content: start;
+      flex: 0 0 auto;
+    }
+
+    /* Claim the whole leftover column rather than just the width of the two
+       pills, so the group's own flex-end alignment pins them to the right
+       edge instead of leaving them tucked against the chips. */
+    .archive-toolbar-toggles {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+  }
+
+  /* Narrower than three chips plus one toggle pill — drop the chips to two-up
+     rather than let the toggles overflow the bar. */
+  @container archive-filters (max-width: 19.5rem) {
+    .archive-filters-chips {
+      grid-template-columns: repeat(2, auto);
+    }
   }
 
   @media (max-width: 760px), (hover: none) and (pointer: coarse) {
@@ -11672,11 +12903,25 @@
 
   /* --- Tiles -------------------------------------------------------------- */
 
+  /* The header is a size container so the filter bar's own shape — not the
+     viewport — can decide how much air sits under it. Its inline size is the
+     bar's inline size, so the 39rem split threshold below is the same
+     measurement the bar splits on. */
   .archive-page-header {
+    container: archive-header / inline-size;
     display: flex;
     flex-direction: column;
     gap: 0.95rem;
-    margin-bottom: 1.5rem;
+    margin-bottom: 1.75rem;
+  }
+
+  /* Split into two rows, the bar stops reading as a line and starts reading as
+     a block, and the ragged bottom edge lands closer to the first post than a
+     single row does. Give the block back the air the extra row took. */
+  @container archive-header (max-width: 39rem) {
+    .archive-filters {
+      margin-bottom: 0.5rem;
+    }
   }
 
   .archive-page-meta {
@@ -12133,29 +13378,7 @@
     opacity: 0.72;
   }
 
-  /* --- List view month headers --------------------------------------------- */
-
-  .archive-list-groups {
-    display: flex;
-    flex-direction: column;
-    gap: 2.5rem;
-  }
-
-  .archive-list-month-header {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 0 12px;
-    margin-bottom: 18px;
-    background: linear-gradient(
-      to bottom,
-      var(--site-page-bg) 82%,
-      color-mix(in srgb, var(--site-page-bg) 0%, transparent) 100%
-    );
-  }
+  /* --- List view ------------------------------------------------------------ */
 
   .archive-list-items {
     display: flex;
@@ -12830,12 +14053,7 @@
   @media (max-width: 699px) {
     .archive-page-header {
       gap: 0.8rem;
-      margin-bottom: 1.25rem;
-    }
-
-    .archive-list-month-header {
-      top: 0;
-      padding-top: 8px;
+      margin-bottom: 1.5rem;
     }
 
     .archive-grid-wrapper {
@@ -13072,6 +14290,13 @@
  * actually rendered. Re-apply both `color` and `--tw-prose-body` here to
  * override `.prose`. Tuned a touch lighter than the original to give meta/
  * description copy a clearly-secondary feel next to the collection title.
+ *
+ * `line-height` was losing the same way: both rules declare their own leading
+ * in @layer components and both were rendering at the prose body's 1.7, which
+ * left a description sitting further from its title than the layout intends.
+ * The values below are the ones those rules already ask for. Prose styles the
+ * paragraph itself, not just the wrapper, so the paragraph has to be named
+ * here too or it keeps inheriting nothing and rendering at 1.7.
  */
 .collection-directory-description,
 .collection-page-description {
@@ -13081,6 +14306,16 @@
     transparent
   );
   color: color-mix(in srgb, var(--site-text-secondary) 80%, transparent);
+}
+
+.collection-directory-description,
+.collection-directory-description p {
+  line-height: 1.45;
+}
+
+.collection-page-description,
+.collection-page-description p {
+  line-height: 1.5;
 }
 
 /*

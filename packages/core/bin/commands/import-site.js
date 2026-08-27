@@ -1462,6 +1462,15 @@ function createRemoteTarget(apiUrl, token) {
         toRemotePostPayload(data),
       );
     },
+    async linkTranslation(postId, otherPostId) {
+      return apiCall(
+        "POST",
+        `/api/posts/${postId}/translations`,
+        apiUrl,
+        token,
+        { postId: otherPostId },
+      );
+    },
     async createAlias(path, targetSlug) {
       return apiCall("POST", "/api/custom-urls", apiUrl, token, {
         path,
@@ -1743,6 +1752,13 @@ function getImportedPostStatus(frontMatter) {
 function shouldImportReplyQuietly(rootFrontMatter, replyFrontMatter) {
   if (getImportedPostStatus(replyFrontMatter) !== "published") return false;
 
+  // Exports since quiet_reply became a stored column say so explicitly.
+  if (typeof replyFrontMatter.quiet_reply === "boolean") {
+    return replyFrontMatter.quiet_reply;
+  }
+
+  // Older bundles: a reply published after the root's recorded last activity
+  // can only have gotten there by skipping the bump, so it was quiet.
   const rootLastActivityAt = getImportedRootLastActivityAt(rootFrontMatter);
   const replyPublishedAt = parseImportTimestamp(replyFrontMatter.date);
   return (
@@ -1817,6 +1833,12 @@ function buildPostPayloadFromBundle(bundle, options) {
         : undefined,
     rating:
       typeof frontMatter.rating === "number" ? frontMatter.rating : undefined,
+    // Roots only: replies take the root's language from the service, and a
+    // reply bundle has no language of its own in the export.
+    language:
+      !options.replyToId && typeof frontMatter.language === "string"
+        ? frontMatter.language
+        : undefined,
     quietReply: options.quietReply ? true : undefined,
   };
 
@@ -1954,6 +1976,8 @@ export async function run(argv) {
   const apiUrl = url.replace(/\/$/, "");
   const skipRemoteMedia = values["skip-remote-media"];
   const target = dryRun ? null : createRemoteTarget(apiUrl, token);
+  /** Exported translation-group ID → IDs of the posts created for it. */
+  const translationGroups = new Map();
 
   // 1. Read source — directory or ZIP
   const inputPath = resolve(process.cwd(), values.path);
@@ -2318,6 +2342,18 @@ export async function run(argv) {
       try {
         post = await target.createPost(postData);
         postsCreated++;
+        // Translation groups are rebuilt after every post exists: the group ID
+        // in the export is opaque and its members can appear in any order, so
+        // there is nothing to link to until the whole run is done.
+        const groupKey =
+          typeof rootFm.translation_group === "string"
+            ? rootFm.translation_group.trim()
+            : "";
+        if (groupKey && post?.id) {
+          const members = translationGroups.get(groupKey) ?? [];
+          members.push(post.id);
+          translationGroups.set(groupKey, members);
+        }
         const replyInfo =
           rootBundle.children.length > 0
             ? ` (+${rootBundle.children.length} replies)`
@@ -2476,6 +2512,28 @@ export async function run(argv) {
       }
     }
 
+    // Rebuild translation groups. Each member is linked to the first one, so a
+    // group of N takes N-1 calls and never asks the server to merge two groups
+    // — which it refuses, on purpose.
+    let translationsLinked = 0;
+    for (const [groupKey, members] of translationGroups) {
+      if (members.length < 2) continue;
+      const [anchor, ...rest] = members;
+      for (const memberId of rest) {
+        try {
+          await target.linkTranslation(anchor, memberId);
+          translationsLinked++;
+        } catch (err) {
+          // A clash here means the export itself held two posts in the same
+          // language for one group. Say so and keep going: the posts are
+          // imported either way, they are just not linked.
+          console.warn(
+            `Warning: could not link a translation in group "${groupKey}": ${err.message}`,
+          );
+        }
+      }
+    }
+
     await target?.close();
 
     // 5. Summary
@@ -2484,6 +2542,9 @@ export async function run(argv) {
     console.log(`  Posts created: ${postsCreated}`);
     console.log(`  Replies created: ${repliesCreated}`);
     console.log(`  Media uploaded: ${mediaUploaded}`);
+    if (translationsLinked > 0) {
+      console.log(`  Translations linked: ${translationsLinked}`);
+    }
     if (aliasesCreated > 0) {
       console.log(`  Aliases created: ${aliasesCreated}`);
     }

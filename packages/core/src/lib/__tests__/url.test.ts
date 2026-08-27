@@ -4,11 +4,13 @@ import {
   extractDisplayDomain,
   isFullUrl,
   isSafeAbsoluteUrl,
+  looksLikeAddress,
   normalizePath,
   sanitizeRichTextHref,
   sanitizeUrl,
   stripSitePathPrefix,
   slugify,
+  toInternalPath,
   toSameSitePath,
 } from "../url.js";
 
@@ -275,6 +277,41 @@ describe("slugify", () => {
   it("handles CJK characters with spaces", () => {
     expect(slugify("电影 评论")).toBe("dian-ying-ping-lun");
   });
+
+  it("romanizes Korean titles", () => {
+    expect(slugify("안녕하세요 세계")).toBe("annyeonghaseyo-segye");
+    expect(slugify("개발 일지 3일차")).toBe("gaebal-ilji-3ilcha");
+  });
+
+  it("romanizes kana-only Japanese titles", () => {
+    expect(slugify("カタカナタイトル")).toBe("katakanataitoru");
+    expect(slugify("ハンバーガー")).toBe("hanbaga");
+  });
+
+  it("keeps Latin words in mostly-kana Japanese titles", () => {
+    expect(slugify("React入門ガイド")).toBe("react-gaido");
+  });
+
+  it("returns empty for kanji-heavy Japanese titles instead of garbling them", () => {
+    // Kanji carries the meaning; without a reading dictionary any output
+    // would be gibberish, so callers should fall back to a random ID.
+    expect(slugify("日本語のタイトルです")).toBe("");
+    expect(slugify("東京タワーに行った")).toBe("");
+    expect(slugify("こんにちは世界")).toBe("");
+  });
+
+  it("returns empty for scripts with no usable transliteration", () => {
+    expect(slugify("שלום עולם")).toBe("");
+    expect(slugify("สวัสดีชาวโลก")).toBe("");
+  });
+
+  it("returns empty when most of the title is untransliterable", () => {
+    expect(slugify("שלום world")).toBe("");
+  });
+
+  it("returns empty for emoji-only titles", () => {
+    expect(slugify("🎉🎉")).toBe("");
+  });
 });
 
 describe("stripSitePathPrefix", () => {
@@ -286,5 +323,93 @@ describe("stripSitePathPrefix", () => {
 
   it("rejects paths outside the configured site prefix", () => {
     expect(stripSitePathPrefix("/_assets/client.css", "/blog")).toBe(null);
+  });
+});
+
+describe("looksLikeAddress", () => {
+  it("recognizes what a browser would have produced", () => {
+    expect(looksLikeAddress("/about")).toBe(true);
+    expect(looksLikeAddress("  https://example.com/about  ")).toBe(true);
+  });
+
+  it("leaves search words alone", () => {
+    // The line that keeps a picker's search box a search box: "about" is a
+    // word someone is looking for, not the page /about.
+    expect(looksLikeAddress("about")).toBe(false);
+    expect(looksLikeAddress("coffee notes")).toBe(false);
+    expect(looksLikeAddress("example.com")).toBe(false);
+  });
+});
+
+describe("toInternalPath", () => {
+  const SITE = {
+    siteOrigins: ["https://example.com"],
+    sitePathPrefix: "/blog",
+    languagePrefixes: ["zh-hans", "en"],
+  };
+
+  it("reads a path, a full URL, and a prefixed URL as the same page", () => {
+    expect(toInternalPath("/about", SITE)).toBe("/about");
+    expect(toInternalPath("about", SITE)).toBe("/about");
+    expect(toInternalPath("https://example.com/blog/about", SITE)).toBe(
+      "/about",
+    );
+    expect(toInternalPath("/blog/about", SITE)).toBe("/about");
+    // A typed path without the deployment prefix still means this site.
+    expect(toInternalPath("/about", SITE)).toBe("/about");
+  });
+
+  it("strips a language prefix, because a view is not another page", () => {
+    expect(toInternalPath("/en/about", SITE)).toBe("/about");
+    expect(toInternalPath("https://example.com/blog/zh-hans/about", SITE)).toBe(
+      "/about",
+    );
+    // The prefix alone is that view's home.
+    expect(toInternalPath("/en", SITE)).toBe("/");
+  });
+
+  it("keeps a first segment that only looks like a language", () => {
+    // A single-language site is free to have a post at /en — nothing is
+    // serving a view there.
+    expect(toInternalPath("/en/about", { sitePathPrefix: "" })).toBe(
+      "/en/about",
+    );
+  });
+
+  it("matches any host the site answers on", () => {
+    const origins = {
+      siteOrigins: ["https://example.com", "https://alias.dev"],
+    };
+    expect(toInternalPath("https://alias.dev/about", origins)).toBe("/about");
+    // Scheme and port differ in dev; the host is what decides.
+    expect(toInternalPath("http://example.com:8787/about", origins)).toBe(
+      "/about",
+    );
+  });
+
+  it("refuses everything that is not a page on this site", () => {
+    expect(toInternalPath("https://other.com/about", SITE)).toBeNull();
+    expect(toInternalPath("mailto:hi@example.com", SITE)).toBeNull();
+    expect(toInternalPath("tel:+15551234567", SITE)).toBeNull();
+    expect(toInternalPath("//other.com/about", SITE)).toBeNull();
+    expect(toInternalPath("#section", SITE)).toBeNull();
+    expect(toInternalPath("   ", SITE)).toBeNull();
+    // A full URL inside our host but outside the deployment.
+    expect(
+      toInternalPath("https://example.com/other-app/about", SITE),
+    ).toBeNull();
+  });
+
+  it("drops the query unless the caller is navigating", () => {
+    expect(toInternalPath("/about?ref=x#top", SITE)).toBe("/about");
+    expect(
+      toInternalPath("/about?ref=x#top", { ...SITE, keepQuery: true }),
+    ).toBe("/about?ref=x#top");
+  });
+
+  it("normalizes trailing slashes and relative steps", () => {
+    expect(toInternalPath("/about/", SITE)).toBe("/about");
+    expect(toInternalPath("/collections/../about", SITE)).toBe("/about");
+    expect(toInternalPath("/", SITE)).toBe("/");
   });
 });

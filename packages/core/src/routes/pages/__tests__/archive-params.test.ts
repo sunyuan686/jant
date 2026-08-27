@@ -30,6 +30,12 @@ function setupApp(rssPublishDelaySeconds = 0) {
   return { app, services };
 }
 
+function setupAuthedApp() {
+  const { app, services } = createTestApp({ authenticated: true });
+  app.route("/archive", archiveRoutes);
+  return { app, services };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -141,6 +147,134 @@ describe("archive feed filter params", () => {
   });
 });
 
+describe("archive feed ordering", () => {
+  // The feed belongs to the archive page, so it uses the page's default axis.
+  // Ordering by activity would let a reply to an old Thread reshuffle the
+  // feed window under a fixed rssFeedLimit, and readers key entries by id
+  // anyway — a moved entry is not a re-surfaced one. /latest/feed is where
+  // activity ordering lives.
+  it("orders by publication, not by recent replies", async () => {
+    const { app, services } = setupApp();
+    const oldThread = await services.posts.create({
+      format: "note",
+      title: "Old thread with a new reply",
+      bodyMarkdown: "root from 2019",
+      publishedAt: Date.UTC(2019, 0, 1) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "reply from 2026",
+      replyToId: oldThread.id,
+      publishedAt: Date.UTC(2026, 5, 1) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      title: "Plain newer post",
+      bodyMarkdown: "root from 2025",
+      publishedAt: Date.UTC(2025, 0, 1) / 1000,
+    });
+
+    const xml = await fetchFeed(app, "");
+
+    expect(xml.indexOf("Plain newer post")).toBeLessThan(
+      xml.indexOf("Old thread with a new reply"),
+    );
+  });
+
+  it("honors an explicit sort=updated, quiet replies included", async () => {
+    const { app, services } = setupApp();
+    const oldThread = await services.posts.create({
+      format: "note",
+      title: "Old thread with a new reply",
+      bodyMarkdown: "root from 2019",
+      publishedAt: Date.UTC(2019, 0, 1) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "quiet addition",
+      replyToId: oldThread.id,
+      publishedAt: Date.UTC(2026, 5, 1) / 1000,
+      quietReply: true,
+    });
+    await services.posts.create({
+      format: "note",
+      title: "Plain newer post",
+      bodyMarkdown: "root from 2025",
+      publishedAt: Date.UTC(2025, 0, 1) / 1000,
+    });
+
+    const updated = await fetchFeed(app, "?sort=updated");
+    expect(updated.indexOf("Old thread with a new reply")).toBeLessThan(
+      updated.indexOf("Plain newer post"),
+    );
+
+    // Same URL param, same axis as the page — the default stays chronological.
+    const chronological = await fetchFeed(app, "");
+    expect(chronological.indexOf("Plain newer post")).toBeLessThan(
+      chronological.indexOf("Old thread with a new reply"),
+    );
+  });
+
+  it("scopes a year filter to the axis the feed is sorted on", async () => {
+    const { app, services } = setupApp();
+    const oldThread = await services.posts.create({
+      format: "note",
+      title: "Extended in 2026",
+      bodyMarkdown: "root from 2019",
+      publishedAt: Date.UTC(2019, 0, 1) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "addition",
+      replyToId: oldThread.id,
+      publishedAt: Date.UTC(2026, 5, 1) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      title: "Published in 2025",
+      bodyMarkdown: "root from 2025",
+      publishedAt: Date.UTC(2025, 0, 1) / 1000,
+    });
+
+    const byActivity = await fetchFeed(app, "?sort=updated&year=2026");
+    expect(byActivity).toContain("Extended in 2026");
+    expect(byActivity).not.toContain("Published in 2025");
+
+    const byPublication = await fetchFeed(app, "?year=2025");
+    expect(byPublication).toContain("Published in 2025");
+    expect(byPublication).not.toContain("Extended in 2026");
+  });
+
+  it("keeps the same order after an old thread gains a reply", async () => {
+    const { app, services } = setupApp();
+    const first = await services.posts.create({
+      format: "note",
+      title: "Alpha",
+      bodyMarkdown: "alpha root",
+      publishedAt: Date.UTC(2020, 0, 1) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      title: "Beta",
+      bodyMarkdown: "beta root",
+      publishedAt: Date.UTC(2021, 0, 1) / 1000,
+    });
+
+    const before = await fetchFeed(app, "");
+    const orderBefore = before.indexOf("Beta") < before.indexOf("Alpha");
+
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "late addition",
+      replyToId: first.id,
+      publishedAt: Date.UTC(2026, 0, 1) / 1000,
+    });
+
+    const after = await fetchFeed(app, "");
+    expect(after.indexOf("Beta") < after.indexOf("Alpha")).toBe(orderBefore);
+  });
+});
+
 describe("archive page legacy param redirect", () => {
   it("redirects legacy boolean params to their single-word spelling", async () => {
     const { app } = setupApp();
@@ -170,12 +304,59 @@ describe("archive page legacy param redirect", () => {
     expect(res.headers.get("location")).toBe("/archive?visibility=hidden");
   });
 
+  // `visibility=all` filtered nothing, exactly like an absent parameter — a
+  // second spelling of "nothing selected" that only the parser knew about.
+  it("drops the visibility=all chip state, which selected nothing", async () => {
+    const { app } = setupApp();
+
+    const res = await app.request("/archive?visibility=all");
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe("/archive");
+
+    const withOthers = await app.request("/archive?format=note&visibility=all");
+    expect(withOthers.status).toBe(308);
+    expect(withOthers.headers.get("location")).toBe("/archive?format=note");
+  });
+
   it("drops a legacy param without overriding an explicit new one", async () => {
     const { app } = setupApp();
 
     const res = await app.request("/archive?title=any&hasTitle=0");
     expect(res.status).toBe(308);
     expect(res.headers.get("location")).toBe("/archive?title=any");
+  });
+
+  // `view` was renamed to `layout` so `view` can name the saved-selection
+  // concept. Shared links and bookmarks predate the rename.
+  it("redirects the legacy view param to layout", async () => {
+    const { app } = setupApp();
+
+    const res = await app.request("/archive?view=grid");
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe("/archive?layout=grid");
+  });
+
+  it("keeps layout when a URL carries both spellings", async () => {
+    const { app } = setupApp();
+
+    const res = await app.request("/archive?layout=list&view=grid");
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe("/archive?layout=list");
+  });
+
+  it("drops a view value it cannot render", async () => {
+    const { app } = setupApp();
+
+    const res = await app.request("/archive?view=carousel");
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe("/archive");
+  });
+
+  it("leaves a canonical layout param alone", async () => {
+    const { app } = setupApp();
+
+    const res = await app.request("/archive?layout=grid");
+    expect(res.status).toBe(200);
   });
 });
 
@@ -226,12 +407,449 @@ describe("archive page ordering", () => {
       publishedAt: Date.UTC(2026, 0, 1) / 1000,
     });
 
-    const res = await app.request("/archive?view=list");
+    const res = await app.request("/archive?layout=list");
     expect(res.status).toBe(200);
     const html = await res.text();
 
     expect(html.indexOf("Newer unpinned post")).toBeLessThan(
       html.indexOf("Older pinned post"),
     );
+  });
+});
+
+describe("archive page sort=updated", () => {
+  /**
+   * An old thread that recently gained a reply, plus a younger standalone
+   * thread. The two axes disagree about their order, which is the whole point
+   * of the toggle.
+   */
+  async function seedDivergingThreads(services: {
+    posts: {
+      create: (data: Record<string, unknown>) => Promise<{ id: string }>;
+    };
+  }) {
+    const olderThread = await services.posts.create({
+      format: "note",
+      title: "Growing thread",
+      bodyMarkdown: "root from 2019",
+      publishedAt: Date.UTC(2019, 2, 5) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "reply from 2026",
+      replyToId: olderThread.id,
+      publishedAt: Date.UTC(2026, 7, 1) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      title: "Untouched newer thread",
+      bodyMarkdown: "root from 2025",
+      publishedAt: Date.UTC(2025, 0, 1) / 1000,
+    });
+  }
+
+  it("puts recently extended threads first", async () => {
+    const { app, services } = setupApp();
+    await seedDivergingThreads(services);
+
+    const res = await app.request("/archive?sort=updated");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+
+    expect(html.indexOf("Growing thread")).toBeLessThan(
+      html.indexOf("Untouched newer thread"),
+    );
+  });
+
+  // Month headers are a grid affordance, so the bucketing axis is asserted
+  // through the grid layout rather than the site default.
+  it("buckets months on the same axis it sorts by", async () => {
+    const { app, services } = setupApp();
+    await seedDivergingThreads(services);
+
+    const byPublished = await (
+      await app.request("/archive?layout=grid")
+    ).text();
+    expect(byPublished).toContain("March 2019");
+    expect(byPublished).not.toContain("August 2026");
+
+    const byActivity = await (
+      await app.request("/archive?layout=grid&sort=updated")
+    ).text();
+    expect(byActivity).toContain("August 2026");
+    expect(byActivity).not.toContain("March 2019");
+  });
+
+  it("scopes the year filter to the active axis", async () => {
+    const { app, services } = setupApp();
+    await seedDivergingThreads(services);
+
+    const activityYear = await (
+      await app.request("/archive?sort=updated&year=2026")
+    ).text();
+    expect(activityYear).toContain("Growing thread");
+    expect(activityYear).not.toContain("Untouched newer thread");
+
+    const publishedYear = await (
+      await app.request("/archive?year=2026")
+    ).text();
+    expect(publishedYear).not.toContain("Growing thread");
+  });
+
+  it("keeps the default axis unchanged without the param", async () => {
+    const { app, services } = setupApp();
+    await seedDivergingThreads(services);
+
+    const html = await (await app.request("/archive")).text();
+    expect(html.indexOf("Untouched newer thread")).toBeLessThan(
+      html.indexOf("Growing thread"),
+    );
+  });
+
+  it("distinguishes the updated view in the document title", async () => {
+    const { app, services } = setupApp();
+    await seedDivergingThreads(services);
+
+    const byPublished = await (await app.request("/archive")).text();
+    expect(byPublished).toContain("<title>All posts - ");
+    expect(byPublished).not.toContain("Recently updated");
+
+    const byActivity = await (
+      await app.request("/archive?sort=updated")
+    ).text();
+    expect(byActivity).toContain("<title>All posts - Recently updated - ");
+  });
+
+  it("says how much a filter removed, and stays quiet when none did", async () => {
+    const { app, services } = setupApp();
+    await seedDivergingThreads(services);
+
+    // Two thread roots; asking for threads with replies leaves one of them.
+    const filtered = await (await app.request("/archive?replies=any")).text();
+    expect(filtered).toContain("of 2");
+
+    // Nothing filtered, so there is no baseline worth comparing against.
+    const unfiltered = await (await app.request("/archive")).text();
+    expect(unfiltered).not.toContain("of 2");
+  });
+
+  it("names the active filter in the document title", async () => {
+    const { app, services } = setupApp();
+    await seedDivergingThreads(services);
+
+    const byFormat = await (await app.request("/archive?format=note")).text();
+    expect(byFormat).toContain("<title>Notes - ");
+
+    // Title presence absorbs the format it refines, as the filter chip does.
+    const untitled = await (
+      await app.request("/archive?format=note&title=none")
+    ).text();
+    expect(untitled).toContain("<title>Untitled - ");
+
+    // A tab truncates from the right, so the description stops at two parts.
+    const capped = await (
+      await app.request("/archive?format=note&year=2019&replies=any")
+    ).text();
+    expect(capped).toContain("<title>Notes, 2019 - ");
+  });
+
+  it("ignores an unknown sort value", async () => {
+    const { app, services } = setupApp();
+    await seedDivergingThreads(services);
+
+    const html = await (await app.request("/archive?sort=nonsense")).text();
+    expect(html.indexOf("Untouched newer thread")).toBeLessThan(
+      html.indexOf("Growing thread"),
+    );
+  });
+
+  // The quiet-reply switch promises "won't move the thread to the top of
+  // latest". The archive is not Latest — it is the canonical all-posts view,
+  // and it already shows Hidden-from-Latest content. So its updated sort
+  // reports when the Thread actually changed.
+  it("surfaces quietly extended threads even though Latest does not", async () => {
+    const { app, services } = setupApp();
+    const quietThread = await services.posts.create({
+      format: "note",
+      title: "Quietly extended thread",
+      bodyMarkdown: "root from 2019",
+      publishedAt: Date.UTC(2019, 2, 5) / 1000,
+    });
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "quiet addendum",
+      replyToId: quietThread.id,
+      publishedAt: Date.UTC(2026, 7, 1) / 1000,
+      quietReply: true,
+    });
+    await services.posts.create({
+      format: "note",
+      title: "Untouched newer thread",
+      bodyMarkdown: "root from 2025",
+      publishedAt: Date.UTC(2025, 0, 1) / 1000,
+    });
+
+    const html = await (
+      await app.request("/archive?layout=grid&sort=updated")
+    ).text();
+    expect(html.indexOf("Quietly extended thread")).toBeLessThan(
+      html.indexOf("Untouched newer thread"),
+    );
+    expect(html).toContain("August 2026");
+
+    // Latest still honors the quiet flag.
+    const roots = await services.posts.list({
+      status: "published",
+      excludeReplies: true,
+      excludeLatestHidden: true,
+    });
+    expect(roots[0]?.title).toBe("Untouched newer thread");
+  });
+});
+
+/**
+ * `visibility` is the one archive dimension whose values are not all reachable
+ * by every reader. The rule: `private` is never silently dropped. On the page
+ * the reader's own URL is rewritten so the address bar keeps describing what
+ * rendered; a stored archive path 404s instead (see custom-archive-url.test.ts,
+ * which has no URL to rewrite).
+ */
+describe("archive visibility without a session", () => {
+  async function seedVisibilities(services: {
+    posts: {
+      create: (input: Record<string, unknown>) => Promise<unknown>;
+    };
+  }) {
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "body on the stream",
+      status: "published",
+    });
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "body off the stream",
+      status: "published",
+      visibility: "latest_hidden",
+    });
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "body kept back",
+      status: "published",
+      visibility: "private",
+    });
+  }
+
+  it("filters by Hidden-from-Latest for a signed-out reader", async () => {
+    const { app, services } = setupApp();
+    await seedVisibilities(services);
+
+    const res = await app.request("/archive?visibility=hidden");
+    expect(res.status).toBe(200);
+
+    const html = await res.text();
+    expect(html).toContain("body off the stream");
+    expect(html).not.toContain("body on the stream");
+    expect(html).not.toContain("body kept back");
+  });
+
+  it("strips private from a signed-out reader's URL, keeping the rest", async () => {
+    const { app } = setupApp();
+
+    const res = await app.request("/archive?visibility=private&format=note");
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/archive?format=note");
+  });
+
+  // 302, not 308: the URL moved for this reader at this moment, and has to
+  // keep working once the author signs in.
+  it("uses a temporary redirect, and a permanent one for legacy spellings", async () => {
+    const { app } = setupApp();
+
+    const both = await app.request("/archive?visibility=private&hasTitle=1");
+    expect(both.status).toBe(302);
+    expect(both.headers.get("location")).toBe("/archive?title=any");
+
+    const legacyOnly = await app.request("/archive?hasTitle=1");
+    expect(legacyOnly.status).toBe(308);
+  });
+
+  // The redirect must answer from the param and the session alone. Firing only
+  // when private posts exist would tell any visitor whether this site keeps any.
+  it("redirects identically when the site holds no private posts", async () => {
+    const { app, services } = setupApp();
+    await services.posts.create({
+      format: "note",
+      bodyMarkdown: "the only post here",
+      status: "published",
+    });
+
+    const res = await app.request("/archive?visibility=private");
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/archive");
+  });
+
+  it("leaves the author's own private filter alone", async () => {
+    const { app, services } = setupAuthedApp();
+    await seedVisibilities(services);
+
+    const res = await app.request("/archive?visibility=private");
+    expect(res.status).toBe(200);
+
+    const html = await res.text();
+    expect(html).toContain("body kept back");
+    expect(html).not.toContain("body on the stream");
+  });
+
+  // A feed carries no session, so it cannot serve this selection. The page
+  // withholds the link rather than promising a feed that answers 404.
+  it("offers no feed link while the private filter is active", async () => {
+    const { app, services } = setupAuthedApp();
+    await seedVisibilities(services);
+
+    const filtered = await app.request("/archive?visibility=private");
+    expect(await filtered.text()).not.toContain("/archive/feed");
+
+    const plain = await app.request("/archive");
+    expect(await plain.text()).toContain("/archive/feed");
+  });
+
+  it("carries the visibility selection into the feed", async () => {
+    const { app, services } = setupApp();
+    await seedVisibilities(services);
+
+    const xml = await fetchFeed(app, "?visibility=hidden");
+    expect(xml).toContain("body off the stream");
+    expect(xml).not.toContain("body on the stream");
+  });
+
+  it("404s the feed for a selection it cannot serve", async () => {
+    const { app, services } = setupApp();
+    await seedVisibilities(services);
+
+    const res = await app.request("/archive/feed?visibility=private");
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("archive collection selection", () => {
+  async function seedOneCollectedPost(services: {
+    posts: {
+      create: (input: Record<string, unknown>) => Promise<{ id: string }>;
+    };
+    collections: {
+      create: (input: Record<string, unknown>) => Promise<{ id: string }>;
+      addThread: (collectionId: string, threadId: string) => Promise<unknown>;
+    };
+  }) {
+    const collection = await services.collections.create({
+      slug: "recipes",
+      title: "Recipes",
+    });
+    const collected = await services.posts.create({
+      format: "note",
+      title: "Collected Post",
+      bodyMarkdown: "in the collection",
+      status: "published",
+    });
+    await services.collections.addThread(collection.id, collected.id);
+    await services.posts.create({
+      format: "note",
+      title: "Loose Post",
+      bodyMarkdown: "in no collection",
+      status: "published",
+    });
+  }
+
+  it("filters the page by a collection that exists", async () => {
+    const { app, services } = setupApp();
+    await seedOneCollectedPost(services);
+
+    const res = await app.request("/archive?collection=recipes");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Collected Post");
+    expect(html).not.toContain("Loose Post");
+  });
+
+  // Rendering the whole archive here would answer a question nobody asked,
+  // under the name the reader typed — the failure `visibility=private` was
+  // fixed for. `/collections/{slug}` answers the same question with a 404.
+  it("404s the page for a collection that does not exist", async () => {
+    const { app, services } = setupApp();
+    await seedOneCollectedPost(services);
+
+    const res = await app.request("/archive?collection=nope");
+    expect(res.status).toBe(404);
+  });
+
+  it("404s the feed for a collection that does not exist", async () => {
+    const { app, services } = setupApp();
+    await seedOneCollectedPost(services);
+
+    expect((await app.request("/archive/feed?collection=recipes")).status).toBe(
+      200,
+    );
+    expect((await app.request("/archive/feed?collection=nope")).status).toBe(
+      404,
+    );
+  });
+
+  // The page read a single slug while `/api/public/archive` read a list, so one
+  // spelling meant two things depending on which surface you asked. Both now
+  // read the same vocabulary.
+  it("selects the union of several collections", async () => {
+    const { app, services } = setupApp();
+    const recipes = await services.collections.create({
+      slug: "recipes",
+      title: "Recipes",
+    });
+    const travel = await services.collections.create({
+      slug: "travel",
+      title: "Travel",
+    });
+    const inRecipes = await services.posts.create({
+      format: "note",
+      title: "Recipe Post",
+      bodyMarkdown: "in recipes",
+      status: "published",
+    });
+    const inTravel = await services.posts.create({
+      format: "note",
+      title: "Travel Post",
+      bodyMarkdown: "in travel",
+      status: "published",
+    });
+    await services.posts.create({
+      format: "note",
+      title: "Loose Post",
+      bodyMarkdown: "in no collection",
+      status: "published",
+    });
+    await services.collections.addThread(recipes.id, inRecipes.id);
+    await services.collections.addThread(travel.id, inTravel.id);
+
+    const res = await app.request("/archive?collection=recipes,travel");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Recipe Post");
+    expect(html).toContain("Travel Post");
+    expect(html).not.toContain("Loose Post");
+
+    // Hono decodes a query value as form-urlencoded, so the `+` that separates
+    // slugs in `/collections/{a+b}` arrives here as a space. It is read anyway;
+    // a comma is what gets written back.
+    const plusSpelling = await app.request(
+      "/archive?collection=recipes+travel",
+    );
+    expect(plusSpelling.status).toBe(200);
+    expect(await plusSpelling.text()).toContain("Travel Post");
+  });
+
+  it("404s when only one of several collections is missing", async () => {
+    const { app, services } = setupApp();
+    await seedOneCollectedPost(services);
+
+    const res = await app.request("/archive?collection=recipes,nope");
+    expect(res.status).toBe(404);
   });
 });

@@ -26,17 +26,22 @@ import {
 } from "../sortable-list.js";
 import { showConfirmDialog } from "../confirm.js";
 import { showToast } from "../toast.js";
-import { publicPath } from "../runtime-paths.js";
+import { publicPath, sitePathPrefix } from "../runtime-paths.js";
 import { applySiteHeaderHtml } from "../site-header-fragment.js";
-import { NAVIGATION_SETTINGS_PATH } from "../../lib/settings-paths.js";
-import {
-  getCollectionEditPath,
-  getCollectionPagePath,
-} from "../../lib/collection-paths.js";
+import { getCollectionPagePath } from "../../lib/collection-paths.js";
+import { getIconSvg } from "../../lib/icons.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { getSlugValidationIssue } from "../../lib/slug-format.js";
+import {
+  looksLikeAddress,
+  normalizePath,
+  toInternalPath,
+} from "../../lib/url.js";
 import type { CollectionSubmitDetail } from "./collection-types.js";
 import "./jant-collection-form.js";
+import { openCollectionDialog } from "../collection-dialog-host.js";
 import type {
+  NavAddressResolution,
   NavManagerCollection,
   NavManagerItem,
   NavManagerLabels,
@@ -101,6 +106,7 @@ export class JantNavManager extends LitElement {
     _pageDialogView: { state: true },
     _pageQuery: { state: true },
     _pages: { state: true },
+    _pageAddress: { state: true },
     _pageSearchLoading: { state: true },
     _pageSearchError: { state: true },
     _selectedPageIndex: { state: true },
@@ -148,6 +154,8 @@ export class JantNavManager extends LitElement {
   declare _pageDialogView: PageDialogView;
   declare _pageQuery: string;
   declare _pages: NavManagerPage[];
+  /** What the last pasted address turned out to be, when one was pasted. */
+  declare _pageAddress: NavAddressResolution | null;
   declare _pageSearchLoading: boolean;
   declare _pageSearchError: boolean;
   declare _selectedPageIndex: number;
@@ -253,6 +261,7 @@ export class JantNavManager extends LitElement {
     this._pageDialogView = "picker";
     this._pageQuery = "";
     this._pages = [];
+    this._pageAddress = null;
     this._pageSearchLoading = false;
     this._pageSearchError = false;
     this._selectedPageIndex = 0;
@@ -323,8 +332,16 @@ export class JantNavManager extends LitElement {
         ? this.systemNavItems.find((config) => config.key === item.systemKey)
             ?.label
         : undefined;
+    // `targetTitle` comes back on mutation responses, which carry the raw nav
+    // item rather than the server-rendered `displayLabel` — without it a page
+    // or collection added with no label of its own would render blank until
+    // the next full load.
     const displayLabel =
-      item.label.trim() || systemLabel || item.displayLabel || item.label;
+      item.label.trim() ||
+      systemLabel ||
+      item.displayLabel ||
+      item.targetTitle?.trim() ||
+      item.label;
 
     return { ...item, displayLabel };
   }
@@ -359,6 +376,7 @@ export class JantNavManager extends LitElement {
     this._pageDialogView = "picker";
     this._pageQuery = "";
     this._pages = [];
+    this._pageAddress = null;
     this._pageSearchError = false;
     this._selectedPageIndex = 0;
     this._addingPageId = null;
@@ -387,6 +405,45 @@ export class JantNavManager extends LitElement {
     void this.updateComplete.then(() => trigger?.focus());
   }
 
+  /**
+   * Look up the page at an address the author pasted.
+   *
+   * Searching titles cannot answer someone holding a URL, and the answer is
+   * often a reason rather than a result — a draft, a private page, a page that
+   * is already in the menu.
+   */
+  async #lookUpPageAddress(address: string) {
+    const requestId = ++this.#pageSearchRequestId;
+    const params = new URLSearchParams({ url: address });
+
+    this._pageSearchLoading = true;
+    this._pageSearchError = false;
+    try {
+      const res = await fetch(`/api/nav-items/resolve?${params.toString()}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = (await res.json()) as {
+        resolution?: NavAddressResolution;
+      };
+      if (requestId !== this.#pageSearchRequestId) return;
+
+      this._pages = [];
+      this._pageAddress = json.resolution ?? null;
+      this._selectedPageIndex = 0;
+    } catch {
+      if (requestId === this.#pageSearchRequestId) {
+        this._pages = [];
+        this._pageAddress = null;
+        this._pageSearchError = true;
+      }
+    } finally {
+      if (requestId === this.#pageSearchRequestId) {
+        this._pageSearchLoading = false;
+      }
+    }
+  }
+
   async #loadPageCandidates() {
     const requestId = ++this.#pageSearchRequestId;
     const params = new URLSearchParams({ limit: "20" });
@@ -395,6 +452,7 @@ export class JantNavManager extends LitElement {
 
     this._pageSearchLoading = true;
     this._pageSearchError = false;
+    this._pageAddress = null;
     try {
       const res = await fetch(`/api/nav-items/pages?${params.toString()}`, {
         headers: { Accept: "application/json" },
@@ -430,7 +488,10 @@ export class JantNavManager extends LitElement {
     }
     this.#pageSearchTimer = setTimeout(() => {
       this.#pageSearchTimer = null;
-      void this.#loadPageCandidates();
+      const query = this._pageQuery.trim();
+      void (looksLikeAddress(query)
+        ? this.#lookUpPageAddress(query)
+        : this.#loadPageCandidates());
     }, 200);
   }
 
@@ -753,8 +814,7 @@ export class JantNavManager extends LitElement {
         body: JSON.stringify(submitEvent.detail.data),
       });
       const created = (await res.json().catch(() => null)) as
-        | (CreatedCollection & { error?: string })
-        | null;
+        (CreatedCollection & { error?: string }) | null;
       if (!res.ok || !created?.id || !created.title || !created.slug) {
         throw new Error("Invalid collection response");
       }
@@ -944,7 +1004,9 @@ export class JantNavManager extends LitElement {
 
   async #handleUpdate(item: NavManagerItem) {
     const label = this._editLabel.trim();
-    if (!label && item.type !== "system") {
+    // Clearing the field hands the item back to its target's title, so only a
+    // free-form link — which points at nothing that has one — still needs one.
+    if (!label && item.type === "link") {
       showToast(this.labels.labelRequired, "error");
       return;
     }
@@ -1054,7 +1116,7 @@ export class JantNavManager extends LitElement {
   // Add collection handler
   // ===========================================================================
 
-  async #handleAddCollection(collectionId: string) {
+  async #handleAddCollection(collectionId: string, isSmart = false) {
     if (!collectionId || this._addingCollectionId) return;
 
     this._addingCollectionId = collectionId;
@@ -1062,11 +1124,22 @@ export class JantNavManager extends LitElement {
       const res = await fetch("/api/nav-items", {
         method: "POST",
         headers: this.#jsonMutationHeaders(),
-        body: JSON.stringify({
-          type: "collection",
-          collectionId,
-          placement: "header",
-        }),
+        // Both kinds land in the same menu and behave identically once there:
+        // the label follows the target's title, and the URL follows its
+        // address. Only which column holds the key differs.
+        body: JSON.stringify(
+          isSmart
+            ? {
+                type: "smart_collection",
+                smartCollectionId: collectionId,
+                placement: "header",
+              }
+            : {
+                type: "collection",
+                collectionId,
+                placement: "header",
+              },
+        ),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -1092,29 +1165,22 @@ export class JantNavManager extends LitElement {
   // Suggested link handlers
   // ===========================================================================
 
+  /**
+   * The internal path two nav URLs have to share to be the same destination.
+   *
+   * The same comparison the server makes when it decides which suggested links
+   * are already in the menu, so both sides agree that `/about`, `/blog/about`
+   * on a prefixed deployment, and this site's own absolute URL are one page.
+   */
   #getComparableInternalPath(url: string): string | null {
-    if (
-      url.startsWith("http://") ||
-      url.startsWith("https://") ||
-      url.startsWith("//") ||
-      url.startsWith("mailto:") ||
-      url.startsWith("tel:") ||
-      url.startsWith("#")
-    ) {
-      return null;
-    }
+    const path = toInternalPath(url, {
+      siteOrigins: [window.location.origin],
+      sitePathPrefix: sitePathPrefix(),
+    });
+    if (path === null) return null;
 
-    try {
-      const pathname = new URL(url, "https://jant.invalid").pathname;
-      const normalized = pathname
-        .trim()
-        .toLowerCase()
-        .replace(/^\/+|\/+$/g, "")
-        .replace(/\/+/g, "/");
-      return normalized ? `/${normalized}` : "/";
-    } catch {
-      return null;
-    }
+    const normalized = normalizePath(path);
+    return normalized ? `/${normalized}` : "/";
   }
 
   #isSuggestedLinkAdded(link: NavManagerSuggestedLink): boolean {
@@ -1321,48 +1387,51 @@ export class JantNavManager extends LitElement {
                 (item) => item.id,
                 (item, index) =>
                   html`<a
-                    class=${index === 0
-                      ? "site-header-link site-header-link-active"
-                      : "site-header-link"}
+                    class=${
+                      index === 0
+                        ? "site-header-link site-header-link-active"
+                        : "site-header-link"
+                    }
                   >
                     ${item.displayLabel ?? item.label}
                   </a>`,
               )}
-              ${moreItems.length > 0
-                ? html`
-                    <div class="site-header-more" data-preview-more>
-                      <button
-                        type="button"
-                        class="site-header-more-btn"
-                        data-preview-more-trigger
-                        aria-haspopup="menu"
-                        aria-expanded=${this._showPreviewMore
-                          ? "true"
-                          : "false"}
-                        @click=${this.#togglePreviewMore}
-                      >
-                        ${this.labels.moreSection}
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="12"
-                          height="12"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          aria-hidden="true"
+              ${
+                moreItems.length > 0
+                  ? html`
+                      <div class="site-header-more" data-preview-more>
+                        <button
+                          type="button"
+                          class="site-header-more-btn"
+                          data-preview-more-trigger
+                          aria-haspopup="menu"
+                          aria-expanded=${
+                          this._showPreviewMore ? "true" : "false"
+                        }
+                          @click=${this.#togglePreviewMore}
                         >
-                          <path d="m6 9 6 6 6-6" />
-                        </svg>
-                      </button>
-                      <div
-                        class="site-header-more-popover"
-                        aria-hidden=${this._showPreviewMore ? "false" : "true"}
-                        @click=${(event: Event) => event.stopPropagation()}
-                      >
-                        ${repeat(
+                          ${this.labels.previewMore}
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="m6 9 6 6 6-6" />
+                          </svg>
+                        </button>
+                        <div
+                          class="site-header-more-popover"
+                          aria-hidden=${this._showPreviewMore ? "false" : "true"}
+                          @click=${(event: Event) => event.stopPropagation()}
+                        >
+                          ${repeat(
                           moreItems,
                           (item) => item.id,
                           (item) => html`
@@ -1371,10 +1440,11 @@ export class JantNavManager extends LitElement {
                             </span>
                           `,
                         )}
+                        </div>
                       </div>
-                    </div>
-                  `
-                : nothing}
+                    `
+                  : nothing
+              }
             </nav>
           </div>
         </div>
@@ -1448,7 +1518,8 @@ export class JantNavManager extends LitElement {
             <input
               type="text"
               class="input"
-              required
+              maxlength="100"
+              placeholder=${item.displayLabel ?? ""}
               .value=${this._editLabel}
               @input=${(e: Event) => {
                 this._editLabel = (e.target as HTMLInputElement).value;
@@ -1484,8 +1555,8 @@ export class JantNavManager extends LitElement {
             <input
               type="text"
               class="input"
-              required
               maxlength="100"
+              placeholder=${item.displayLabel ?? ""}
               .value=${this._editLabel}
               @input=${(e: Event) => {
                 this._editLabel = (e.target as HTMLInputElement).value;
@@ -1630,9 +1701,9 @@ export class JantNavManager extends LitElement {
               stroke-width="2"
               stroke-linecap="round"
               stroke-linejoin="round"
-              style="transition: transform 0.15s; ${isEditing
-                ? "transform: rotate(180deg);"
-                : ""}"
+              style="transition: transform 0.15s; ${
+                isEditing ? "transform: rotate(180deg);" : ""
+              }"
             >
               <path d="m6 9 6 6 6-6" />
             </svg>
@@ -1703,6 +1774,180 @@ export class JantNavManager extends LitElement {
     `;
   }
 
+  /** Whether navigation already points at what an address resolved to. */
+  #isAddressAlreadyAdded(resolution: NavAddressResolution): boolean {
+    if (resolution.kind === "page") {
+      return this._items.some((item) => item.postId === resolution.page.id);
+    }
+    if (resolution.kind === "collection") {
+      return this._items.some(
+        (item) => item.collectionId === resolution.collection.id,
+      );
+    }
+    if (resolution.kind === "smart_collection") {
+      return this._items.some(
+        (item) => item.smartCollectionId === resolution.smartCollection.id,
+      );
+    }
+    return false;
+  }
+
+  /** The line to show when a pasted address cannot become a page item. */
+  #addressStatus(resolution: NavAddressResolution): string {
+    if (this.#isAddressAlreadyAdded(resolution)) {
+      return this.labels.addressAlreadyAdded;
+    }
+
+    switch (resolution.kind) {
+      case "not_found":
+        return this.labels.addressNotFound.replace(
+          "{address}",
+          resolution.address,
+        );
+      case "unpublished":
+        return this.labels.addressUnpublished;
+      case "private":
+        return this.labels.addressPrivate;
+      case "untitled":
+        return this.labels.addressUntitled;
+      case "external":
+        return this.labels.addressExternal;
+      case "link_only":
+        return this.labels.addressLinkOnly;
+      default:
+        return "";
+    }
+  }
+
+  /**
+   * Hand an address the picker cannot use over to the link form, filled in.
+   *
+   * Off-site addresses are a normal thing to want in navigation; they just
+   * belong in the other kind of item, and retyping the URL is a poor way to
+   * find that out.
+   */
+  #startLinkFromAddress(address: string) {
+    this._newLinkUrl = address;
+    this.#closePageDialog();
+    this._showLinkForm = true;
+    setTimeout(() => {
+      document.addEventListener("click", this.#closeLinkForm);
+    });
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLInputElement>("#nav-link-label")?.focus();
+    });
+  }
+
+  #renderPageAddress(resolution: NavAddressResolution) {
+    const alreadyAdded = this.#isAddressAlreadyAdded(resolution);
+
+    if (resolution.kind === "page" && !alreadyAdded) {
+      const page = resolution.page;
+      return this.#renderPageAddressResult(
+        page.title,
+        publicPath(`/${page.slug}`),
+        this._addingPageId === page.id,
+        () => void this.#addPageToNavigation(page),
+      );
+    }
+
+    if (resolution.kind === "collection" && !alreadyAdded) {
+      const collection = resolution.collection;
+      return this.#renderPageAddressResult(
+        collection.title,
+        publicPath(getCollectionPagePath(collection.slug)),
+        this._addingCollectionId === collection.id,
+        () => {
+          void this.#handleAddCollection(collection.id).then(() => {
+            this.#closePageDialog();
+          });
+        },
+      );
+    }
+
+    if (resolution.kind === "smart_collection" && !alreadyAdded) {
+      const smartCollection = resolution.smartCollection;
+      return this.#renderPageAddressResult(
+        smartCollection.title,
+        publicPath(getCollectionPagePath(smartCollection.slug)),
+        this._addingCollectionId === smartCollection.id,
+        () => {
+          void this.#handleAddCollection(smartCollection.id, true).then(() => {
+            this.#closePageDialog();
+          });
+        },
+      );
+    }
+
+    const status = this.#addressStatus(resolution);
+    const offerLink =
+      resolution.kind === "external" || resolution.kind === "link_only";
+
+    return html`
+      <p class="nav-page-status" role="status">${status}</p>
+      ${
+        offerLink
+          ? html`
+              <button
+                type="button"
+                class="btn-outline nav-page-address-link"
+                @click=${() => this.#startLinkFromAddress(resolution.address)}
+              >
+                ${this.labels.addressAddAsLink}
+              </button>
+            `
+          : nothing
+      }
+    `;
+  }
+
+  #renderPageAddressResult(
+    title: string,
+    path: string,
+    busy: boolean,
+    add: () => void,
+  ) {
+    return html`
+      <p class="nav-page-results-label">${this.labels.addressMatch}</p>
+      <div class="nav-page-results" role="listbox">
+        <button
+          type="button"
+          role="option"
+          aria-selected="true"
+          class="nav-page-result nav-page-result-selected"
+          ?disabled=${busy}
+          @click=${add}
+        >
+          <span class="nav-page-result-copy">
+            <span class="nav-page-result-title">${title}</span>
+            <span class="nav-page-result-path">${path}</span>
+          </span>
+          ${
+            busy
+              ? html`<span class="nav-page-spinner" aria-hidden="true"></span>`
+              : html`
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                `
+          }
+        </button>
+      </div>
+    `;
+  }
+
   #renderPagePicker() {
     const status = this._pageSearchLoading
       ? this.labels.searchingPages
@@ -1740,14 +1985,16 @@ export class JantNavManager extends LitElement {
             id="nav-page-search"
             type="search"
             class="input nav-page-search-input"
-            placeholder=${this.labels.searchPages}
+            placeholder=${this.labels.searchPagesHint}
             autocomplete="off"
             role="combobox"
             aria-expanded="true"
             aria-controls="nav-page-results"
-            aria-activedescendant=${this._pages.length > 0
-              ? `nav-page-result-${this._selectedPageIndex}`
-              : ""}
+            aria-activedescendant=${
+              this._pages.length > 0
+                ? `nav-page-result-${this._selectedPageIndex}`
+                : ""
+            }
             .value=${this._pageQuery}
             @input=${(event: Event) => {
               this._pageQuery = (event.target as HTMLInputElement).value;
@@ -1757,70 +2004,82 @@ export class JantNavManager extends LitElement {
           />
         </div>
 
-        ${this._pages.length > 0
-          ? html`
-              <p class="nav-page-results-label">
-                ${this._pageQuery.trim()
-                  ? this.labels.searchPages
-                  : this.labels.recentPages}
-              </p>
-              <div
-                id="nav-page-results"
-                class="nav-page-results"
-                role="listbox"
-              >
-                ${this._pages.map((page, index) => {
-                  const selected = index === this._selectedPageIndex;
-                  const adding = this._addingPageId === page.id;
-                  return html`
-                    <button
-                      id=${`nav-page-result-${index}`}
-                      type="button"
-                      role="option"
-                      aria-selected=${selected ? "true" : "false"}
-                      class=${`nav-page-result${
-                        selected ? " nav-page-result-selected" : ""
-                      }`}
-                      ?disabled=${this._addingPageId !== null}
-                      @mouseenter=${() => {
-                        this._selectedPageIndex = index;
-                      }}
-                      @click=${() => void this.#addPageToNavigation(page)}
+        ${
+          this._pageSearchLoading || this._pageSearchError
+            ? html`<p class="nav-page-status" role="status">${status}</p>`
+            : this._pageAddress
+              ? this.#renderPageAddress(this._pageAddress)
+              : this._pages.length > 0
+                ? html`
+                    <p class="nav-page-results-label">
+                      ${
+                      this._pageQuery.trim()
+                        ? this.labels.searchPages
+                        : this.labels.recentPages
+                    }
+                    </p>
+                    <div
+                      id="nav-page-results"
+                      class="nav-page-results"
+                      role="listbox"
                     >
-                      <span class="nav-page-result-copy">
-                        <span class="nav-page-result-title">${page.title}</span>
-                        <span class="nav-page-result-path"
-                          >${publicPath(`/${page.slug}`)}</span
+                      ${this._pages.map((page, index) => {
+                      const selected = index === this._selectedPageIndex;
+                      const adding = this._addingPageId === page.id;
+                      return html`
+                        <button
+                          id=${`nav-page-result-${index}`}
+                          type="button"
+                          role="option"
+                          aria-selected=${selected ? "true" : "false"}
+                          class=${`nav-page-result${
+                            selected ? " nav-page-result-selected" : ""
+                          }`}
+                          ?disabled=${this._addingPageId !== null}
+                          @mouseenter=${() => {
+                            this._selectedPageIndex = index;
+                          }}
+                          @click=${() => void this.#addPageToNavigation(page)}
                         >
-                      </span>
-                      ${adding
-                        ? html`<span
-                            class="nav-page-spinner"
-                            aria-hidden="true"
-                          ></span>`
-                        : html`
-                            <svg
-                              xmlns="http://www.w3.org/2000/svg"
-                              width="16"
-                              height="16"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              stroke-width="2"
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                              aria-hidden="true"
+                          <span class="nav-page-result-copy">
+                            <span class="nav-page-result-title"
+                              >${page.title}</span
                             >
-                              <path d="M12 5v14" />
-                              <path d="M5 12h14" />
-                            </svg>
-                          `}
-                    </button>
-                  `;
-                })}
-              </div>
-            `
-          : html`<p class="nav-page-status" role="status">${status}</p>`}
+                            <span class="nav-page-result-path"
+                              >${publicPath(`/${page.slug}`)}</span
+                            >
+                          </span>
+                          ${
+                            adding
+                              ? html`<span
+                                  class="nav-page-spinner"
+                                  aria-hidden="true"
+                                ></span>`
+                              : html`
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    aria-hidden="true"
+                                  >
+                                    <path d="M12 5v14" />
+                                    <path d="M5 12h14" />
+                                  </svg>
+                                `
+                          }
+                        </button>
+                      `;
+                    })}
+                    </div>
+                  `
+                : html`<p class="nav-page-status" role="status">${status}</p>`
+        }
       </section>
       <footer class="nav-page-dialog-footer">
         <button
@@ -1921,15 +2180,19 @@ export class JantNavManager extends LitElement {
             </div>
             <p
               id="nav-new-page-slug-help"
-              class=${slugError
-                ? "text-xs text-destructive"
-                : "text-xs text-muted-foreground"}
+              class=${
+                slugError
+                  ? "text-xs text-destructive"
+                  : "text-xs text-muted-foreground"
+              }
             >
-              ${slugError
-                ? slugError
-                : this._slugCheckLoading
-                  ? this.labels.checkingAddress
-                  : pagePath}
+              ${
+                slugError
+                  ? slugError
+                  : this._slugCheckLoading
+                    ? this.labels.checkingAddress
+                    : pagePath
+              }
             </p>
           </div>
           <p class="nav-page-visibility-note">
@@ -1951,11 +2214,13 @@ export class JantNavManager extends LitElement {
             </svg>
             ${this.labels.pageVisibilityHint}
           </p>
-          ${this._createPageError
-            ? html`<p class="text-sm text-destructive" role="alert">
-                ${this._createPageError}
-              </p>`
-            : nothing}
+          ${
+            this._createPageError
+              ? html`<p class="text-sm text-destructive" role="alert">
+                  ${this._createPageError}
+                </p>`
+              : nothing
+          }
         </form>
       </section>
       <footer>
@@ -1971,13 +2236,15 @@ export class JantNavManager extends LitElement {
           type="submit"
           class="btn"
           form="nav-create-page-form"
-          ?disabled=${this._creatingPage ||
-          this._slugCheckLoading ||
-          Boolean(slugError)}
+          ?disabled=${
+            this._creatingPage || this._slugCheckLoading || Boolean(slugError)
+          }
         >
-          ${this._creatingPage
-            ? this.labels.creatingPage
-            : this.labels.createPage}
+          ${
+            this._creatingPage
+              ? this.labels.creatingPage
+              : this.labels.createPage
+          }
         </button>
       </footer>
     `;
@@ -2080,11 +2347,13 @@ export class JantNavManager extends LitElement {
               <path d="m6 6 12 12" />
             </svg>
           </button>
-          ${this._pageDialogView === "picker"
-            ? this.#renderPagePicker()
-            : this._pageDialogView === "create"
-              ? this.#renderCreatePage()
-              : this.#renderCreatedPage()}
+          ${
+            this._pageDialogView === "picker"
+              ? this.#renderPagePicker()
+              : this._pageDialogView === "create"
+                ? this.#renderCreatePage()
+                : this.#renderCreatedPage()
+          }
         </div>
       </dialog>
     `;
@@ -2117,78 +2386,82 @@ export class JantNavManager extends LitElement {
           >
             ${this.labels.addLink}
           </button>
-          ${this._showLinkForm
-            ? html`
-                <div
-                  id="nav-link-popover-content"
-                  data-popover
-                  data-side="top"
-                  aria-hidden="false"
-                  class="w-80"
-                  style="bottom: 100%; margin-bottom: 0.5rem;"
-                  @click=${(e: Event) => e.stopPropagation()}
-                >
-                  <div class="grid gap-4">
-                    <header class="grid gap-1.5">
-                      <h4 class="leading-none font-medium">
-                        ${this.labels.addLink}
-                      </h4>
-                      <p class="text-muted-foreground text-sm">
-                        ${this.labels.addLinkDescription}
-                      </p>
-                    </header>
-                    <form
-                      class="form grid gap-2"
-                      @submit=${(e: Event) => {
+          ${
+            this._showLinkForm
+              ? html`
+                  <div
+                    id="nav-link-popover-content"
+                    data-popover
+                    data-side="top"
+                    aria-hidden="false"
+                    class="w-80"
+                    style="bottom: 100%; margin-bottom: 0.5rem;"
+                    @click=${(e: Event) => e.stopPropagation()}
+                  >
+                    <div class="grid gap-4">
+                      <header class="grid gap-1.5">
+                        <h4 class="leading-none font-medium">
+                          ${this.labels.addLink}
+                        </h4>
+                        <p class="text-muted-foreground text-sm">
+                          ${this.labels.addLinkDescription}
+                        </p>
+                      </header>
+                      <form
+                        class="form grid gap-2"
+                        @submit=${(e: Event) => {
                         e.preventDefault();
                         this.#handleAddLink();
                       }}
-                    >
-                      <div class="grid grid-cols-3 items-center gap-4">
-                        <label for="nav-link-label">${this.labels.label}</label>
-                        <input
-                          type="text"
-                          id="nav-link-label"
-                          class="col-span-2 h-8"
-                          placeholder="Home"
-                          required
-                          .value=${this._newLinkLabel}
-                          @input=${(e: Event) => {
+                      >
+                        <div class="grid grid-cols-3 items-center gap-4">
+                          <label for="nav-link-label"
+                            >${this.labels.label}</label
+                          >
+                          <input
+                            type="text"
+                            id="nav-link-label"
+                            class="col-span-2 h-8"
+                            placeholder="Home"
+                            required
+                            .value=${this._newLinkLabel}
+                            @input=${(e: Event) => {
                             this._newLinkLabel = (
                               e.target as HTMLInputElement
                             ).value;
                           }}
-                          autofocus
-                        />
-                      </div>
-                      <div class="grid grid-cols-3 items-center gap-4">
-                        <label for="nav-link-url">${this.labels.url}</label>
-                        <input
-                          type="text"
-                          id="nav-link-url"
-                          class="col-span-2 h-8"
-                          placeholder=${this.labels.urlPlaceholder}
-                          required
-                          .value=${this._newLinkUrl}
-                          @input=${(e: Event) => {
+                            autofocus
+                          />
+                        </div>
+                        <div class="grid grid-cols-3 items-center gap-4">
+                          <label for="nav-link-url">${this.labels.url}</label>
+                          <input
+                            type="text"
+                            id="nav-link-url"
+                            class="col-span-2 h-8"
+                            placeholder=${this.labels.urlPlaceholder}
+                            required
+                            .value=${this._newLinkUrl}
+                            @input=${(e: Event) => {
                             this._newLinkUrl = (
                               e.target as HTMLInputElement
                             ).value;
                           }}
-                        />
-                      </div>
-                      <button
-                        type="submit"
-                        class="btn-sm mt-2"
-                        ?disabled=${this._addingLink}
-                      >
-                        ${this.labels.addLink}
-                      </button>
-                    </form>
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          class="btn-sm mt-2"
+                          ?disabled=${this._addingLink}
+                        >
+                          ${this.labels.addLink}
+                        </button>
+                      </form>
+                    </div>
                   </div>
-                </div>
-              `
-            : nothing}
+                `
+              : nothing
+          }
         </div>
       </section>
     `;
@@ -2217,9 +2490,13 @@ export class JantNavManager extends LitElement {
     }
 
     const addedCollectionIds = new Set(
-      this._items
-        .filter((i) => i.type === "collection" && i.collectionId)
-        .map((i) => i.collectionId),
+      this._items.flatMap((i) =>
+        i.type === "collection" && i.collectionId
+          ? [i.collectionId]
+          : i.type === "smart_collection" && i.smartCollectionId
+            ? [i.smartCollectionId]
+            : [],
+      ),
     );
     const available = this.collections.filter(
       (c) => !addedCollectionIds.has(c.id),
@@ -2311,27 +2588,30 @@ export class JantNavManager extends LitElement {
               stroke-linejoin="round"
               class="ml-1.5 -mr-0.5"
               aria-hidden="true"
-              style="transition: transform 0.15s; ${this._showCollectionPicker
-                ? "transform: rotate(180deg);"
-                : ""}"
+              style="transition: transform 0.15s; ${
+                this._showCollectionPicker ? "transform: rotate(180deg);" : ""
+              }"
             >
               <path d="m6 9 6 6 6-6" />
             </svg>
           </button>
-          ${this._showCollectionPicker
-            ? html`
-                <div
-                  class="collection-picker"
-                  role="menu"
-                  @click=${(e: Event) => e.stopPropagation()}
-                >
-                  ${groups.map(
+          ${
+            this._showCollectionPicker
+              ? html`
+                  <div
+                    class="collection-picker"
+                    role="menu"
+                    @click=${(e: Event) => e.stopPropagation()}
+                  >
+                    ${groups.map(
                     (group) => html`
-                      ${group.label
-                        ? html`<div class="collection-picker-group">
-                            ${group.label}
-                          </div>`
-                        : nothing}
+                      ${
+                        group.label
+                          ? html`<div class="collection-picker-group">
+                              ${group.label}
+                            </div>`
+                          : nothing
+                      }
                       ${group.items.map((c) => {
                         const adding = this._addingCollectionId === c.id;
                         return html`
@@ -2339,61 +2619,78 @@ export class JantNavManager extends LitElement {
                             type="button"
                             role="menuitem"
                             class="collection-picker-item"
-                            ?disabled=${adding ||
-                            this._addingCollectionId !== null}
-                            @click=${() => this.#handleAddCollection(c.id)}
+                            ?disabled=${
+                              adding || this._addingCollectionId !== null
+                            }
+                            @click=${() =>
+                              this.#handleAddCollection(c.id, c.isSmart)}
                           >
                             <span class="collection-picker-title">
                               ${c.title}
                             </span>
-                            ${adding
-                              ? html`<svg
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-width="2"
-                                  stroke-linecap="round"
-                                  stroke-linejoin="round"
-                                  class="animate-spin shrink-0 text-muted-foreground"
-                                >
-                                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                                </svg>`
-                              : nothing}
+                            ${
+                              c.isSmart
+                                ? html`<span
+                                    class="collection-directory-smart-icon"
+                                    role="img"
+                                    aria-label=${
+                                    this.labels.smartCollectionLabel ?? ""
+                                  }
+                                    title=${
+                                    this.labels.smartCollectionLabel ?? ""
+                                  }
+                                    >${unsafeHTML(
+                                    getIconSvg("funnel", "icon-fine") ?? "",
+                                  )}</span
+                                  >`
+                                : nothing
+                            }
+                            ${
+                              adding
+                                ? html`<svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    class="animate-spin shrink-0 text-muted-foreground"
+                                  >
+                                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                                  </svg>`
+                                : nothing
+                            }
                           </button>
                         `;
                       })}
                     `,
                   )}
-                  <div class="collection-picker-footer">
-                    <button
-                      type="button"
-                      role="menuitem"
-                      class="collection-picker-create"
-                      data-create-collection-trigger
-                      @click=${() => void this.#openCollectionDialog()}
-                    >
-                      ${this.labels.createNewCollection}
-                      <span aria-hidden="true">+</span>
-                    </button>
+                    <div class="collection-picker-footer">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        class="collection-picker-create"
+                        data-create-collection-trigger
+                        @click=${() => void this.#openCollectionDialog()}
+                      >
+                        ${this.labels.createNewCollection}
+                        <span aria-hidden="true">+</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
-              `
-            : nothing}
+                `
+              : nothing
+          }
         </div>
       </section>
     `;
   }
 
   #renderCreateCollection() {
-    const initial = {
-      title: "",
-      slug: "",
-      description: "",
-      sortOrder: "newest" as const,
-    };
+    const initial = { title: "", slug: "" };
 
     return html`
       <header>
@@ -2404,19 +2701,19 @@ export class JantNavManager extends LitElement {
       </header>
       <section>
         <jant-collection-form
-          variant="quick"
           .labels=${this.labels.collectionFormLabels}
           .initial=${initial}
           action=${publicPath("/api/collections")}
-          cancel-href=${publicPath(NAVIGATION_SETTINGS_PATH)}
           @jant:collection-submit=${(event: Event) =>
             void this.#handleCreateCollectionSubmit(event)}
         ></jant-collection-form>
-        ${this._createCollectionError
-          ? html`<p class="mt-3 text-sm text-destructive" role="alert">
-              ${this._createCollectionError}
-            </p>`
-          : nothing}
+        ${
+          this._createCollectionError
+            ? html`<p class="mt-3 text-sm text-destructive" role="alert">
+                ${this._createCollectionError}
+              </p>`
+            : nothing
+        }
       </section>
       <footer>
         <button
@@ -2433,22 +2730,39 @@ export class JantNavManager extends LitElement {
           ?disabled=${this._creatingCollection}
           @click=${this.#submitCollectionForm}
         >
-          ${this._creatingCollection
-            ? this.labels.creatingCollection
-            : this.labels.createCollection}
+          ${
+            this._creatingCollection
+              ? this.labels.creatingCollection
+              : this.labels.createCollection
+          }
         </button>
       </footer>
     `;
   }
 
+  /**
+   * Edit the collection just created, without leaving the navigation step.
+   *
+   * Its title and address can both move, so the picker's copy of it and the
+   * card showing it are re-read from what the dialog saved.
+   */
+  async #editCreatedCollection(collectionId: string) {
+    const { changed, collection } = await openCollectionDialog({
+      collectionId,
+    });
+    if (!changed || !collection) return;
+
+    this._createdCollection = collection;
+    this.collections = this.collections.map((entry) =>
+      entry.id === collection.id
+        ? { ...entry, title: collection.title, slug: collection.slug }
+        : entry,
+    );
+  }
+
   #renderCreatedCollection() {
     const collection = this._createdCollection;
     if (!collection) return nothing;
-
-    const returnTo = publicPath(NAVIGATION_SETTINGS_PATH);
-    const editHref = `${publicPath(
-      getCollectionEditPath(collection.slug),
-    )}?returnTo=${encodeURIComponent(returnTo)}`;
 
     return html`
       <header class="nav-create-success-header">
@@ -2481,15 +2795,16 @@ export class JantNavManager extends LitElement {
         </div>
       </section>
       <footer>
-        <a
+        <!-- The collection dialog opens on top of this one rather than in a
+             new tab: there is no editor page to send the author to, and the
+             navigation step they came for is still waiting underneath. -->
+        <button
+          type="button"
           class="btn-outline"
-          href=${editHref}
-          target="_blank"
-          rel="noopener noreferrer"
+          @click=${() => void this.#editCreatedCollection(collection.id)}
         >
           ${this.labels.editCollection}
-          <span aria-hidden="true">↗</span>
-        </a>
+        </button>
         <button
           type="button"
           class="btn"
@@ -2546,9 +2861,11 @@ export class JantNavManager extends LitElement {
               <path d="m6 6 12 12" />
             </svg>
           </button>
-          ${this._collectionDialogView === "create"
-            ? this.#renderCreateCollection()
-            : this.#renderCreatedCollection()}
+          ${
+            this._collectionDialogView === "create"
+              ? this.#renderCreateCollection()
+              : this.#renderCreatedCollection()
+          }
         </div>
       </dialog>
     `;
@@ -2603,11 +2920,13 @@ export class JantNavManager extends LitElement {
 
       <section class="mt-8">
         <h2 class="text-lg font-semibold mb-3">${this.labels.headerSection}</h2>
-        ${this.#headerItems.length === 0
-          ? html`<p class="text-sm text-muted-foreground py-4">
-              ${this.labels.emptyState}
-            </p>`
-          : nothing}
+        ${
+          this.#headerItems.length === 0
+            ? html`<p class="text-sm text-muted-foreground py-4">
+                ${this.labels.emptyState}
+              </p>`
+            : nothing
+        }
         <div id="nav-items-header" class="nav-items-list">
           ${repeat(
             this.#headerItems,
@@ -2620,15 +2939,17 @@ export class JantNavManager extends LitElement {
       <section class="mt-8">
         <h2 class="text-lg font-semibold mb-3">${this.labels.moreSection}</h2>
         <div id="nav-items-more" class="nav-items-list nav-items-list-drop">
-          ${this.#moreItems.length > 0
-            ? repeat(
-                this.#moreItems,
-                (item) => item.id,
-                (item) => this.#renderItem(item),
-              )
-            : html`<p class="nav-items-empty-hint">
-                ${this.labels.moreEmptyHint}
-              </p>`}
+          ${
+            this.#moreItems.length > 0
+              ? repeat(
+                  this.#moreItems,
+                  (item) => item.id,
+                  (item) => this.#renderItem(item),
+                )
+              : html`<p class="nav-items-empty-hint">
+                  ${this.labels.moreEmptyHint}
+                </p>`
+          }
         </div>
       </section>
 

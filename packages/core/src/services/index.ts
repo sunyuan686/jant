@@ -21,6 +21,10 @@ import {
   createCollectionService,
   type CollectionService,
 } from "./collection.js";
+import {
+  createSmartCollectionService,
+  type SmartCollectionService,
+} from "./smart-collection.js";
 import { createSearchService, type SearchService } from "./search.js";
 import { createNavItemService, type NavItemService } from "./navigation.js";
 import { createAuthService, type AuthService } from "./auth.js";
@@ -36,6 +40,7 @@ import {
   type SiteProfileService,
 } from "./site-profile.js";
 import { createAboutPageService, type AboutPageService } from "./about-page.js";
+import { createLanguageService, type LanguageService } from "./language.js";
 import {
   createUploadSessionService,
   type UploadSessionService,
@@ -57,6 +62,7 @@ export interface Services {
   media: MediaService;
   uploads: UploadSessionService;
   collections: CollectionService;
+  smartCollections: SmartCollectionService;
   search: SearchService;
   navItems: NavItemService;
   auth: AuthService;
@@ -66,6 +72,7 @@ export interface Services {
   siteMembers: SiteMemberService;
   siteProfile: SiteProfileService;
   aboutPage: AboutPageService;
+  language: LanguageService;
   githubAppInstallations: GitHubAppInstallationsService;
   telegram: TelegramService;
 }
@@ -82,6 +89,8 @@ export function createServices(
     siteResolutionMode?: "single-site" | "host-based";
     enforceHostedMediaQuota?: boolean;
     hostedControlPlane?: HostedControlPlaneClient | null;
+    /** Signing key for derived tokens, e.g. the account-deletion CSRF token. */
+    authSecret?: string;
   },
 ): Services {
   const databaseSchema = config?.schema ?? sqliteSchemaBundle;
@@ -89,7 +98,7 @@ export function createServices(
   const site = createSiteService(db, databaseSchema);
   const settings = createSettingsService(db, siteId, databaseSchema, dialect);
   const paths = createPathService(db, siteId, databaseSchema);
-  const navItems = createNavItemService(db, siteId, databaseSchema);
+  const navItems = createNavItemService(db, siteId, databaseSchema, paths);
   const posts = createPostService(
     db,
     {
@@ -100,12 +109,21 @@ export function createServices(
     paths,
     databaseSchema,
   );
+  const smartCollections = createSmartCollectionService(
+    db,
+    siteId,
+    paths,
+    posts,
+    databaseSchema,
+    config?.slugIdLength ?? 5,
+  );
   const collections = createCollectionService(
     db,
     siteId,
     paths,
     databaseSchema,
     dialect,
+    smartCollections,
   );
   const media = createMediaService(db, siteId, databaseSchema, dialect, {
     enforceHostedQuota: config?.enforceHostedMediaQuota ?? false,
@@ -121,6 +139,7 @@ export function createServices(
     media,
     uploads: createUploadSessionService(db, siteId, media, databaseSchema),
     collections,
+    smartCollections,
     search: createSearchService(rawQuery, siteId, dialect),
     navItems,
     auth: createAuthService(
@@ -128,6 +147,7 @@ export function createServices(
       settings,
       {
         databaseDialect: dialect,
+        authSecret: config?.authSecret,
       },
       databaseSchema,
     ),
@@ -156,7 +176,9 @@ export function createServices(
       paths,
       posts,
       collections,
+      smartCollections,
     }),
+    language: createLanguageService({ settings, posts, paths }),
     githubAppInstallations: createGitHubAppInstallationsService(
       db,
       databaseSchema,
@@ -170,12 +192,17 @@ export type { SiteService } from "./site.js";
 export type { PathService } from "./path.js";
 export type { PostService, PostFilters, PostDeleteDeps } from "./post.js";
 export type { CustomUrlService } from "./custom-url.js";
+export type {
+  SmartCollectionService,
+  SmartCollectionViewer,
+} from "./smart-collection.js";
 export type { MediaService, MediaFilters } from "./media.js";
 export type { UploadSessionService } from "./upload-session.js";
 export type { CollectionService } from "./collection.js";
 export type { SearchService, SearchResult, SearchOptions } from "./search.js";
 export type { NavItemService } from "./navigation.js";
 export type { AboutPageService, AboutPageStatus } from "./about-page.js";
+export type { LanguageService, LanguageState } from "./language.js";
 export type { AuthService, DeleteAccountDeps } from "./auth.js";
 export type { ApiTokenService } from "./api-token.js";
 export type {

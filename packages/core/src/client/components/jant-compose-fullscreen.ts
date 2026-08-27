@@ -59,7 +59,7 @@ export class JantComposeFullscreen extends LitElement {
     this.labels = {} as ComposeLabels;
     this._open = false;
     this._title = "";
-    this._showTitle = false;
+    this._showTitle = true;
     this._replyContext = null;
     this._replyExpanded = false;
   }
@@ -314,9 +314,7 @@ export class JantComposeFullscreen extends LitElement {
             class=${placeholderClasses}
             @click=${() => this._revealTitle()}
           >
-            ${variant === "reply"
-              ? this.labels.titlePlaceholder || this.labels.title || "Title"
-              : this.labels.title || "Title"}
+            ${this.labels.titlePlaceholder || this.labels.title || "Title"}
           </button>
         `;
   }
@@ -412,7 +410,7 @@ export class JantComposeFullscreen extends LitElement {
                         </button>
                       </div>
                       <div
-                        class="compose-editor-row compose-fullscreen-editor-row"
+                        class="compose-editor-row compose-fullscreen-editor-row is-current"
                       >
                         <div class="compose-thread-dot"></div>
                         ${editorSurface("reply")}

@@ -11,6 +11,7 @@ type NavigationLabelItem = {
   systemKey?: SystemNavKey;
   label: string;
   url: string;
+  targetTitle?: string;
 };
 
 // `context: "nav"` gives these site-header labels a distinct Lingui hash so
@@ -35,9 +36,10 @@ const BUILTIN_NAV_LABELS = {
     comment: "@context: Built-in navigation label for the collections page",
   }),
   archive: msg({
-    message: "Archive",
+    message: "All",
     context: "nav",
-    comment: "@context: Built-in navigation label for the archive page",
+    comment:
+      "@context: Built-in navigation label for the archive page. Reads as the widest of Featured / Latest / All rather than 'old posts' — the page is the complete index, and its URL stays /archive.",
   }),
   settings: msg({
     message: "Settings",
@@ -45,9 +47,10 @@ const BUILTIN_NAV_LABELS = {
     comment: "@context: Built-in navigation label for settings",
   }),
   rss: msg({
-    message: "Feed",
+    message: "RSS",
     context: "nav",
-    comment: "@context: Built-in navigation label for feed",
+    comment:
+      "@context: Built-in navigation label for the feed. Keep the acronym in every locale — it is what readers scan for. The document /feed serves is Atom, but RSS is the category name readers and feed apps use, and it matches the vocabulary the rest of the product already speaks (systemKey `rss`, `mainRssFeed`). 'Feed' would collide with Featured/Latest/All, which are feeds too.",
   }),
   signIn: msg({
     message: "Sign in",
@@ -163,20 +166,31 @@ function getBuiltinNavLabelDescriptor(
   return null;
 }
 
+/**
+ * The text a nav item shows.
+ *
+ * A stored label is always the author's own words, so it wins outright. An
+ * empty one means the item follows what it points at: a built-in destination
+ * shows its translated default, a page or collection shows that row's current
+ * title — which is also how a nav entry ends up in the reader's language once
+ * a language view has resolved it to a translated page.
+ *
+ * @param item - Nav item, view or raw
+ * @param i18n - Translator for built-in destinations
+ * @param sitePathPrefix - Deployment path prefix, such as `/blog`
+ * @returns Label to render
+ */
 export function getNavItemDisplayLabel(
   item: NavigationLabelItem,
   i18n: Translator,
   sitePathPrefix = "",
 ): string {
-  if (item.type === "system" && item.systemKey) {
-    // Non-empty label means the user customized it — use as-is.
-    // Empty label means "use the i18n-translated default".
-    if (item.label) {
-      return item.label;
-    }
-  }
+  if (item.label) return item.label;
+
   const descriptor = getBuiltinNavLabelDescriptor(item, sitePathPrefix);
-  return descriptor ? i18n._(descriptor) : item.label;
+  if (descriptor) return i18n._(descriptor);
+
+  return item.targetTitle?.trim() || item.label;
 }
 
 export function getSystemNavDisplayLabel(

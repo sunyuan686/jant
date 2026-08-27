@@ -570,20 +570,53 @@ describe("PostService", () => {
       const descending = await postService.list({
         sortOrder: "rating_desc",
       });
-      const ascending = await postService.list({
-        sortOrder: "rating_asc",
-      });
 
       expect(descending.map((post) => post.bodyText)).toEqual([
         "five stars",
         "three stars",
         "unrated newest",
       ]);
-      expect(ascending.map((post) => post.bodyText)).toEqual([
-        "three stars",
-        "five stars",
-        "unrated newest",
+    });
+
+    it("orders by time for an explicit newest, ratings and all", async () => {
+      // `newest` used to have no branch of its own in the ORDER BY and fell
+      // into the one written for the ascending rating order, so anything that
+      // named it — a smart collection page, most visibly — got its posts
+      // grouped by rating instead of dated. Rated rows here on purpose.
+      await postService.create({
+        format: "note",
+        bodyMarkdown: "oldest, best",
+        publishedAt: 1000,
+        rating: 5,
+      });
+      await postService.create({
+        format: "note",
+        bodyMarkdown: "middle, worst",
+        publishedAt: 2000,
+        rating: 1,
+      });
+      await postService.create({
+        format: "note",
+        bodyMarkdown: "newest, unrated",
+        publishedAt: 3000,
+      });
+
+      const ordered = await postService.list({ sortOrder: "newest" });
+      expect(ordered.map((post) => post.bodyText)).toEqual([
+        "newest, unrated",
+        "middle, worst",
+        "oldest, best",
       ]);
+
+      // The keyset cursor reads the same keys or pagination skips rows.
+      expect(
+        (
+          await postService.list({
+            sortOrder: "newest",
+            cursor: ordered[0]?.id,
+          })
+        ).map((post) => post.bodyText),
+      ).toEqual(["middle, worst", "oldest, best"]);
     });
 
     it("orders drafts by updatedAt descending", async () => {
@@ -1570,7 +1603,7 @@ describe("PostService", () => {
       expect(updated?.pinnedAt).toBeTypeOf("number");
     });
 
-    it("updates slug and its page navigation URL", async () => {
+    it("updates slug and title on its page navigation entry", async () => {
       const post = await postService.create({
         format: "note",
         title: "Test page",
@@ -1585,11 +1618,15 @@ describe("PostService", () => {
 
       const updated = await postService.update(post.id, {
         slug: "new-slug",
+        title: "Renamed page",
       });
 
       expect(updated?.slug).toBe("new-slug");
+      // The URL is synced on write; the title is read through, so renaming the
+      // page carries its navigation entry along with no sync step at all.
       expect(await navItemService.getById(navItem.id)).toMatchObject({
-        label: "Test page",
+        label: "",
+        targetTitle: "Renamed page",
         url: "/new-slug",
       });
     });
@@ -1859,6 +1896,92 @@ describe("PostService", () => {
     });
   });
 
+  describe("createThreadWithAttachments", () => {
+    // No attachments in these cases, so only the up-front id check is reached.
+    const deps = {
+      media: { validateIds: async () => [] },
+    } as unknown as Parameters<
+      typeof postService.createThreadWithAttachments
+    >[1];
+
+    it("dates every reply from the root when the root is backdated", async () => {
+      const backdated = 1710000000; // 2024-03-09
+
+      const created = await postService.createThreadWithAttachments(
+        [
+          {
+            data: {
+              format: "note",
+              bodyMarkdown: "root",
+              publishedAt: backdated,
+            },
+            attachments: [],
+          },
+          { data: { format: "note", bodyMarkdown: "second" }, attachments: [] },
+          { data: { format: "note", bodyMarkdown: "third" }, attachments: [] },
+        ],
+        deps,
+        undefined,
+      );
+
+      // Without inheritance the replies would land on today and the thread
+      // would read as if it spanned two years.
+      expect(created.map((p) => p.publishedAt)).toEqual([
+        backdated,
+        backdated,
+        backdated,
+      ]);
+      // Order still comes from createdAt/id, so the chain is intact.
+      expect(created[1].replyToId).toBe(created[0].id);
+      expect(created[2].replyToId).toBe(created[1].id);
+    });
+
+    it("keeps a reply's own date when one is given", async () => {
+      const rootAt = 1710000000;
+      const replyAt = 1720000000;
+
+      const created = await postService.createThreadWithAttachments(
+        [
+          {
+            data: { format: "note", bodyMarkdown: "root", publishedAt: rootAt },
+            attachments: [],
+          },
+          {
+            data: {
+              format: "note",
+              bodyMarkdown: "second",
+              publishedAt: replyAt,
+            },
+            attachments: [],
+          },
+        ],
+        deps,
+        undefined,
+      );
+
+      expect(created.map((p) => p.publishedAt)).toEqual([rootAt, replyAt]);
+    });
+
+    it("leaves draft threads undated", async () => {
+      const created = await postService.createThreadWithAttachments(
+        [
+          {
+            data: { format: "note", bodyMarkdown: "root", status: "draft" },
+            attachments: [],
+          },
+          {
+            data: { format: "note", bodyMarkdown: "second", status: "draft" },
+            attachments: [],
+          },
+        ],
+        deps,
+        undefined,
+      );
+
+      expect(created.map((p) => p.publishedAt)).toEqual([null, null]);
+    });
+  });
+
   describe("threads", () => {
     it("sets threadId on reply to a root post", async () => {
       const root = await postService.create({
@@ -1915,6 +2038,143 @@ describe("PostService", () => {
         }),
       ).rejects.toThrow(
         "This post is no longer the end of the thread. Reply to the latest post instead.",
+      );
+    });
+
+    it("refuses to feature an unpublished post", async () => {
+      await expect(
+        postService.create({
+          format: "note",
+          bodyMarkdown: "not ready",
+          status: "draft",
+          featured: true,
+        }),
+      ).rejects.toThrow("Publish this post before featuring it.");
+
+      const draft = await postService.create({
+        format: "note",
+        bodyMarkdown: "not ready",
+        status: "draft",
+      });
+      await expect(
+        postService.update(draft.id, { featured: true }),
+      ).rejects.toThrow("Publish this post before featuring it.");
+    });
+
+    it("keeps a featured flag through a trip back to draft", async () => {
+      const post = await postService.create({
+        format: "note",
+        bodyMarkdown: "published",
+        featured: true,
+      });
+
+      const unpublished = await postService.update(post.id, {
+        status: "draft",
+      });
+
+      expect(unpublished?.status).toBe("draft");
+      expect(unpublished?.featuredAt).not.toBeNull();
+    });
+
+    it("publishes a reply whose parent is still a draft", async () => {
+      const root = await postService.create({
+        format: "note",
+        bodyMarkdown: "root",
+      });
+      const draft = await postService.create({
+        format: "note",
+        bodyMarkdown: "unfinished",
+        replyToId: root.id,
+        status: "draft",
+      });
+
+      const next = await postService.create({
+        format: "note",
+        bodyMarkdown: "continues past the draft",
+        replyToId: draft.id,
+      });
+
+      // Readers never saw the draft, so publishing past it reads as
+      // continuous. The draft stays parked until it is dealt with on its own.
+      expect(next.status).toBe("published");
+      expect(draft.status).toBe("draft");
+    });
+
+    it("publishes only the post asked for, leaving other drafts alone", async () => {
+      const root = await postService.create({
+        format: "note",
+        bodyMarkdown: "root",
+      });
+      const first = await postService.create({
+        format: "note",
+        bodyMarkdown: "first draft",
+        replyToId: root.id,
+        status: "draft",
+      });
+      const second = await postService.create({
+        format: "note",
+        bodyMarkdown: "second draft",
+        replyToId: first.id,
+        status: "draft",
+      });
+
+      await postService.update(second.id, { status: "published" });
+
+      const statusById = new Map(
+        (await postService.getThread(root.id)).map((p) => [p.id, p.status]),
+      );
+      expect(statusById.get(first.id)).toBe("draft");
+      expect(statusById.get(second.id)).toBe("published");
+    });
+
+    it("keeps a draft between two published replies", async () => {
+      const root = await postService.create({
+        format: "note",
+        bodyMarkdown: "root",
+      });
+      const middle = await postService.create({
+        format: "note",
+        bodyMarkdown: "middle",
+        replyToId: root.id,
+      });
+      const last = await postService.create({
+        format: "note",
+        bodyMarkdown: "last",
+        replyToId: middle.id,
+      });
+
+      await postService.update(middle.id, { status: "draft" });
+
+      const statusById = new Map(
+        (await postService.getThread(root.id)).map((p) => [p.id, p.status]),
+      );
+      // Unpublishing one post touches only that post. The public thread simply
+      // skips it; nothing else in the chain changes.
+      expect(statusById.get(root.id)).toBe("published");
+      expect(statusById.get(middle.id)).toBe("draft");
+      expect(statusById.get(last.id)).toBe("published");
+    });
+
+    it("names the draft when an unpublished reply holds the thread tail", async () => {
+      const root = await postService.create({
+        format: "note",
+        bodyMarkdown: "root",
+      });
+      await postService.create({
+        format: "note",
+        bodyMarkdown: "unfinished",
+        replyToId: root.id,
+        status: "draft",
+      });
+
+      await expect(
+        postService.create({
+          format: "note",
+          bodyMarkdown: "reply",
+          replyToId: root.id,
+        }),
+      ).rejects.toThrow(
+        "This thread ends with an unpublished draft. Finish that draft or discard it, then reply.",
       );
     });
 
@@ -2026,6 +2286,57 @@ describe("PostService", () => {
       expect(thread).toHaveLength(3);
       // Ordered by createdAt
       expect(thread[0]?.bodyText).toBe("root");
+    });
+
+    it("getThreadPosition counts the chain from the root down to a post", async () => {
+      const root = await postService.create({
+        format: "note",
+        bodyMarkdown: "root",
+      });
+      const reply1 = await postService.create({
+        format: "note",
+        bodyMarkdown: "reply1",
+        replyToId: root.id,
+      });
+      const reply2 = await postService.create({
+        format: "note",
+        bodyMarkdown: "reply2",
+        replyToId: reply1.id,
+      });
+
+      expect(await postService.getThreadPosition(root.id)).toBe(1);
+      expect(await postService.getThreadPosition(reply1.id)).toBe(2);
+      expect(await postService.getThreadPosition(reply2.id)).toBe(3);
+    });
+
+    it("getThreadPosition walks the reply chain rather than counting members", async () => {
+      // `create` only allows replying to the tail, so today a thread is a
+      // straight chain and depth happens to equal its size. The walk is what
+      // makes the two agree — counting `threadId` members would give the same
+      // answer here and the wrong one the moment a draft chain is incomplete.
+      const root = await postService.create({
+        format: "note",
+        bodyMarkdown: "root",
+      });
+      const tail = await postService.create({
+        format: "note",
+        bodyMarkdown: "tail",
+        replyToId: root.id,
+      });
+
+      // A second post filed under the same thread without joining the chain:
+      // it is not above the tail, so it must not push the tail's position.
+      await postService.create({
+        format: "note",
+        bodyMarkdown: "unrelated",
+      });
+
+      expect(await postService.getThreadPosition(tail.id)).toBe(2);
+      expect(await postService.getThread(root.id)).toHaveLength(2);
+    });
+
+    it("getThreadPosition returns 0 for a post that does not exist", async () => {
+      expect(await postService.getThreadPosition("pst_missing")).toBe(0);
     });
 
     it("getThread excludes deleted posts", async () => {

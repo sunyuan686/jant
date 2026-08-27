@@ -6,6 +6,13 @@ import type { CollectionFormLabels } from "./collection-types.js";
 
 export interface CollectionManagerLabels {
   collectionsTitle: string;
+  /** The kind itself, for the marker beside a smart collection's title. */
+  smartCollectionNoun: string;
+  newSmartCollection: string;
+  editSmartCollection: string;
+  deleteSmartCollection: string;
+  confirmDeleteSmartCollection: string;
+  smartCollectionDeleted: string;
   organize: string;
   done: string;
   organizeHint: string;
@@ -41,6 +48,7 @@ export interface CollectionManagerLabels {
   threadPlural: string;
   emptyState: string;
   orderSaved: string;
+  save: string;
   saved: string;
   linkCreated: string;
   linkSaved: string;
@@ -60,13 +68,36 @@ export interface ManagedCollection {
   recentActivityAt: number;
 }
 
+/**
+ * A smart collection as the directory manager sees it.
+ *
+ * `recentActivityAt` means what it means on a manual collection: the newest
+ * activity among the threads in it. Membership is what the two kinds disagree
+ * about — tagged by hand or decided by conditions — and freshness does not
+ * depend on how a thread got in.
+ */
+export interface ManagedSmartCollection {
+  id: string;
+  slug: string;
+  title: string;
+  description: string | null;
+  /** Conditions, in the shared dimension vocabulary. */
+  selection: Record<string, unknown>;
+  sort: string;
+  layout: string | null;
+  threadCount: number;
+  recentActivityAt: number;
+}
+
 export interface CollectionManagerItem {
   id: string;
-  type: "collection" | "divider" | "link";
+  type: "collection" | "smart_collection" | "divider" | "link";
   collectionId?: string | null;
+  smartCollectionId?: string | null;
   label?: string | null;
   url?: string | null;
   description?: string | null;
   position?: string;
   collection?: ManagedCollection;
+  smartCollection?: ManagedSmartCollection;
 }

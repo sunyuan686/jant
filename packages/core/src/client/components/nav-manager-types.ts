@@ -7,12 +7,17 @@ import type { CollectionFormLabels } from "./collection-types.js";
 
 export interface NavManagerItem {
   id: string;
-  type: "link" | "system" | "collection" | "page";
+  type: "link" | "system" | "collection" | "smart_collection" | "page";
   systemKey?: SystemNavKey;
   collectionId?: string;
+  smartCollectionId?: string;
   postId?: string;
+  /** Author's override, or `""` when the item follows its target's title */
   label: string;
+  /** Resolved label from the server-rendered list */
   displayLabel?: string;
+  /** Target's current title, present on mutation responses */
+  targetTitle?: string;
   url: string;
   placement?: "header" | "more";
 }
@@ -23,6 +28,36 @@ export interface NavManagerPage {
   slug: string;
   updatedAt: number;
 }
+
+/**
+ * What the server made of an address the author pasted into the page picker:
+ * the item it could become, or why it cannot become one.
+ *
+ * `address` is what to show back and what to prefill the link form with — the
+ * public path for anything on this site, the pasted URL for anything else.
+ */
+export type NavAddressResolution =
+  | { kind: "page"; address: string; page: NavManagerPage }
+  | {
+      kind: "collection";
+      address: string;
+      collection: { id: string; title: string; slug: string };
+    }
+  | {
+      kind: "smart_collection";
+      address: string;
+      smartCollection: { id: string; title: string; slug: string };
+    }
+  | {
+      kind:
+        | "external"
+        | "link_only"
+        | "untitled"
+        | "unpublished"
+        | "private"
+        | "not_found";
+      address: string;
+    };
 
 export interface SystemNavConfig {
   key: SystemNavKey;
@@ -37,6 +72,14 @@ export interface NavManagerCollection {
   slug: string;
   /** Group label from directory divider, if this collection belongs to one */
   group?: string | null;
+  /**
+   * True for a collection whose members come from conditions.
+   *
+   * Both kinds belong in navigation — a reader following either lands on a
+   * page of posts — so the picker lists them together and marks which is
+   * which, rather than keeping two lists that would need two empty states.
+   */
+  isSmart?: boolean;
 }
 
 export interface NavManagerSuggestedLink {
@@ -84,7 +127,17 @@ export interface NavManagerLabels {
   addPageDescription: string;
   addPage: string;
   searchPages: string;
+  searchPagesHint: string;
   recentPages: string;
+  addressMatch: string;
+  addressAlreadyAdded: string;
+  addressNotFound: string;
+  addressUnpublished: string;
+  addressPrivate: string;
+  addressUntitled: string;
+  addressExternal: string;
+  addressLinkOnly: string;
+  addressAddAsLink: string;
   searchingPages: string;
   noMatchingPages: string;
   noPages: string;
@@ -111,6 +164,8 @@ export interface NavManagerLabels {
   back: string;
   collection: string;
   addCollection: string;
+  /** Tooltip on the icon marking a smart collection in the picker. */
+  smartCollectionLabel?: string;
   addCollectionToNavigation: string;
   addCollectionDescription: string;
   allCollectionsAdded: string;
@@ -126,6 +181,12 @@ export interface NavManagerLabels {
   confirmDeleteCollection: string;
   headerSection: string;
   moreSection: string;
+  /**
+   * Label on the preview's overflow button. Mirrors the real site header, so it
+   * comes from the public nav catalog (untranslated) rather than `moreSection`,
+   * which is the translated settings section heading.
+   */
+  previewMore: string;
   moreEmptyHint: string;
   placementSaved: string;
   cancel: string;

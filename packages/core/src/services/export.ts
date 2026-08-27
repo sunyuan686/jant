@@ -27,6 +27,7 @@ import {
   getDefaultJantAppleTouchIconBytes,
   getDefaultJantFaviconIcoBytes,
 } from "../lib/jant-branding.js";
+import { getRootActivityAt } from "../db/thread-activity.js";
 import { tiptapJsonToMarkdown } from "../lib/tiptap-to-markdown.js";
 import { extractBodyText } from "../lib/summary.js";
 import { getMediaUrl, getPublicUrlForProvider } from "../lib/image.js";
@@ -109,6 +110,10 @@ export interface SiteConfig {
   siteUrl: string;
   siteDescription: string;
   siteLanguage: string;
+  /** Whether the source site serves per-language browsing views. */
+  multilingualEnabled: boolean;
+  /** Non-primary content languages, in switcher order. */
+  additionalLanguages: readonly string[];
   showJantBrandingOnHome: boolean;
   /** Whether anonymous JSON reads are enabled on the source Jant site. */
   publicApiEnabled: boolean;
@@ -116,6 +121,8 @@ export interface SiteConfig {
   rssFeedsEnabled: boolean;
   /** "latest" or "featured" — drives the default RSS nav link in the exported site. */
   mainRssFeed: string;
+  /** "list" or "grid" — the layout the exported archive page opens with. */
+  archiveDefaultLayout: string;
   siteFooter: string;
   showHeaderAvatar: boolean;
   siteAvatarUrl: string;
@@ -136,7 +143,13 @@ export interface SiteConfig {
   sitePathPrefix?: string;
   navItems: Pick<
     NavItem,
-    "type" | "systemKey" | "label" | "url" | "position" | "placement"
+    | "type"
+    | "systemKey"
+    | "label"
+    | "targetTitle"
+    | "url"
+    | "position"
+    | "placement"
   >[];
   /** Items per page for Hugo pagination — kept in sync with the main site's PAGE_SIZE. */
   pageSize: number;
@@ -254,7 +267,10 @@ export function createExportService(
     async generateHugoFiles() {
       const collectionDirectoryDataPromise =
         typeof services.collections.listDirectoryData === "function"
-          ? services.collections.listDirectoryData()
+          ? // The export builds a public static site, so it sees what a
+            // signed-out reader sees. Language narrowing is not applied: the
+            // export walks every language itself.
+            services.collections.listDirectoryData({ isAuthenticated: false })
           : Promise.resolve(null);
 
       // 1. Query all data
@@ -303,14 +319,30 @@ export function createExportService(
         allPosts,
         collectionsByRoot,
       );
-      const exportedCollectionDirectoryItems =
-        buildExportedCollectionDirectoryItems(
-          collectionDirectoryData?.items ??
-            allCollections.map((collection) => ({
-              id: collection.id,
+      // Smart collections are left out of a static export. Their membership is
+      // a query, and the exported site has no database to run it against, so
+      // the honest options are "omit" or "freeze today's matches under a name
+      // that promises to keep updating". Round-tripping them is out of scope
+      // (see the smart collections design notes); omitting is what that
+      // decision means here.
+      const exportableDirectoryItems: ExportCollectionDirectorySourceItem[] =
+        collectionDirectoryData?.items
+          ? collectionDirectoryData.items
+              .filter((item) => item.type !== "smart_collection")
+              .map((item) => ({
+                type: item.type as "collection" | "divider" | "link",
+                label: item.label,
+                url: item.url,
+                description: item.description,
+                collection: item.collection,
+              }))
+          : allCollections.map((collection) => ({
               type: "collection" as const,
               collection,
-            })),
+            }));
+      const exportedCollectionDirectoryItems =
+        buildExportedCollectionDirectoryItems(
+          exportableDirectoryItems,
           collectionSlugMap,
           collectionMetrics,
         );
@@ -885,6 +917,11 @@ async function buildThreadBundle(
     format: root.format,
     status: root.status,
     visibility: root.visibility,
+    // Language is Thread-uniform, so only the root emits it; the importer
+    // re-derives replies from their root. `translation_group` is an opaque
+    // shared key — importing the whole site keeps translated posts linked.
+    language: root.language ?? undefined,
+    translation_group: root.translationGroupId ?? undefined,
     summary_text: getArchiveSummaryText(root) ?? undefined,
     link_url: root.format === "link" && root.url ? root.url : undefined,
     source_name: root.format === "quote" && root.title ? root.title : undefined,
@@ -974,6 +1011,7 @@ async function buildThreadBundle(
       source_url: reply.format === "quote" && reply.url ? reply.url : undefined,
       quote_text: reply.quoteText ?? undefined,
       rating: reply.rating ?? undefined,
+      quiet_reply: reply.quietReply ? true : undefined,
       featured_at:
         reply.featuredAt !== null ? toISOString(reply.featuredAt) : undefined,
       pinned_at:
@@ -1326,11 +1364,7 @@ function buildExportedCollectionMetrics(
       continue;
     }
 
-    const activityAt =
-      post.lastActivityAt ??
-      post.publishedAt ??
-      post.updatedAt ??
-      post.createdAt;
+    const activityAt = getRootActivityAt(post);
     const threadCollections = collectionsByThread.get(post.id) ?? [];
 
     for (const collection of threadCollections) {
@@ -1358,13 +1392,21 @@ function buildExportedCollectionMetrics(
 // Nav item resolution
 // ---------------------------------------------------------------------------
 
+/**
+ * Label to bake into the static site.
+ *
+ * Mirrors `getNavItemDisplayLabel`: a stored label is the author's own words
+ * and wins, an empty one means the item follows what it points at. The export
+ * has no i18n runtime, so built-in destinations fall back to their English
+ * default rather than a translated one.
+ */
 function resolveNavItemLabel(item: SiteConfig["navItems"][number]): string {
   if (item.label) return item.label;
   if (item.systemKey) {
     const definition = SYSTEM_NAV_KEYS[item.systemKey as SystemNavKey];
     if (definition) return definition.defaultLabel;
   }
-  return item.label;
+  return item.targetTitle?.trim() || item.label;
 }
 
 /**
@@ -1470,6 +1512,7 @@ function buildHugoToml(config: SiteConfig): string {
     "[params]",
     `  description = "${escapeTomlString(config.siteDescription)}"`,
     `  main_rss_feed = "${escapeTomlString(config.mainRssFeed)}"`,
+    `  archive_default_layout = "${escapeTomlString(config.archiveDefaultLayout)}"`,
     `  public_api_enabled = ${config.publicApiEnabled}`,
     `  rss_feeds_enabled = ${config.rssFeedsEnabled}`,
     `  show_jant_branding_on_home = ${config.showJantBrandingOnHome}`,
@@ -1512,7 +1555,10 @@ function buildJantDataToml(
     `site_name = "${escapeTomlString(config.siteName)}"`,
     `site_description = "${escapeTomlString(config.siteDescription)}"`,
     `site_language = "${escapeTomlString(config.siteLanguage)}"`,
+    `multilingual_enabled = ${config.multilingualEnabled}`,
+    `additional_languages = "${escapeTomlString(config.additionalLanguages.join(","))}"`,
     `main_rss_feed = "${escapeTomlString(config.mainRssFeed)}"`,
+    `archive_default_layout = "${escapeTomlString(config.archiveDefaultLayout)}"`,
     `public_api_enabled = ${config.publicApiEnabled}`,
     `rss_feeds_enabled = ${config.rssFeedsEnabled}`,
     `show_jant_branding_on_home = ${config.showJantBrandingOnHome}`,

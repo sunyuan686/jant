@@ -27,6 +27,13 @@ export interface SearchOptions {
   status?: Status[];
   /** Filter by format */
   format?: Format;
+  /**
+   * Restrict to one BCP 47 content language (canonical form, matched exactly).
+   *
+   * The index itself is language-agnostic — one shared index serves every
+   * language — so this is a plain residual predicate on the matched rows.
+   */
+  lang?: string;
 }
 
 export interface SearchService {
@@ -54,8 +61,13 @@ interface RawSearchRow {
   rating: number | null;
   reply_to_id: string | null;
   thread_id: string;
+  language: string | null;
+  translation_group_id: string | null;
+  /** SQLite returns 0/1, Postgres a boolean. */
+  quiet_reply: number | boolean | null;
   published_at: number | null;
   last_activity_at: number | null;
+  thread_updated_at: number | null;
   created_at: number;
   updated_at: number;
   rank: number;
@@ -92,9 +104,17 @@ function mapRow(row: RawSearchRow): SearchResult {
       previewProvider: null,
       replyToId: row.reply_to_id,
       threadId: row.thread_id,
+      language: row.language,
+      translationGroupId: row.translation_group_id,
+      quietReply: Boolean(row.quiet_reply),
       publishedAt: row.published_at,
       lastActivityAt:
         row.last_activity_at ?? row.published_at ?? row.updated_at,
+      threadUpdatedAt:
+        row.thread_updated_at ??
+        row.last_activity_at ??
+        row.published_at ??
+        row.updated_at,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     },
@@ -172,6 +192,8 @@ export function createSearchService(
     const statusPlaceholders = status.map(() => "?").join(", ");
     const formatFilter = options.format ? "AND post.format = ?" : "";
     const formatParams = options.format ? [options.format] : [];
+    const langFilter = options.lang ? "AND post.language = ?" : "";
+    const langParams = options.lang ? [options.lang] : [];
 
     if (databaseDialect === "sqlite") {
       const ftsQuery = buildSqliteFtsQuery(query);
@@ -195,12 +217,21 @@ export function createSearchService(
           AND post.site_id = ?
           AND post.status IN (${statusPlaceholders})
           ${formatFilter}
+          ${langFilter}
         ORDER BY post_fts.rank
         LIMIT ? OFFSET ?
       `);
 
       const { results } = await stmt
-        .bind(ftsQuery, siteId, ...status, ...formatParams, limit, offset)
+        .bind(
+          ftsQuery,
+          siteId,
+          ...status,
+          ...formatParams,
+          ...langParams,
+          limit,
+          offset,
+        )
         .all<RawSearchRow>();
 
       return withSnippetFallback((results || []).map(mapRow), query);
@@ -269,12 +300,21 @@ export function createSearchService(
         AND post.site_id = ?
         AND post.status IN (${statusPlaceholders})
         ${formatFilter}
+          ${langFilter}
       ORDER BY rank DESC, post.published_at DESC NULLS LAST, post.id DESC
       LIMIT ? OFFSET ?
     `);
 
     const { results } = await stmt
-      .bind(tsQuery, siteId, ...status, ...formatParams, limit, offset)
+      .bind(
+        tsQuery,
+        siteId,
+        ...status,
+        ...formatParams,
+        ...langParams,
+        limit,
+        offset,
+      )
       .all<RawSearchRow>();
 
     return withSnippetFallback((results || []).map(mapRow), query);
@@ -291,6 +331,8 @@ export function createSearchService(
     const statusPlaceholders = status.map(() => "?").join(", ");
     const formatFilter = options.format ? "AND post.format = ?" : "";
     const formatParams = options.format ? [options.format] : [];
+    const langFilter = options.lang ? "AND post.language = ?" : "";
+    const langParams = options.lang ? [options.lang] : [];
 
     if (databaseDialect === "pg") {
       const stmt = rawQuery.prepare(`
@@ -315,6 +357,7 @@ export function createSearchService(
           AND post.site_id = ?
           AND post.status IN (${statusPlaceholders})
           ${formatFilter}
+          ${langFilter}
         ORDER BY rank DESC, post.published_at DESC NULLS LAST, post.id DESC
         LIMIT ? OFFSET ?
       `);
@@ -329,6 +372,7 @@ export function createSearchService(
           siteId,
           ...status,
           ...formatParams,
+          ...langParams,
           limit,
           offset,
         )
@@ -362,6 +406,7 @@ export function createSearchService(
       AND post.site_id = ?
       AND post.status IN (${statusPlaceholders})
       ${formatFilter}
+          ${langFilter}
       ${likeOrderBy}
       LIMIT ? OFFSET ?
     `);
@@ -375,6 +420,7 @@ export function createSearchService(
         siteId,
         ...status,
         ...formatParams,
+        ...langParams,
         limit,
         offset,
       )

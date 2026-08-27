@@ -51,6 +51,48 @@ function makeFeedData(post: FeedPostView): FeedData {
 }
 
 describe("feed renderers", () => {
+  // Stamping the render time on <updated> tells every reader the feed changed
+  // on every poll, which is untrue and useless for change detection.
+  it("dates the feed by its newest entry, not the render time", () => {
+    const xml = defaultFeedRenderer({
+      ...makeFeedData(makePostView()),
+      posts: [
+        makePostView({
+          id: "a",
+          permalink: "/a",
+          feedUpdatedAt: "2026-01-02T00:00:00.000Z",
+        }),
+        makePostView({
+          id: "b",
+          permalink: "/b",
+          feedUpdatedAt: "2026-05-09T00:00:00.000Z",
+        }),
+        makePostView({
+          id: "c",
+          permalink: "/c",
+          feedUpdatedAt: "2026-03-04T00:00:00.000Z",
+        }),
+      ],
+    });
+
+    const feedUpdated = /<id>[^<]*<\/id>\s*<updated>([^<]+)<\/updated>/.exec(
+      xml,
+    )?.[1];
+    expect(feedUpdated).toBe("2026-05-09T00:00:00.000Z");
+  });
+
+  it("falls back to the render time for an empty feed", () => {
+    const xml = defaultFeedRenderer({
+      ...makeFeedData(makePostView()),
+      posts: [],
+    });
+
+    const feedUpdated = /<id>[^<]*<\/id>\s*<updated>([^<]+)<\/updated>/.exec(
+      xml,
+    )?.[1];
+    expect(feedUpdated).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
   it("keeps Atom entry titles empty for untitled posts and strips script tags from content", () => {
     const xml = defaultFeedRenderer(
       makeFeedData(
@@ -148,6 +190,80 @@ describe("feed renderers", () => {
     );
     expect(xml).toContain("Marcus Aurelius");
     expect(xml).toContain("https://example.com/meditations");
+  });
+
+  // The site keeps quote line breaks with `white-space: pre-line`; feed
+  // readers strip CSS, so the breaks have to be markup or the quote collapses
+  // into one run-on paragraph.
+  it("keeps quote line breaks as markup", () => {
+    const xml = defaultFeedRenderer(
+      makeFeedData(
+        makePostView({
+          format: "quote",
+          quoteText: "Roses are red\nViolets are blue\n\nSo it goes.",
+          summary: undefined,
+          excerpt: undefined,
+        }),
+      ),
+    );
+
+    expect(xml).toContain(
+      "<blockquote><p>Roses are red<br/>Violets are blue</p>\n<p>So it goes.</p></blockquote>",
+    );
+  });
+
+  it("normalizes CRLF line breaks in quotes", () => {
+    const xml = defaultFeedRenderer(
+      makeFeedData(
+        makePostView({
+          format: "quote",
+          quoteText: "First line\r\nSecond line",
+          summary: undefined,
+          excerpt: undefined,
+        }),
+      ),
+    );
+
+    const content =
+      /<content type="html"><!\[CDATA\[([\s\S]*?)\]\]><\/content>/.exec(
+        xml,
+      )?.[1];
+    expect(content).toBe(
+      "<blockquote><p>First line<br/>Second line</p></blockquote>",
+    );
+  });
+
+  it("escapes quote text before inserting line-break markup", () => {
+    const xml = defaultFeedRenderer(
+      makeFeedData(
+        makePostView({
+          format: "quote",
+          quoteText: "<script>alert(1)</script>\nsecond & last",
+          summary: undefined,
+          excerpt: undefined,
+        }),
+      ),
+    );
+
+    expect(xml).toContain(
+      "<blockquote><p>&lt;script&gt;alert(1)&lt;/script&gt;<br/>second &amp; last</p></blockquote>",
+    );
+  });
+
+  it("falls back to the summary when a quote holds only whitespace", () => {
+    const xml = defaultFeedRenderer(
+      makeFeedData(
+        makePostView({
+          format: "quote",
+          quoteText: "  \n  ",
+          summary: "A quote worth keeping",
+          excerpt: undefined,
+        }),
+      ),
+    );
+
+    expect(xml).not.toContain("<blockquote");
+    expect(xml).toContain("<p>A quote worth keeping</p>");
   });
 
   it("link posts point <link> to original URL with ★ permalink back to blog", () => {

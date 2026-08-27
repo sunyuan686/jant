@@ -225,3 +225,774 @@
 - When a restrained inline notice is too easy to miss, add salience through a
   subtle token-based surface and a reduced-motion-safe entrance—not more copy
   or decorative status icons.
+- Never shrink or compress a layout to fit a visual comparison into one
+  screenshot. Spacing is judged as a ratio against its surroundings, so halving
+  the surrounding distance makes every candidate look twice as large and pushes
+  the choice too small. Scroll and take several crops instead.
+- When a marker's geometry is derived from a size token on one axis, check the
+  other axis in the same change. A rail can center its dots correctly
+  vertically while the horizontal offset is still a constant left over from a
+  different component's marker size.
+- When a user keeps saying a small element "doesn't look right" across several
+  rounds of size and shape changes, stop tuning geometry and grep the token file
+  for how the same colour is used elsewhere. An element using an accent at full
+  strength while every sibling token uses 6-24% will read wrong at any size.
+- Never publish a rendered page — artifact, demo, or screenshot deliverable —
+  without opening it and looking first. Computed-style assertions are worth
+  running too, but they do not replace looking at the result.
+- `display: contents` drops an element's box, not its place in the DOM tree, so
+  a wrapper added for event delegation still breaks every child combinator
+  (`.parent > .child`) that used to reach past it. Before inserting one, grep
+  the stylesheet for `> ` rules naming the child. Flex/scroll chains fail
+  silently this way: the child falls back to `display: inline`, its
+  `overflow-y: auto` descendant loses the bounded height it needed, and the
+  content simply stops scrolling. Prefer putting the listener on the element
+  itself.
+- When a CSS value edit appears to have no effect, do not tune it further —
+  find what shadows it. Shorthands beat the longhands they cover regardless of
+  which reads more specific: a later `padding-inline` inside a media query
+  overrides the horizontal halves of an earlier `padding`, at equal specificity,
+  so edits to the base rule are inert whenever that query matches. Enumerate
+  every rule for the selector (`grep -n '\.the-class' styles/*.css`) before
+  changing a number twice. Where two blocks legitimately tune the same property,
+  have both set custom properties that a single declaration reads, so neither
+  can silently shadow the other.
+- Judge a responsive tweak in the mode the user is looking at, not the one the
+  automation window happens to be in. `(hover: none) and (pointer: coarse)`
+  matches whenever DevTools device emulation is on, which is exactly when
+  someone is eyeballing a dialog. An offscreen same-origin iframe sized to the
+  breakpoint renders the other mode for measurement and screenshots without
+  resizing the window.
+- Leave the dev server running between turns when the user is iterating on
+  visuals. Killing it as cleanup means their next reload shows a stale page, and
+  "I changed it and nothing happened" then has two causes to untangle instead of
+  one.
+- Never compute a Lit component's rendered output by reading the DOM inside
+  `render()` — `querySelector` there sees the tree as it stands _before_ this
+  render's own changes land, so anything derived from the set of children is one
+  step behind whenever that set changes. Push the answer up: let each child
+  report its own state through an event, key it by the child's id, and reduce
+  over the ids. A `requestUpdate()` sprinkled after the fact only papers over
+  the particular case that was noticed.
+- Render a list of stateful children with `repeat(items, item => item.id, …)`.
+  An unkeyed `items.map()` reuses elements by position, so removing a middle
+  item drops the _last_ element — and any state the element owns (a Tiptap doc,
+  an upload) goes with it while the surviving elements silently pair up with the
+  wrong model rows.
+- Centre icon artwork inside its own viewBox. Layout centres the `<svg>` box, so
+  any drift between the artwork's bounding box and the viewBox centre rides
+  straight through into every use. Check with
+  `svg.getBBox().y + svg.getBBox().height / 2` against half the viewBox height —
+  a 1-unit drift on a 16-unit grid is roughly 1px on screen and reads as an icon
+  floating above its label.
+
+## Measuring live UI in the browser harness
+
+The automated tab reports `visibilityState: "hidden"`, and a hidden tab does not
+advance CSS animations, CSS transitions, or `requestAnimationFrame`. Before
+measuring anything in the running app, inject
+`* { transition: none !important }` plus `animation: none !important` on the
+element that animates in. Otherwise:
+
+- `getBoundingClientRect()` reads through a stuck opening transform — the
+  compose dialog's `scale(0.97)` made a 36px button measure 34.92px;
+- `getComputedStyle()` returns the value the transition started from, so a
+  button that has just become enabled still reports its disabled colours;
+- TipTap's `commands.focus()` is a no-op, because it defers `view.focus()` to a
+  `requestAnimationFrame` that never fires. Assert the handler ran (a probe
+  attribute, a spy) rather than asserting `document.activeElement`.
+
+## Dark mode: elevation is lightness, not shadow
+
+Every separator that works on a light page is _black over something_ — backdrop
+dims, drop shadows, hairline borders. On a near-black page all of them stop
+working at once. When a dark surface needs to read as above the page, lift its
+lightness; do not reach for a heavier shadow or a darker backdrop (measured:
+pushing a dialog's backdrop from 0.3 to 0.7 alpha bought 0.05 of contrast).
+
+The lift has a ceiling: it must stay below `--site-divider`, or the hairlines
+drawn on that surface disappear into it.
+
+**Do not judge two dark surfaces by WCAG contrast ratio.** Its `+0.05` floor
+crushes near-black, so the number barely moves and can even fall as the
+perceptual gap grows (deepening a page from L 0.17 to 0.11 took the measured
+ratio from 1.24:1 down to 1.15:1 while widening the real step). Use Oklab ΔL —
+that is what the reference systems design against, and by it a dark dialog
+needs only ~0.05–0.09 above the page: GitHub ships 0.044, Material 3 0.057,
+Radix 0.074. Reserve WCAG ratios for text and control boundaries, which is what
+they are for.
+
+Dark UIs separate a floating layer with three cues, none of them a shadow: a
+small surface step, a border clearly visible against that surface (~0.10–0.15
+ΔL — Radix spends two of its twelve grey steps on borders alone), and blur
+behind modals. The border usually does more work than the fill; check it before
+reaching for more lift.
+
+Before lifting a token named `*-elevated-*`, read its call sites. In this
+codebase `--site-elevated-bg` was used ~60 ways that mean "the default
+background", including three that use it as _text_ colour, so lifting it
+repainted the reading column. Add an honest token and migrate deliberately
+instead of redefining one whose meaning has drifted.
+
+## Turn the familiar affordance down; don't replace it
+
+Seven passes to land the compose tools row's on state, and the answer was the
+first thing that was tried and rejected — a chip behind the icon — just quieter.
+What had actually failed the first time was firing two channels at once: the
+chip _and_ the glyph jumping from the row's faded ink to full strength, so the
+whole button lit up. Keeping the glyph exactly as its neighbours are drawn and
+letting the chip speak alone reads as on without raising the row's voice — and
+once it was alone it could take a deeper tint (85% of the row's hover colour)
+in a smaller box (36px inside the 44px target, via `background-clip:
+content-box`) than the version that had two channels going.
+
+Everything invented in between — accent hue, a heavier stroke, a 3px dot, an
+edge-less radial cushion — was more inventive and worse. The dot and the
+cushion were rejected in the same words: they are not what a person reads as
+"switched on". A rounded fill behind an icon is; a shapeless smudge under it
+looks like a rendering artefact, and a mark beside it looks like clutter.
+
+So when a control feels too loud, first ask which channels are stacked on it
+and turn them down one at a time. Do not replace a conventional affordance with
+a subtler invention — the convention is doing work that no amount of restraint
+in a novel treatment can buy back. Notes from the detour:
+
+- **A chip's loudness is mostly its edge, not its fill** — which is why the
+  radial version disappeared at the same tint. That is a reason to soften the
+  fill, not to delete the silhouette.
+- **Underlines pick up meaning from what they sit under.** A bar under the
+  `title` T read as the underline-formatting button.
+- **Accent is not always a colour.** Jant ships two themes whose accent has
+  zero chroma (`snow`, `paper`), so hue can never carry a state alone. Keep
+  `aria-pressed` on the toggles regardless.
+
+And don't lean on "the panel it opened is the state display" — icon-only
+toggles have no label, so the button has to answer on its own.
+
+## Delete the task file before committing, not after
+
+`tasks/todos/` accumulated nine finished task files because cleanup was treated
+as an afterthought — something to do once the commit was already made, which
+means never. Removing the file is part of finishing the work, so it belongs in
+the same step as writing the Results section: verify → record results → delete
+the file → commit. A commit command that says "only stage and commit" is not a
+reason to skip it; by then it is too late.
+
+The criterion is the file's own checkboxes, not whether the code shipped.
+Several of the stale files turned out to still carry unchecked manual-QA
+passes, open questions addressed to the user, and follow-up work — deleting
+them would have destroyed the only record of those. **A task file with open
+items is active work even when its code has already landed.** Only delete when
+nothing is left unchecked.
+
+That is also why `tasks/todos/*.md` should not be gitignored, tempting as it is
+to make the rule self-enforcing: the files carry handoff state that has to
+survive a fresh clone. The discipline has to live in the workflow instead.
+
+## Lingui resolves ICU at `i18n._()` — placeholders the browser fills must be passed back
+
+Any label rendered server-side and interpolated client-side has to carry its
+placeholder through explicitly:
+
+```ts
+i18n._(msg({ message: "Translation of “{title}”" }), { title: "{title}" });
+```
+
+Formatting with no value does not leave `{title}` in the string — it resolves to
+nothing, so the label silently ships as `Translation of ""`. This has now caused
+the same bug twice (the multilingual settings dialog, then compose). It is
+invisible in a type check and invisible in a component test that uses fixture
+labels: the assertion has to run against the **server-rendered** labels blob.
+When adding a label with a browser-filled slot, add a test that renders the
+component and asserts the slot survived.
+
+## hono/jsx deduplicates `<link>` elements by `href`
+
+Two `<link>` elements with the same `href` render as one, whatever their `rel`
+or other attributes. That silently drops:
+
+- a self-referential `hreflang` alternate (it shares the canonical link's URL),
+- an `x-default` alternate (it shares the primary language's URL).
+
+An hreflang set without a self-referential entry is ignored by search engines,
+so this is not cosmetic. Emit such groups as `raw()` HTML with `escapeHtml()` on
+the attribute values rather than as JSX elements. Suspect this whenever a list
+of `<link>`s renders with fewer elements than the array it was mapped from.
+
+## `types/` must not import from `lib/`
+
+A type-only `import` from `src/types/views.ts` into `src/lib/view-language.ts`
+was enough to change TypeScript's lib resolution across the whole program — an
+unrelated file started failing with a DOM-vs-workers `BufferSource` mismatch,
+and only under `tsc -b --force`. The dependency direction is `lib → types`;
+shared view types belong in `types/`, and `lib` re-exports them if convenient.
+If a type error appears in a file you did not touch, check whether a new import
+created a cycle through the type layer.
+
+## `vi.mock()` paths are relative to the _component_, not the test file
+
+`packages/core/src/client/components/__tests__/jant-post-menu.test.ts` mocked
+`"../confirm.js"`, but the component it tests lives one folder up, so its own
+import resolves to `"../../confirm.js"` from the test. Vitest registers a mock
+for a specifier nothing imports and reports nothing: the real confirm dialog ran
+for months, and the one test that touched it only asserted the menu had closed,
+which happens _before_ the confirm. Mock the path the code under test writes,
+and assert `expect(theMock).toHaveBeenCalled...` at least once per mocked module
+so a dead mock fails loudly.
+
+## BaseCoat's menu styles outrank a two-class selector
+
+Anything with `role="menuitem"` inside a BaseCoat menu picks up a three-class
+rule (`width: 100%`, `display: flex`, ellipsis clipping). A `.post-menu-panel
+.post-menu-row-action` override is (0,2,0) and loses, but _only for properties
+both rules set_ — `height` and `flex` applied while `width` and `display` did
+not, which reads like a stale stylesheet rather than a cascade problem. When a
+custom control inside a menu comes out full-width, add a third class to the
+selector rather than reaching for `!important`.
+
+## A pre-filled composer is not a composer with content in it
+
+`requestClose()` asks "is there content?" (`_hasContent()`) for a new post,
+because a new composer opens empty. Seeding a translation with the original's
+citation broke that assumption: closing without typing a word offered to save a
+draft of a URL. The fix is `_hasWorkToLose()` — content _and_, once seeded, a
+difference from the snapshot taken after seeding. Any future "open the composer
+with something already in it" has to answer the same question, and the snapshot
+has to be re-captured after the pre-fill lands.
+
+## "Show more" and "scroll inside a frame" answer different questions
+
+The reply context deliberately replaced an inner scrollbar with an expand
+toggle, and the comment explaining why is still right — a parent post is read
+once, before writing, so handing it its full height costs nothing. The
+translation context needs the opposite: the author reads a paragraph and writes
+a paragraph, so a source expanded to full height pushes the editor off screen
+exactly when both have to be visible. Ask which one the surface is before
+copying either. A frame that scrolls also needs `overscroll-behavior: contain`
+(or the dialog scrolls on behind it), `tabindex="0"` + `role`/`aria-label` (or
+keyboard users cannot scroll it), and a rule at its top edge (or a half-visible
+first line reads as a clipping bug).
+
+## Borrowed content should render as itself unless there is a reason not to
+
+The first version of the translation context reused the reply context's prose
+resets, which shrink headings onto the thread-context ladder. For a translation
+that is wrong: the _structure_ is part of what is being translated, so a heading
+has to look like a heading. Adding `e-content prose` and dropping the resets was
+the whole fix. Before sharing a rule between two surfaces, check that they agree
+on why it exists — here the shared selector was the bug.
+
+## Read the setting before you write it, and never "restore" a guess
+
+Verifying the multilingual UI needed the feature on, so I called
+`/settings/language/enable`, then `disable()` afterwards to "leave things as I
+found them". They were not as I found them: multilingual was already on, and
+`enable()`'s `writeLanguages(primary, additional)` overwrites
+`ADDITIONAL_LANGUAGES` unconditionally — it dropped a configured `zh-Hant` that
+had a post in it. `/api/settings` does not list `MULTILINGUAL_ENABLED` or
+`ADDITIONAL_LANGUAGES` (no `editor` field, by design — the language service is
+their only writer), and I read that absence as "off".
+
+Rules for touching a dev database to verify something:
+
+- Capture the _actual_ prior value first, from the source of truth — the
+  `site_setting` table if the API does not expose the key — and restore that
+  exact value, not a plausible default.
+- "Absent from an API response" is not "unset". Check why it is absent.
+- Prefer setup that needs no global switch: seed the rows the feature reads, or
+  ask the user to turn it on, rather than flipping site configuration under them.
+- Say in the summary exactly which settings were changed and to what, so a wrong
+  restore is visible immediately instead of three rounds later.
+
+Also: `pkill -f vite` / `pkill -f "wrangler dev"` kills the user's own dev
+server, not just the one this session started. Track the PID and kill that.
+
+## `--type-content-scale` is a site-wide knob, not an inheritable one
+
+Custom properties are substituted **where they are declared**. `:root` declares
+`--type-content-body: calc(var(--type-body) * var(--type-content-scale))`, so it
+resolves to a length on `:root`; descendants inherit that length, not the
+formula. Lowering `--type-content-scale` on a subtree therefore does nothing,
+which is easy to miss because the token's own comment says it "uniformly scales
+all content sizes" — true, but only from `:root`.
+
+Restating every derived token locally works and is what the first fix did. It
+also copies the root's ratios (`* 1.16`, `* 0.94`, …) into a second place to
+drift from. To render a page-scale surface smaller inside a panel, prefer
+`zoom`: it scales spacing and rules along with the text — which is what "the
+page, smaller" actually means, since type alone leaves page-scale margins around
+shrunken words — and it degrades to "not scaled" rather than to broken.
+
+## `preset.css` is mostly unlayered, so `ui.css` cannot override it by specificity
+
+`preset.css` closes its `@layer components` block at line 82. Everything after
+that — `.prose`, `.post-detail-title`, the content-column widths — is
+**unlayered**, and an unlayered declaration beats every declaration in a named
+layer no matter how specific. `ui.css` is entirely inside `@layer components`,
+so a three-class selector there still loses to a one-class selector in the tail
+of `preset.css`.
+
+Symptom: the rule appears in the stylesheet, `getComputedStyle` reports the
+custom properties you set, and the one property you actually wanted silently
+keeps the old value. Reach for `!important` (the existing pattern —
+`.post-menu-panel .post-menu-item`, `.compose-reply-context-body img`) rather
+than adding more classes, and say in the comment that the fight is with an
+unlayered rule.
+
+Custom properties are exempt from this: setting `--layout-content-width` on an
+element wins for that element because nothing else declares it there. That is
+why token overrides worked while the `width` override did not.
+
+## A viewport media query inside a panel is almost always wrong
+
+`preset.css` sizes a post's blocks to the page's reading column three different
+ways: `--layout-content-width` at desktop, a hardcoded `min(80%, 45rem)` for the
+title, and a hardcoded `min(100%, 35rem)` for the whole list under a
+`max-width: 1024px` **viewport** query. Rendering that markup inside a panel,
+only the first is neutralised by overriding the token — the other two are
+`width` declarations that ignore it, and the media query fires on the window,
+which says nothing about how wide the panel is. Symptom: the panel looks right
+on a wide screen and the content stops short of the edge on a narrow one.
+
+When embedding a page-scale rendering, audit for _all_ the ways it is sized, not
+just the tokenised one — and remember `min-width` floors (`.post-attached-group`)
+as well as `width` caps, because a floor larger than the frame gets clipped by
+the frame's `overflow-x: hidden` instead of scrolling.
+
+To test a viewport query without being able to resize the window, inject an
+unlayered `<style>` that replicates the media block's declarations
+unconditionally, and check an element _outside_ the panel does change while one
+inside does not. That also proves the override is really winning rather than the
+rule never having applied.
+
+## An icon that means "the negation of another icon" does not read at menu scale
+
+Every "unlink" glyph is the "link" glyph with something taken away — Lucide's
+`unlink-2` is literally `link-2` minus the middle bar. At the ~1rem size a menu
+row gives a trailing control, the thing taken away is exactly what is invisible,
+so the button reads as "link". Spend a word instead ("Unlink"); it also gives a
+bigger touch target. `×` is not the alternative — next to a row that names
+another post it reads as "delete that post", which is the wrong action to make
+guessable.
+
+The width for the word usually exists: check what the row is spending it on
+first. A translation row was spending it on the other version's title, clipped
+to a few characters, when the language is what identifies a version and the
+title works fine as a `title`/`aria-label`.
+
+## `#focusAfterUpdate` targets must be focusable _and_ present in the first frame
+
+It is `this.querySelector(selector)?.focus()` on the next `updateComplete`, so
+both halves fail silently: a `<div>` row matches and does nothing (`focus()` on
+a non-focusable element is a no-op), and a section rendered from an `await`ed
+fetch is not in the DOM yet when the promise resolves. Point the selector at the
+focusable child (`[data-…-row] a`, not the row), and after the fetch lands
+re-focus if `!this.contains(document.activeElement)` — the guard is what keeps
+the retry from stealing focus in the normal case, where the first attempt found
+something. Note `querySelector` with a selector list returns the first match in
+_document_ order, not in the order the list is written, so the list expresses
+"the topmost of these", never a priority.
+
+A test for this has to assert `document.activeElement`; deleting the retry
+should leave it on `<body>`.
+
+## A close-on-outside-click test must name the swapped subtree, not its container
+
+`#handleDocumentClick` closes the menu on any click that fails
+`target.closest(...)`, and the selector is pinned between two failures.
+
+Too narrow and the header falls outside it: `[role="menu"]` is on the _list_, so
+every back button — which lives in the panel header — read as a click outside
+the menu and closed the whole thing. (The visibility panel escaped only because
+its root carries `data-visibility-panel`, another selector in the same list.
+One panel working is what let the bug survive.)
+
+Too wide and the target cannot reach it: `.post-menu-panel`, the container the
+views render into, looks like the honest "anywhere in the dropdown" answer and
+breaks every item that switches panels. On a **real** click the browser runs a
+microtask checkpoint between event listeners, so the item's own handler has
+already re-rendered the panel by the time the document handler runs; `target` is
+detached, its subtree ends at the view root, and `closest` never reaches the
+container. Clicking a submenu entry opened the submenu and closed the menu in
+one event.
+
+Name the root of the subtree that gets replaced (`.post-menu-view`) — it
+contains the header, and it survives as the detached target's own ancestor.
+
+The timing half of this is invisible to `el.click()` from a script: the stack
+never empties mid-dispatch, so nothing re-renders and every synthetic test
+passes. To cover it, add a listener on the item that calls `performUpdate()`,
+which puts the re-render exactly where the browser's checkpoint would be. Any
+"did this click land inside my UI?" check has this hazard whenever the click
+also re-renders that UI.
+
+## Order a submenu by the questions it answers, not by how often each is used
+
+Demoting the rare action to the bottom is a reasonable default and was wrong
+here: the row that opens the panel reads `Language · 简体中文`, so a panel whose
+_last_ row is that same value reads as an answer to a different question. Lead
+with what the entry promised, then what the author can do, then what already
+exists.
+
+Two corollaries. A section filled by a fetch belongs last whatever its
+importance — anywhere else it shoves the rows below it downward a moment after
+the panel opens, under the cursor. And a section label is only worth a row when
+its rows do not say what they are: "Other versions" over a column of bare
+language names, yes; "Add a translation" over "Write the English version", no —
+but dropping it means any row that leaned on it for context has to be reworded
+to stand alone.
+
+## A link to a per-language surface needs the view prefix, and the default hides it
+
+Two address kinds exist on a multilingual site. Post permalinks are
+language-neutral: one post, one address, whatever view it was reached from.
+Everything the `langGet()` table serves — home, feed, latest, featured, archive,
+search, collections, and the registered-path catch-all — exists once per
+language, so a link to one from inside `/en` that omits `/en` does not merely
+look odd; it silently moves the reader to another language's copy.
+
+Use `toViewPath(c, path)` in handlers, `navData.basePath` in components, and
+`viewPath(path)` in client code (`publicPath` deliberately knows only the site
+path prefix). The trap is not forgetting the rule, it is the shape that hides
+the forgetting: `basePath = sitePathPrefix` as a default parameter turns an
+omission into a valid-looking primary-language link instead of an error. Make
+`basePath` required wherever a component links to a per-language surface, and
+thread it through every wrapper — the signed-in collections directory had the
+bug for exactly one reason, that `CollectionsManager` sat between the page and
+`CollectionDirectory` and did not forward it.
+
+Client-side rendering is a second, easier-to-miss copy of the same bug: a Lit
+component that re-renders rows after hydration overwrites correct server HTML
+with its own hrefs. Check both halves when auditing a surface.
+
+One thing a helper cannot decide for you. `/{slug}` is a shared root namespace:
+a collection page there is per-language, a post permalink there is not, and the
+path alone does not say which. So there are two client helpers, not one —
+`viewPath()` always prefixes and is for call sites that know what they are
+linking to, `navPath()` prefixes only the surfaces provably served per language
+and is for code like the command palette that navigates to settings, posts and
+archives through one branchless code path. Guarding the wrong one strips the
+prefix off exactly the collection links this whole entry is about.
+
+## A translated string only renders if its file is in the settings catalog
+
+`lingui.config.ts` splits messages by _file path_: `routes/dash/**` and
+`ui/dash/**` feed `locales/settings/{locale}`, everything else feeds
+`locales/public/{locale}`. The runtime (`i18n/i18n.ts`) imports only
+`public/en`, `settings/en`, `settings/zh-Hans`, `settings/zh-Hant` — so
+`public/zh-Hans.po` and `public/zh-Hant.po` are never loaded. Writing a Chinese
+`msgstr` there produces a green extraction summary, a translated `.po`, a
+compiled `.ts`, and English on screen.
+
+`i18n/middleware.ts` draws a second boundary that does not match: only
+`ADMIN_PATH_PREFIXES` (`/settings`, `/dash`, `/setup`) render in the author's
+locale at all; every other route is forced to `baseLocale`. A string is only
+translatable where both boundaries agree.
+
+So before writing translations, check both lists. If the route is an admin path
+but its file is not under `dash/`, add the file to the settings catalog's
+`include` **and** the public catalog's `exclude` (this is why
+`routes/auth/setup.tsx` is named explicitly in both). If the route is not an
+admin path, translating it is wasted work until the middleware says otherwise —
+`signin.tsx` and `reset.tsx` are in that state on purpose.
+
+## `mise run i18n-check` answers a question about HEAD, not about your tree
+
+The task runs `i18n:build` and then `git diff --exit-code` over
+`src/i18n/locales/`. On a branch with uncommitted copy changes it always fails,
+and the failure says nothing about whether the catalogs are correct — it only
+says they differ from what is committed. What it actually gates in CI is "a
+rebuild after this commit produces no diff".
+
+To verify that locally before committing, rebuild twice and compare the working
+diff against itself: `git diff --stat src/i18n/locales/` before and after a
+second `mise run i18n-build` must be identical. A changed second run means the
+extraction is not settled — usually a `msgstr` written into a catalog Lingui is
+about to rewrite.
+
+## Terminology fixes need the English source, not a grep
+
+`grep -c` over a locale looks like evidence and usually is not. `文章` appeared
+14 times in `docs/zh-Hans/` against 115 `帖子`, which reads like systematic drift
+until you open each one: 13 are correct generic usage — `我分享一些好文章`,
+`这篇文章说明 Jant 的设计背景`, `文章里某句让你停下来的话`. Only the row whose
+English counterpart said "Post titles" was actually wrong. A blind `sed` would
+have corrupted 13 good sentences to fix one.
+
+The reliable signal is the English source, not the Chinese frequency. In `.po`
+that signal is `msgid`, so a terminology rule can be automated there. In prose
+there is no such signal, so it stays a human call — which is why
+`scripts/check-copy.mjs` only flags `文章` inside PO files. Any rule whose
+matches are mostly false positives gets ignored, taking the true positives with
+it.
+
+## `glossary.*.yml` outranks AGENTS.md on terminology
+
+AGENTS.md said `Post→文章`; `glossary.zh-Hans.yml` had no `Post` entry at all but
+every one of its `note:` fields assumed 帖子 (`Thread→帖子串`, Note as
+"Jant 的帖子格式之一"). The glossary was right and AGENTS.md was the outlier —
+`Thread→文章串` is nonsense, which settles it.
+
+When the two disagree, fix AGENTS.md and add the missing glossary entry, in that
+order. AGENTS.md carries a summary for convenience; the YAML is what translators
+and tooling actually read.
+
+## Offer scope options that stack, not options that exclude
+
+Diagnosing the post-factory-reset redirect loop produced three fixes — a shared
+definition of "signed in here", a `/signin` guard, and signing the browser out
+on delete. They were offered as one mutually exclusive choice, so the reply was
+"do I still need #1, or is #2 enough?" — a question the framing invented. The
+right answer was "#2 plus a three-line guard, skip #1", which the options made
+unpickable.
+
+When several fixes address one report, name each one's own cost and let them
+compose. Reserve mutually exclusive options for genuine forks: two designs that
+cannot both exist.
+
+## A font stack has no "no opinion" slot
+
+`--font-cjk-serif-fallback` defaulted to the family name `"Jant Language
+Fallback"`, meant to read as "this page has no CJK opinion, keep the theme's
+stack". Nothing is named that, so the browser skipped it, the Latin families
+around it have no Han coverage, and `serif` / `sans-serif` resolve to Latin
+faces — leaving 中文 to the OS last-resort font, PingFang SC on Apple platforms.
+A serif blog rendered its Chinese in sans, and the site had no say in it.
+
+Every `font-family` fallback must name fonts that exist. If a value's purpose is
+"stay out of the way", it belongs in the code that decides whether to emit the
+declaration at all, not as an unmatchable name inside the stack.
+
+## An unresolvable selection is answered, not dropped
+
+Twice now the same shape: a query parameter the reader chose could not be
+honored, and the code let it fall through as `undefined` — which reads to the
+query builder as "no filter", so the surface rendered _everything_ under the
+name the reader typed. `visibility=private` did it first; `collection=<gone>`
+was still doing it on the archive page and its feed, where a subscriber got the
+whole archive in place of one collection. Nothing leaked either time, and that
+is exactly why neither was noticed.
+
+When a filter cannot be applied, the honest answers are 404, an explicit error,
+or a redirect that rewrites the URL so it still describes what rendered. Never
+the unfiltered set. Reach for a three-state result (`unfiltered` / `resolved` /
+`missing`) rather than a nullable one — the bug lives in the collapse of "none
+asked" and "none found" into a single `undefined`.
+
+## Deduplicating one copy of a list is not deduplicating the list
+
+`db/schema.ts` once had a private `NAV_ITEM_TYPES` that drifted from the shared
+one and shipped a CHECK missing an enum value. The fix imported _one_ constant,
+`SYSTEM_NAV_KEY_VALUES`, and left nine other private copies in place — including
+`NAV_ITEM_TYPES` itself. The next schema change to any of them would have
+reproduced the original accident exactly.
+
+After fixing a duplication bug, sweep the file for every other instance of the
+same shape, then leave behind a check that fails on the next one. A rule that
+lives only in a commit message is not a rule.
+
+## A `+` in a query string is a space, not a plus
+
+`/collections/{a+b}` spells a collection union with a plus, so `?collection=tech+art`
+looked like the same vocabulary in a query string. It never worked. Hono decodes
+query values as form-urlencoded, where `+` means space, so the parameter arrived as
+`"tech art"`, split on nothing, and resolved to no collection — which the public API
+answered with an empty list. The documented spelling had been broken since it was
+written, and the failure mode was silence.
+
+A path segment's spelling does not transfer to a query parameter. Before reusing one,
+check what the framework hands the handler (`app.request` in a throwaway script settles
+it in seconds). Pick a separator that survives both encodings — a comma — and keep
+reading the old one, plus the space it decodes to.
+
+## Removing something from the UI is not removing it
+
+The archive custom URL was retired by deleting its `<option>` from the settings
+form. That is not retirement — the endpoint still accepted `targetType:
+"archive"`, so anything speaking to the API could still create one, and the
+thing the replacement exists to prevent stayed possible. Two more places had to
+say no: the create schema, so a request gets a `400` rather than a surprise, and
+the service, so no future caller can reach past the schema.
+
+When a capability is withdrawn, the boundary that validates it has to withdraw it
+too. Keep the _read_ path untouched and say so out loud — what is being retired
+is the ability to make new ones, never the ability to serve the ones that exist.
+
+## Adding a value to a shared enum is not adding it to the boundary
+
+`NAV_ITEM_TYPES` grew a `smart_collection` value, the DB CHECK constraints took
+it, the service grew a branch for it, and the picker sent it — but
+`CreateNavItemSchema` is a hand-written discriminated union with one `z.object`
+per type, and it never got a fifth member. Every layer was ready except the
+door, so the only error the author saw was a save that failed, with `type:
+["Invalid input"]` in a response nobody reads.
+
+A discriminated union written by hand off a shared enum is a second copy of that
+enum, and the compiler cannot see the gap: the route's `else` branch absorbed
+the missing case as `link`. When a shared vocabulary constant grows a value,
+grep the value — not the constant — across schemas, route branches, and client
+types, and add an end-to-end test through the HTTP boundary. A service-level
+test would have passed the whole time.
+
+## A class that reads like a modifier can be a whole variant
+
+The "Add condition" button was `class="btn-outline btn-sm"`, and its label was
+invisible. `btn-sm` is not a size modifier on top of `btn-outline` — it is the
+small _primary_ variant, which paints `text-primary-foreground`. `btn-outline`
+paints a light background and never resets the colour, so the label was white on
+white. BaseCoat spells the intended button `btn-sm-outline`, one class.
+
+The same shape bit the controls beside it: `class="input"` on a `<select>` and a
+`<textarea>` does nothing at all, because BaseCoat only ever writes
+`.input[type="…"]` — a `<select>` has no `type`. They were unstyled native
+controls, which is what "the rows don't line up" turned out to mean.
+
+Read the vendor's stylesheet for the exact selector before composing its classes.
+If a class name looks like it modifies another, check whether the library instead
+enumerates every combination — and grep for the same stacking elsewhere, because
+one such mistake is never alone.
+
+## A read-side fallback hides a missing write path
+
+Smart collections appeared in the collections directory but could not be
+dragged: `collections.create` writes a `collection_directory_item` row,
+`smartCollections.create` never did. Nothing looked broken, because the reader
+appends whatever has no row — so the gap only surfaced as
+`{"error":"Invalid ID"}` on a move, and as smart collections silently sinking
+below every manual collection.
+
+When a second entity kind joins an ordered surface, give it the same
+row-writing path as the first, and check what the read side does when the row
+is missing. A fallback that renders the entity under its own id is a design
+decision about ordering, not a safety net — everything downstream that expects a
+row id (drag, neighbour references, position math) has to accept that id too.
+
+## A style hook only exists if a rule reads it
+
+`SmartCollectionPage`'s local `Icon` took a `size` prop and wrote it as
+`--icon-size` on a wrapper span. No stylesheet anywhere read that property, so
+every icon on the page kept lucide's own `width="24" height="24"` — a 24px sort
+chevron beside the collection page's 14px one. The prop looked like an API and
+was inert.
+
+Moving the funnel marker into the page title hit the mirror image: the title's
+`.collection-page-title span { display: block }` matched the nested marker as
+well as the wrapper it was written for, so the marker dropped onto its own line.
+
+Before shipping a size, a colour, or a variant, check the computed value in the
+browser rather than the source. A custom property is not a contract until some
+rule consumes it, and a descendant selector claims every matching element
+underneath, not the one you had in mind — `>` when you mean the direct child.
+
+## `ON DELETE restrict` is a promise every bulk delete has to keep
+
+`smart_collection.collection_id` shipped as the schema's only RESTRICT among 32
+foreign keys, as a backstop under the service's named refusal. It turned three
+delete-everything paths into an ordering constraint, and two of them were
+already wrong: `auth.deleteDataRows` (Settings → delete all data) and
+`siteAdmin.deleteSiteRows` (the hosted delete endpoint) both cleared `collection`
+without clearing `smart_collection` first. Neither runs in a transaction on
+SQLite or D1, so the failure was not a rejected request — it was posts, media,
+paths and nav already gone and the site stuck half-erased.
+
+CASCADE and SET NULL were both wrong for that column too (delete a page because
+its filter's target went away; silently widen a curated page to the whole
+archive), which is the tell: when no ON DELETE action fits, the constraint is
+not the right tool. Put the rule where it can name what is in the way, and check
+what a dangling id actually does on the read side — here it compiles to an `IN`
+over an id nothing carries, so the page shows nothing rather than everything.
+
+Before adding a non-CASCADE foreign key, grep every place that deletes the
+referenced table in bulk — resets, site deletion, import and content-reset
+scripts — and ask what a mid-sequence failure leaves behind.
+
+## drizzle-kit's table rebuild copies a column the old table does not have
+
+Regenerating a migration that adds a column to a SQLite table drizzle has to
+rebuild produced `INSERT INTO __new_x("…","new_col",…) SELECT "…","new_col",…
+FROM x` — selecting the new column from the table that does not have it yet.
+Every statement before it applied cleanly, so the file looked right; it failed
+only when replayed, with `no such column`.
+
+The generated SQL for a rebuild is not reviewed by the type checker and not
+covered by any test that does not actually run the migrations. After
+`db-schema-generate`, replay the whole directory against a scratch database
+**with rows already in the affected tables**, and diff the row counts across the
+rebuild. The `SELECT` list has to say `NULL` for anything the old table lacks.
+
+## Rewriting a migration is free only until something has run it — including your own dev database
+
+Regenerating `0033` (SQLite) and `0031` (PG) was safe for production, which had
+never seen them, and broke both local dev databases the moment `mise run
+dev-node` started: `relation "smart_collection" already exists`.
+
+The two runtimes disagree on what "already applied" means, so both have to be
+handled and neither can be papered over:
+
+- **D1** records `d1_migrations.name`, the filename. A regenerated file has a
+  new tag, so it is pending again.
+- **Postgres** records `drizzle.__drizzle_migrations.created_at` and applies
+  everything whose journal `when` is greater. Regenerating stamps a new `when`,
+  so it is pending again.
+
+Renaming the new file back, or restoring the old `when`, makes the error go away
+and leaves the dev database holding the _old_ definition while the code assumes
+the new one — the exact drift the change was undoing. Repair the database
+instead: an empty one is quickest to drop and re-migrate; one with content worth
+keeping takes the delta by hand (rebuild the table, then rewrite the tracking
+row to the new name or timestamp). Check both dev databases, not the one that
+happened to fail first.
+
+## A browser build that loses a transform fails in the browser, not in the build
+
+`src/lib/filter-dimensions.ts` writes its labels with the Lingui macro, and the
+smart collection dialog put it in the client graph. `vite.config.client.ts`
+assembled its own plugin list and never had `swcPlugin()`, so the macro survived
+into the browser bundle, where `@lingui/core/macro` resolves to a Babel plugin
+that imports `babel-plugin-macros` — a package nothing installs.
+
+Rolldown does not fail that build. It replaces the missing module with one that
+throws when the browser evaluates it, logs nothing (a `require()` inside a CJS
+dependency never reaches `onLog`), and exits 0. The build looked fine; what
+shipped was a `client-auth.js` that threw on load, so every custom element
+registered after the throw — the post menu included — silently stopped existing.
+
+Dev hid it: `vite.config.ts` applies `swcPlugin()` to the whole graph, so the
+macro compiled there and the same code worked under `mise run dev`.
+
+- Every config that emits browser JS takes the shared plugin stack
+  (`clientPlugins()`), never a list it assembles itself. Anything under
+  `src/lib/` can end up in the browser graph, and it is compiled by whichever
+  build pulls it in.
+- The same reach applies to a shared module's _dependencies_. `filter-dimensions.ts`
+  described stored values with Zod schemas, so the dialog that reads the URL
+  vocabulary downloaded 18 kB gzipped of validator with it. A shared vocabulary
+  carries plain predicates; the Zod wrapper around them lives in
+  `lib/schemas.ts`, on the server side of the line, where request bodies are
+  validated anyway.
+- A plugin the dev server applies is not a plugin the production build applies.
+  Dev passing says nothing about `vite build`.
+- Verify a client-side fix against the built bundle — load the emitted
+  `client-auth.js` in a browser and check the elements registered. The dev
+  server compiles different output.
+- Branch on a union with a `switch` whose cases each return, never an if/else
+  chain ending in a bare `else`. A trailing `else` written for one member
+  silently absorbs every member added later: `PostService.list()` had a final
+  branch meant for `rating_asc`, so `sortOrder: "newest"` ordered posts by
+  rating instead of by time wherever it was passed explicitly, and nothing
+  failed. With an annotated return type, a missing case is a compile error.
+- A default that means "same as X" and an explicit value X must reach the same
+  code path. The bug above only reached users because passing `newest`
+  explicitly and passing nothing at all took different branches, so every test
+  that relied on the default kept passing.
+- A popover is dead the moment any ancestor clips. `overflow: hidden` added to
+  round a container's corners cannot be escaped by `z-index`, so the menu keeps
+  reporting itself open — `aria-expanded="true"`, `visibility: visible`, a real
+  bounding rect — while nothing is on screen. Measure both rects before
+  concluding the JS is broken. The container almost never needs the clip:
+  round the inner strip's own top corners instead. Same root cause as the
+  custom-URL row menu (26cbbe50) and the nav preview frame.
+- A floating menu inherits its readability from whatever it lands on. The site
+  header's More menu is a hairline and bare text because the page scrolls under
+  it by design; reused inside a settings preview it lands on rows of cards, so
+  it needs a surface of its own there.

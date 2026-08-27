@@ -5,9 +5,12 @@ export const ID_PREFIX = {
   site: "sit",
   siteDomain: "sdm",
   post: "pst",
+  /** Shared key linking Posts that are translations of one another. */
+  translationGroup: "tgr",
   media: "med",
   uploadSession: "upl",
   collection: "col",
+  smartCollection: "smc",
   path: "pth",
   collectionDirectoryItem: "cdi",
   navItem: "nav",
