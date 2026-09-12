@@ -243,6 +243,8 @@ export interface TimelineItemView {
     leadingReplies: PostView[];
     trailingReplies: PostView[];
     latestReply: PostView;
+    /** Where the gap link points: the first post the fold hides. */
+    gapHref?: string;
     totalReplyCount: number;
   };
   curatedThread?: {
@@ -314,7 +316,7 @@ export interface SiteLayoutProps {
   basePath?: string;
   isAuthenticated?: boolean;
   collections?: Collection[];
-  siteAvatarUrl?: string;
+  siteAvatarThumbUrl?: string;
   showHeaderAvatar?: boolean;
   siteDescriptionHtml?: string;
   siteFooterHtml?: string;

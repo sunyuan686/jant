@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import type { Context } from "hono";
 import { renderToString } from "hono/jsx/dom/server";
 import { describe, expect, it } from "vitest";
+import { readComponentCss } from "../../../__tests__/helpers/component-css.js";
 import type { MediaView, PostView } from "../../../types.js";
 import { I18nProvider } from "../../../i18n/context.js";
 import { createI18n } from "../../../i18n/i18n.js";
@@ -50,11 +51,13 @@ function renderWithI18n(
     | ReturnType<typeof NoteCard>
     | ReturnType<typeof LinkCard>
     | ReturnType<typeof QuoteCard>,
+  isAuthenticated = true,
 ) {
   const i18n = createI18n("en");
   const c = {
     get(key: string) {
       if (key === "i18n") return i18n;
+      if (key === "isAuthenticated") return isAuthenticated;
       return undefined;
     },
   } as unknown as Context;
@@ -89,6 +92,29 @@ describe("timeline cards", () => {
       feedHtml.indexOf("data-post-body"),
     );
     expect(detailHtml).not.toContain("feed-card");
+  });
+
+  it("keeps the link preview above the commentary in every mode", () => {
+    const post = createPostView({
+      format: "link",
+      previewImageUrl: "https://example.com/preview.jpg",
+      previewKind: "video",
+      previewProvider: "youtube",
+    });
+
+    for (const mode of ["feed", "detail"] as const) {
+      const html = renderWithI18n(LinkCard({ post, mode }));
+
+      // The preview is part of the reference, so commentary follows it —
+      // detail used to invert this and read as a note about nothing.
+      expect(html.indexOf('class="link-preview"')).toBeGreaterThan(-1);
+      expect(html.indexOf('class="link-preview"')).toBeLessThan(
+        html.indexOf("data-post-body"),
+      );
+      expect(html.indexOf("feed-link-title")).toBeLessThan(
+        html.indexOf('class="link-preview"'),
+      );
+    }
   });
 
   it("marks a link post's referenced article as u-bookmark-of, never as the entry's own u-url", () => {
@@ -211,10 +237,11 @@ describe("timeline cards", () => {
   });
 
   it("states empty content outright when a card has no name and nothing to say", () => {
-    // The status badges are always in the DOM and hidden with CSS, which a
-    // microformats parser does not run. With no `p-name` and no `e-content` to
-    // go on, it names the entry after whatever text it finds — the badge
-    // labels. An explicit empty `e-content` says what is true and stops that.
+    // The author's card carries every status badge in the DOM, hidden with
+    // CSS, which a microformats parser does not run. With no `p-name` and no
+    // `e-content` to go on, it names the entry after whatever text it finds —
+    // the badge labels. An explicit empty `e-content` says what is true and
+    // stops that.
     const empty = { title: undefined, bodyHtml: undefined, media: [] };
 
     for (const mode of ["feed", "detail", "compact"] as const) {
@@ -310,10 +337,7 @@ describe("timeline cards", () => {
   });
 
   it("styles post titles by their own classes, never by their microformats class", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
 
     // `.p-name` is parsed API; styling it would silently retypeset any element
     // that later needs the property — the quote attribution, for one.
@@ -329,10 +353,7 @@ describe("timeline cards", () => {
   });
 
   it("keeps embedded quotes on the host panel's type scale", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
 
     // The quote body dropped `.e-content`, which is how this rule used to
     // reach it; without the explicit class it would out-size the panel.
@@ -358,10 +379,7 @@ describe("timeline cards", () => {
       new URL("../../../styles/tokens.css", import.meta.url),
       "utf8",
     );
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
     const exportCss = readFileSync(
       new URL(
         "../../../services/export-theme/styles/main.css",
@@ -421,10 +439,7 @@ describe("timeline cards", () => {
       new URL("../../../preset.css", import.meta.url),
       "utf8",
     );
-    const uiCss = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const uiCss = readComponentCss();
     const exportCss = readFileSync(
       new URL(
         "../../../services/export-theme/styles/main.css",
@@ -541,10 +556,7 @@ describe("timeline cards", () => {
       new URL("../../../preset.css", import.meta.url),
       "utf8",
     );
-    const uiCss = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const uiCss = readComponentCss();
     const exportCss = readFileSync(
       new URL(
         "../../../services/export-theme/styles/main.css",
@@ -596,10 +608,7 @@ describe("timeline cards", () => {
   });
 
   it("keeps quote footers on the shared card spacing baseline", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
 
     expect(css).toContain(".feed-quote-post [data-post-meta] {");
     expect(css).not.toContain(
@@ -608,10 +617,7 @@ describe("timeline cards", () => {
   });
 
   it("uses inset-note styling for compose editor blockquotes", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
 
     expect(css).toMatch(
       /\.compose-tiptap-body\s+\.tiptap\s+blockquote\s*\{[\s\S]*background:\s*linear-gradient\(/,
@@ -628,10 +634,7 @@ describe("timeline cards", () => {
   });
 
   it("keeps quote compose aligned with quote-card typography", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
 
     expect(css).toMatch(
       /\.compose-quote-wrap\s*\{[\s\S]*background-color:\s*color-mix\(/,
@@ -643,10 +646,7 @@ describe("timeline cards", () => {
   });
 
   it("keeps reply context previews on thread-context type tokens", () => {
-    const uiCss = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const uiCss = readComponentCss();
     const tokenCss = readFileSync(
       new URL("../../../styles/tokens.css", import.meta.url),
       "utf8",
@@ -666,10 +666,7 @@ describe("timeline cards", () => {
   });
 
   it("resets cloned reply previews away from feed/detail width constraints", () => {
-    const uiCss = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const uiCss = readComponentCss();
     const unlayeredCssStart = uiCss.indexOf(" * Home description");
     const resetRule = uiCss.match(
       /\.compose-reply-context-body\s*:is\([^{}]*\[data-post-body\]\.prose[^{}]*\)\s*\{[^{}]*width:\s*100%;[^{}]*max-width:\s*none;[^{}]*\}/,
@@ -737,10 +734,7 @@ describe("timeline cards", () => {
   });
 
   it("keeps titled detail headers spaced as one reading group", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
 
     expect(css).toMatch(
       /\.post-header-block\s*\{[\s\S]*margin-bottom:\s*1\.7rem;/,
@@ -751,10 +745,7 @@ describe("timeline cards", () => {
   });
 
   it("keeps detail dates quiet while preserving standalone footer spacing", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
 
     expect(css).toMatch(
       /\.post-header-meta-link\s*\{[^}]*font-size:\s*var\(--type-ui-hint\);/,
@@ -768,10 +759,7 @@ describe("timeline cards", () => {
   });
 
   it("adds breathing room when a quote source leads directly into its footer", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
 
     expect(css).toMatch(
       /\.feed-quote-cite:has\(\+ \.post-menu-footer\) \.feed-quote-attribution\s*\{[^}]*margin-bottom:\s*0\.45rem;/,
@@ -792,10 +780,7 @@ describe("timeline cards", () => {
   });
 
   it("progressively enhances canonical endnotes on wide detail and timeline posts", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
     const tokens = readFileSync(
       new URL("../../../styles/tokens.css", import.meta.url),
       "utf8",
@@ -1013,5 +998,35 @@ describe("timeline cards", () => {
 
     expect(html).not.toContain("data-reply-trigger");
     expect(html).toContain("data-post-menu-trigger");
+  });
+
+  it("ships every status badge to the author so the menu can reveal one", () => {
+    const html = renderWithI18n(
+      NoteCard({ post: createPostView({ format: "note" }), mode: "feed" }),
+    );
+
+    expect(html).toContain("post-status-pinned");
+    expect(html).toContain("post-status-private");
+    expect(html).toContain("post-status-draft");
+  });
+
+  it("gives a reader only the badges that apply", () => {
+    const plain = renderWithI18n(
+      NoteCard({ post: createPostView({ format: "note" }), mode: "feed" }),
+      false,
+    );
+    // Nothing to announce, so not even the wrapper.
+    expect(plain).not.toContain("post-status-badges");
+
+    const pinned = renderWithI18n(
+      NoteCard({
+        post: createPostView({ format: "note", pinned: true }),
+        mode: "feed",
+      }),
+      false,
+    );
+    expect(pinned).toContain("post-status-pinned");
+    expect(pinned).not.toContain("post-status-private");
+    expect(pinned).not.toContain("post-status-draft");
   });
 });

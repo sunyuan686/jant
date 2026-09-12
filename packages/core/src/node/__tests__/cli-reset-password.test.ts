@@ -7,17 +7,23 @@ import { run } from "../../../bin/commands/reset-password.js";
 import { migrate } from "../runtime.js";
 import type { Bindings } from "../../types.js";
 import { createBootstrapService } from "../../services/bootstrap.js";
+import { createSiteService } from "../../services/site.js";
 import { createNodeDatabase } from "../../db/index.js";
 
 describe("jant reset-password", () => {
   const tempDirs: string[] = [];
-  const originalEnv = process.env.DATABASE_URL;
+  const originalEnv = {
+    DATABASE_URL: process.env.DATABASE_URL,
+    SITE_RESOLUTION_MODE: process.env.SITE_RESOLUTION_MODE,
+  };
 
   afterEach(async () => {
-    if (originalEnv === undefined) {
-      delete process.env.DATABASE_URL;
-    } else {
-      process.env.DATABASE_URL = originalEnv;
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
 
     await Promise.all(
@@ -37,7 +43,14 @@ describe("jant reset-password", () => {
 
     const sqlite = new Database(databasePath);
     try {
-      const bootstrap = createBootstrapService(createNodeDatabase(sqlite));
+      const db = createNodeDatabase(sqlite);
+      // Each setup screen is its own request, bound to the site it resolved:
+      // none before the account step, the one it created after.
+      const bootstrapForRequest = async () =>
+        createBootstrapService(
+          db,
+          (await createSiteService(db).resolveSingleSite()).site.id,
+        );
       await sqlite
         .prepare(
           `
@@ -53,10 +66,17 @@ describe("jant reset-password", () => {
           new Date().toISOString(),
           new Date().toISOString(),
         );
-      await bootstrap.completeInitialSetup({
+      await (
+        await bootstrapForRequest()
+      ).provisionOwnerAccount({
         ownerUserId: "usr_reset_password_test",
-        siteName: "Reset Password Test",
       });
+      await (
+        await bootstrapForRequest()
+      ).completeSiteSetup(
+        { siteName: "Reset Password Test" },
+        { oldLanguage: "" },
+      );
     } finally {
       sqlite.close();
     }
@@ -87,5 +107,58 @@ describe("jant reset-password", () => {
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringMatching(/^Visit: \/reset\?token=[a-f0-9]{64}$/),
     );
+  });
+
+  // A hosted database holds every tenant, so the token goes to the site the
+  // operator named — and nowhere when they named none.
+  it("writes the token to the site --site names on a host-based database", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jant-reset-password-hosted-"));
+    tempDirs.push(root);
+
+    const databasePath = join(root, "jant.sqlite");
+    await migrate({ DATABASE_URL: `file:${databasePath}` } as Bindings);
+    process.env.DATABASE_URL = `file:${databasePath}`;
+    process.env.SITE_RESOLUTION_MODE = "host-based";
+
+    const sqlite = new Database(databasePath);
+    try {
+      sqlite
+        .prepare(
+          `
+            INSERT INTO site (id, key, status, created_at, updated_at)
+            VALUES
+              ('sit_alpha000000000000000000000', 'alpha', 'active', 1774200000, 1774200000),
+              ('sit_beta0000000000000000000000', 'beta', 'active', 1774200001, 1774200001)
+          `,
+        )
+        .run();
+    } finally {
+      sqlite.close();
+    }
+
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await expect(run([])).rejects.toThrow(
+      "host-based mode needs a target site. Pass --site <key|id>, --host <host>, or --url <url>.",
+    );
+    await run(["--site", "beta"]);
+
+    const sqliteReadonly = new Database(databasePath, { readonly: true });
+    try {
+      const owners = sqliteReadonly
+        .prepare(
+          `
+            SELECT site_id
+            FROM "site_setting"
+            WHERE "key" = 'PASSWORD_RESET_TOKEN'
+          `,
+        )
+        .pluck()
+        .all();
+
+      expect(owners).toEqual(["sit_beta0000000000000000000000"]);
+    } finally {
+      sqliteReadonly.close();
+    }
   });
 });

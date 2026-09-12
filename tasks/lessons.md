@@ -369,6 +369,22 @@ in a novel treatment can buy back. Notes from the detour:
 And don't lean on "the panel it opened is the state display" — icon-only
 toggles have no label, so the button has to answer on its own.
 
+## A task file states the design; it does not argue for it
+
+A plan is read by whoever implements it, and they need the current design plus
+the constraints that must not be broken — not the deliberation that produced it.
+Sections like "why this replaced the earlier scheme", corrections to previous
+drafts, or the trade-offs of rejected alternatives are dead weight at
+implementation time: the reader has to work out which of two designs is the live
+one, and every later edit has to keep the retrospective consistent too.
+
+Keep in the file only what changes what gets built: the design, the invariants
+that are the point of it ("every shown post gets at least MIN_DWELL"), and
+explicit non-goals ("no counts, ever") — non-goals earn their place because
+without them the feature grows them back. Decision history belongs in memory
+and in the commit message, where it is looked up on purpose rather than being
+re-read on every pass through the plan.
+
 ## Delete the task file before committing, not after
 
 `tasks/todos/` accumulated nine finished task files because cleanup was treated
@@ -696,6 +712,15 @@ but its file is not under `dash/`, add the file to the settings catalog's
 admin path, translating it is wasted work until the middleware says otherwise —
 `signin.tsx` and `reset.tsx` are in that state on purpose.
 
+The corollary is an anti-pattern trap: a string defined under `ui/shared/` and
+_again_ under `ui/dash/` usually looks like drift worth deduplicating. It is
+often deliberate placement — the `dash/` copy is the one that gets translated,
+and folding it back into the shared module silently reverts the string to
+English while every check stays green. Before removing an apparent duplicate,
+check which side of the catalog boundary each copy sits on. If the shared
+module is the only consumer's own directory anyway, move the whole table into
+`ui/dash/` rather than deleting one side.
+
 ## `mise run i18n-check` answers a question about HEAD, not about your tree
 
 The task runs `i18n:build` and then `git diff --exit-code` over
@@ -996,3 +1021,203 @@ macro compiled there and the same code worked under `mise run dev`.
   header's More menu is a hairline and bare text because the page scrolls under
   it by design; reused inside a settings preview it lands on rows of cards, so
   it needs a surface of its own there.
+- Selection-gated editor UI must accept `AllSelection`, not only
+  `TextSelection`. Select-all dispatches an `AllSelection` whose `$from`
+  resolves at the document rather than inside a textblock, so both an
+  `instanceof TextSelection` guard and an `$from.parent.isTextblock` check
+  silently drop it.
+- Anchor floating editor UI to the selection's visible line boxes, not to the
+  caret coordinates at `from` and `to`. Once a selection wraps, those endpoints
+  describe a box that contains neither line, and a selection scrolled past the
+  viewport anchors somewhere the reader cannot see.
+- A quality _level_ on a media encoder is not a size budget. mediabunny maps
+  a `Quality` level to a quantizer whenever the codec supports one, and
+  quantizer mode has no size ceiling: a frugally-encoded source re-encoded at
+  QP 16 comes back several times larger, the extra bits spent reproducing its
+  own compression artifacts. When output size matters, pass an explicit
+  `new Quality({ bitrate })` — and note the number shorthand `new Quality(0.85)`
+  means a quality level, not a bitrate. Cap the target by what the source
+  actually carries (its bitrate, adjusted for the codec swap and any
+  downscale); spending more than that buys detail the source never had.
+- Never recommend an encoder setting from the library's nominal numbers alone.
+  The documented bitrate for a quality level can be a fallback that the real
+  encoder never uses. Measure with the actual encoder and the user's actual
+  media first — on macOS, ffmpeg's `h264_videotoolbox` is the same hardware
+  encoder Safari's WebCodecs uses, so it reproduces browser output closely.
+
+## lit-html appends its parts, so a fallback inside a Lit tag survives upgrade
+
+A server-rendered skeleton written _inside_ a custom element is not replaced
+when the component upgrades. `createRenderRoot()` runs before the tag's
+children are parsed, so `this.innerHTML = ""` there clears nothing, the parser
+then appends the fallback, and lit-html inserts its own content after it. Both
+render, stacked. `jant-copy-field` was written this way and produced
+`<input data-fallback><!---->` in a test that asserted the fallback was gone.
+
+The pattern that works here is a **sibling**: the custom element ships empty,
+the fallback sits next to it, and CSS hides one of them — `setup.tsx` renders a
+plain `<select>` beside an empty `<jant-locale-picker>`, with
+`jant-locale-picker:not(:defined)` keeping the picker out of the layout until
+it upgrades.
+
+Before reaching for either, ask whether the thing needs Lit at all. If it is
+static markup plus one handler, server-render it and enhance with a delegated
+listener the way `client/form-enter-submit.ts` does — no upgrade timing, no
+duplicate render, and the content is in the HTML for a reader with scripts off.
+That matters most when the content _is_ the page: `/subscribe` is three feed
+addresses and nothing else, so rendering them client-side would have made it
+the one content page in Jant that needs JavaScript to say anything.
+
+## `text({ enum })` is a TypeScript refinement; the database constraint is separate
+
+Adding a value to a shared enum constant like `SYSTEM_NAV_KEY_VALUES` looks
+migration-free because the column reads `text("system_key", { enum: … })`, and
+Drizzle emits no CHECK from that option. But the same table can declare an
+explicit `check()` over the same column, generated into the migration under a
+name like `chk_nav_item_system_key` — and then a new value is rejected at write
+time by a constraint the column definition never mentions.
+
+Answer it from three places, not one: whether `schema.ts` still declares the
+`check()`, whether the newest `meta/*_snapshot.json` carries it, and what
+`SELECT sql FROM sqlite_master` says on a migrated database. History is not
+enough either — `nav_item.system_key` did carry a value whitelist through
+`0010` and a later migration dropped it, so reading only the older migrations
+gives the opposite wrong answer.
+
+## Two D1 tests take minutes each and time out inside the full suite
+
+`db/__tests__/demo-canonical-snapshot.test.ts` and
+`db/__tests__/migration-rehearsal.test.ts` shell out to wrangler and rebuild a
+local D1; each runs about five minutes. Under `vitest run` they can exceed the
+timeout and report as failures, with the count varying between runs — which
+reads exactly like a flaky regression from whatever you just changed. Re-run
+the named file on its own before investigating; if it passes there, the suite
+result was a timeout, not your change.
+
+## A new enum value needs every map it feeds, so make the maps total
+
+Adding `subscribe` to `SYSTEM_NAV_KEY_VALUES` meant updating four places that
+key off it. Three were obvious — the definition, the built-in label, the
+settings toggle list. The fourth, `getBuiltinNavLabelDescriptor`, was a
+hand-written `if` chain per key, so the missing branch returned `null` and
+`getNavItemDisplayLabel` fell through to the empty stored label. The nav item
+rendered as a link with no text, and nothing failed: not the compiler, not the
+tests, not lint.
+
+An `if` chain or a `Partial<Record<…>>` over an enum is where this hides. Give
+the map the total type — `Record<SystemNavKey, MessageDescriptor>` — and derive
+the lookup from it instead of restating the cases. Then the next key is a
+compile error at the one place that needs a decision, rather than a blank in
+the UI. Where the total map cannot answer (`settings` picks its label from the
+URL it currently points at), keep that one case explicit and let everything
+else fall through to the map.
+
+The same value also reaches the Hugo export, which has its own per-key `if`
+chain and its own feeds-off skip. Grep every `systemKey ===` before assuming
+the list is short.
+
+## Reading the attribute is not reading what the reader sees
+
+The blank label above survived a browser check because the check grepped the
+rendered HTML for `<a href="/subscribe"` and stopped at the match. The href was
+right; the element had no text. The same curl one field wider would have shown
+it.
+
+When verifying that something renders, assert on the rendered text, not on the
+attribute that points at it — `<a href="…">(.*?)</a>` rather than `<a href="…"`.
+Attributes come from the code you just wrote and tend to be right; the text
+comes from a lookup somewhere else, which is where the gap is.
+
+- Independent optional results must not share one `try`. A probe that gathers
+  a codec, a bitrate, a duration and a poster frame in one block returns
+  nothing at all when any single step throws — so an unrelated API mismatch
+  reads as "this video has no thumbnail". Wrap each step that the caller can
+  live without on its own, and say on the console which one failed; a
+  best-effort step that fails silently is indistinguishable from a file that
+  legitimately has nothing to give.
+- A git worktree's `node_modules` does not follow the lockfile. Merging a
+  dependency bump into a worktree leaves the old version installed, and Vite
+  strips types without checking them, so a call to an API the installed
+  version lacks reaches the browser and throws there. When behaviour differs
+  between two worktrees on the same code, compare installed versions before
+  reading the diff — `pnpm-workspace.yaml` now sets `verifyDepsBeforeRun:
+error` to make that state fail the next `pnpm run` instead, and
+  `mise run check-types` catches the same mismatch at the call site.
+
+## Vite dev serves worker sources under a query, and unplugin-swc skips them
+
+A `?worker` / `?worker&inline` module reaches the dev transform pipeline as
+`image-worker.ts?worker_file&type=module`. unplugin-swc's default filter is
+`/\.m?[jt]sx?$/`, anchored at the extension, so SWC never ran and the browser
+received raw TypeScript — the worker died on its first line with an `error`
+event that carries no message, file, or line. Production was unaffected because
+`worker.plugins` bundles the worker without a query. `swcPlugin()` in
+`vite.shared.ts` now passes an `include` that admits the `worker_file` suffix;
+when a worker "works in the build but not in dev" with an empty `ErrorEvent`,
+fetch its dev URL and check whether type annotations survived.
+
+## A shared storage key may only be cleared by whoever put something in it
+
+`jant:compose-draft` answers for new posts and for replies, in every open tab.
+The save path treated "this composer is empty" as "the author threw the draft
+away" and called `removeItem` — so a reply composer, whose parent guard means it
+never restores a new-post draft, deleted one every time its debounced autosave
+ran. Anything that opens empty had the same power: a restore that bailed, a
+second tab, a composer whose content had not loaded yet.
+
+_Is_ empty and _was_ emptied are different claims. Before clearing shared
+storage, require evidence that this writer is the one holding the value —
+`_hasOwnedContent` in `jant-compose-dialog.ts`. The same rule applies to reads:
+`restoreLocalDraft` used to delete a draft it could not parse or that had
+expired, which turns a bad read into lost work. Not restoring is enough.
+
+- Additive state can merge; single-value state cannot. Opening the composer
+  inside a collection adds that collection to a restored draft, which is fine —
+  collections are a set, and the chips show what happened. Applying the same
+  collection's remembered _visibility_ replaced the answer the author had
+  already given that draft, with nothing on screen to say so. Ask whether the
+  context is contributing to a set or overwriting a choice before letting a
+  default reach restored content.
+- Recovery paths need to say why they gave up. Eight exits from the compose
+  restore path were silent and three of them deleted; every one of them looked
+  identical to the author (an empty composer) and left nothing to inspect
+  afterwards. Return a reason, and log it whenever stored bytes existed and did
+  not come back — "there was nothing stored" is the ordinary case and stays
+  quiet.
+
+## Response-header work is not verified until it has been over the wire
+
+Feed ETags passed 24 route tests and did nothing in a browser.
+`withWorkerResponseCache` sits at `app.fetch`, ahead of every route, and puts
+public feed, sitemap, and icon responses into `caches.default`. A cache hit
+returned the stored `200` and the handler that read `If-None-Match` never ran.
+`curl -D -` against `mise run dev-debug` showed it in one line:
+`cf-cache-status: HIT`.
+
+Two rules out of it:
+
+- A route test exercises the route. Anything a layer above the router can
+  intercept — headers, status, caching, redirects — needs one real HTTP request
+  before it counts as verified. `app.request()` enters below `app.fetch`, so
+  everything wrapped around `app.fetch` is invisible to it.
+- Put revalidation outside the cache, not inside the handler. Answering
+  `If-None-Match` in the route means a cache miss returns a `304` that
+  `canStoreWorkerCacheResponse` refuses to store, so a reader who always sends
+  a validator keeps the cache permanently empty and re-renders every poll. The
+  handler emits the tag; `withConditionalResponse` at the edge answers with it,
+  and the miss still stores the whole document on its way out.
+- A rule that only lives in prose does not hold for anything invisible. The
+  BaseCoat "never combine a variant with its base class" rule was in AGENTS.md's
+  Hard Constraints and was still broken repeatedly, because `class="btn
+btn-outline"` compiles, passes every test, and only shows up as a button whose
+  label is missing until hover. When a constraint's violation has no failing
+  signal, write the guard, not another sentence:
+  `src/__tests__/basecoat-variants.test.ts`.
+- When a route's request or response contract changes (payload fields,
+  redirect target, number of steps), grep `dev/scripts/` as well as `src/`.
+  `dev/scripts/pg-smoke.mjs` drives setup, sign-in, and compose over real
+  requests against Postgres, and only CI runs it (`check-pg-smoke` needs
+  `PG_SMOKE_DATABASE_URL`, and `check-tests` does not include it), so a stale
+  payload there passes every local check and fails only after push. To run it
+  locally, start a throwaway `postgres:17` container and point
+  `PG_SMOKE_ADMIN_DATABASE_URL` / `PG_SMOKE_DATABASE_URL` at it.

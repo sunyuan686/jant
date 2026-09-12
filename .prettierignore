@@ -24,6 +24,12 @@ sites/demo-source/canonical/site-export/themes/jant/static/_jant/
 *.pot
 pnpm-lock.yaml
 
+# Vendored upstream bundles, kept byte-identical to the reference copy under
+# `references/datastar/` so a version bump reads as a clean diff. Prettier's own
+# formatting drift between releases (`for (; n; )` vs `for (; n;)`) would
+# otherwise rewrite them on every upgrade.
+packages/core/src/vendor/
+
 # Config
 .lingui/
 references/
@@ -32,6 +38,11 @@ packages/create-jant/template/
 # Assets
 **/src/assets/
 sites/demo/static-site-export/templates/
+
+# In-flight task notes. Scratch working files that get deleted once their items
+# are done, so a formatting nit in one should not fail CI. `tasks/lessons.md`
+# and `tasks/archive/` are kept — those are read long after the work is over.
+tasks/todos/
 
 # Logs
 *.log

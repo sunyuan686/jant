@@ -14,14 +14,16 @@ import type { AppConfig } from "../types/config.js";
 import { CONFIG_FIELDS } from "../types/config.js";
 import type { ArchiveLayout, FeedKind } from "../types/constants.js";
 import { ASSET_BASE_SEGMENT, getPublicAssetBasePath } from "./asset-path.js";
+import { resolveDiscoverMode } from "./discover.js";
 import {
   getAuthSecret,
   getConfiguredSingleSiteUrl,
   getConfiguredStorageDriver,
+  getDiscoverDefault,
   getEnvString,
 } from "./env.js";
 import { parseLanguageList } from "../i18n/locales.js";
-import { getPublicUrlForProvider, getMediaUrl } from "./image.js";
+import { getPublicUrlForProvider, getMediaUrl, getImageUrl } from "./image.js";
 import { normalizeTimeZone } from "./timezones.js";
 import { getSiteOrigin, getSitePathPrefix, normalizeSiteUrl } from "./url.js";
 
@@ -206,6 +208,7 @@ export function resolveConfig(
   // Resolve avatar URL from storage key
   const siteAvatar = allSettings["SITE_AVATAR"] ?? "";
   let siteAvatarUrl = "";
+  let siteAvatarThumbUrl = "";
   if (siteAvatar) {
     const publicUrl = getPublicUrlForProvider(
       storageDriver,
@@ -214,6 +217,17 @@ export function resolveConfig(
       localPublicUrl,
     );
     siteAvatarUrl = getMediaUrl(siteAvatar, publicUrl, sitePathPrefix);
+    // The header and drawer marks render this at 32px and 24px, on every page,
+    // in parallel with the render-blocking stylesheet. An untransformed avatar
+    // is whatever the author uploaded — commonly a 512px PNG — so it competes
+    // for the critical path with tens of times the bytes it can use. 128px
+    // still covers a high-DPR header and a theme that enlarges the mark.
+    siteAvatarThumbUrl = getImageUrl(siteAvatarUrl, imageTransformUrl, {
+      width: 128,
+      quality: 80,
+      format: "auto",
+      fit: "scale-down",
+    });
   }
 
   // Description is "explicit" when set in DB or ENV (not just the default)
@@ -223,6 +237,16 @@ export function resolveConfig(
   const siteDescriptionExplicit = hasDbDescription
     ? !!dbDescription
     : !!envDescription;
+
+  // The owner's stored choice and the deployment's default stay apart, and
+  // the registry default must not stand in for either: an absent row is what
+  // lets `noindex` decide, and an absent binding is what makes Discover
+  // opt-in for a self-hosted site.
+  const discoverStoredValue = allSettings["DISCOVER"];
+  const discoverDefaultValue = getDiscoverDefault(env);
+  const noindex = demoMode || resolve("NOINDEX", allSettings, env) === "true";
+  const rssFeedsEnabled =
+    resolve("RSS_FEEDS_ENABLED", allSettings, env) === "true";
 
   return {
     // Site identity (DB > ENV > Default)
@@ -248,10 +272,17 @@ export function resolveConfig(
     siteFooter: resolve("SITE_FOOTER", allSettings, env),
     showJantBrandingOnHome:
       resolve("SHOW_JANT_BRANDING_ON_HOME", allSettings, env) === "true",
-    noindex: demoMode || resolve("NOINDEX", allSettings, env) === "true",
+    noindex,
+    discover: resolveDiscoverMode({
+      storedValue: discoverStoredValue,
+      defaultValue: discoverDefaultValue,
+      demoMode,
+      noindex,
+      rssFeedsEnabled,
+    }),
     publicApiEnabled:
       resolve("PUBLIC_API_ENABLED", allSettings, env) === "true",
-    rssFeedsEnabled: resolve("RSS_FEEDS_ENABLED", allSettings, env) === "true",
+    rssFeedsEnabled,
 
     // Infrastructure (ENV only)
     siteUrl,
@@ -334,6 +365,7 @@ export function resolveConfig(
     siteAvatar,
     showHeaderAvatar: allSettings["SHOW_HEADER_AVATAR"] === "true",
     siteAvatarUrl,
+    siteAvatarThumbUrl,
     faviconVersion: allSettings["SITE_FAVICON_VERSION"] ?? "",
 
     // Rate limiting (ENV only). Defaults are conservative enough for a

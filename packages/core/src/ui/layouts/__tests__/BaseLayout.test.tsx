@@ -5,6 +5,10 @@ vi.stubGlobal("__JANT_DEV__", false);
 vi.stubGlobal("__JANT_VERSION__", "test-version");
 vi.stubGlobal("__CLIENT_JS_FILE__", "/_assets/client.js");
 vi.stubGlobal("__CLIENT_AUTH_JS_FILE__", "/_assets/client-auth.js");
+vi.stubGlobal("__CLIENT_COMPOSE_PRELOAD__", [
+  "/_assets/client-compose.js",
+  "/_assets/chunks/create-editor.js",
+]);
 
 function createContext(
   mainRssFeed: "featured" | "latest",
@@ -20,6 +24,8 @@ function createContext(
     /** Language of the page being rendered (post language or view language). */
     lang?: string;
     rssFeedsEnabled?: boolean;
+    storageDriver?: string;
+    r2PublicUrl?: string;
   },
 ) {
   const values = {
@@ -36,6 +42,8 @@ function createContext(
       themeId: overrides?.themeId ?? overrides?.defaultThemeId ?? "linen",
       defaultThemeId: overrides?.defaultThemeId ?? "linen",
       assetBasePath: overrides?.assetBasePath ?? "/_assets",
+      storageDriver: overrides?.storageDriver ?? "r2",
+      r2PublicUrl: overrides?.r2PublicUrl,
     },
     lang: overrides?.lang ?? overrides?.siteLanguage ?? "en",
     i18n: {
@@ -320,6 +328,72 @@ describe("BaseLayout", () => {
     expect(html).not.toContain('href="/feed"');
   });
 
+  it("preloads the composer's files on signed-in pages, under the asset base path", async () => {
+    const { BaseLayout } = await loadBaseLayout();
+    const html = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured", {
+          sitePathPrefix: "/blog",
+          siteUrl: "https://example.com/blog",
+          assetBasePath: "/blog/_assets",
+        }),
+        isAuthenticated: true,
+        children: "Test",
+      }),
+    );
+
+    expect(html).toContain(`src="/blog/_assets/client-auth.js"`);
+    expect(html).toContain(
+      `<link rel="modulepreload" href="/blog/_assets/client-compose.js"`,
+    );
+    expect(html).toContain(
+      `<link rel="modulepreload" href="/blog/_assets/chunks/create-editor.js"`,
+    );
+  });
+
+  it("preloads nothing for readers, who never open the composer", async () => {
+    const { BaseLayout } = await loadBaseLayout();
+    const html = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured"),
+        children: "Test",
+      }),
+    );
+
+    expect(html).toContain(`src="/_assets/client.js"`);
+    expect(html).not.toContain("modulepreload");
+  });
+
+  it("links the author stylesheet only once someone is signed in", async () => {
+    const { BaseLayout } = await loadBaseLayout();
+    const render = (isAuthenticated: boolean) =>
+      renderToString(
+        BaseLayout({
+          title: "Jant",
+          c: createContext("featured", {
+            sitePathPrefix: "/blog",
+            siteUrl: "https://example.com/blog",
+            assetBasePath: "/blog/_assets",
+          }),
+          ...(isAuthenticated ? { isAuthenticated } : {}),
+          children: "Test",
+        }),
+      );
+
+    // The composer, editor and settings CSS is the bulk of the hand-written
+    // component styles and none of it renders for a visitor; shipping it on a
+    // public page would put it back on the critical path of every page view.
+    expect(render(false)).not.toContain("client-author.css");
+    expect(render(true)).toContain(
+      '<link rel="stylesheet" href="/blog/_assets/client-author.css"',
+    );
+    // Both pages still share the one reader stylesheet.
+    expect(render(false)).toContain(`href="/blog/_assets/client.css"`);
+    expect(render(true)).toContain(`href="/blog/_assets/client.css"`);
+  });
+
   it("uses the public asset base path from appConfig in production", async () => {
     const { BaseLayout } = await loadBaseLayout();
     const html = renderToString(
@@ -337,6 +411,95 @@ describe("BaseLayout", () => {
     expect(html).toContain(`src="/blog/_assets/client.js"`);
     expect(html).toContain(`href="/blog/_assets/client.css"`);
     expect(html).toContain('data-asset-base-path="/blog/_assets"');
+  });
+
+  it("preconnects to the asset host when assets are served from a CDN", async () => {
+    const { BaseLayout } = await loadBaseLayout();
+    const html = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured", {
+          siteUrl: "https://example.com",
+          assetBasePath: "https://cdn.example.com/jant",
+        }),
+        children: "Test",
+      }),
+    );
+
+    expect(html).toContain(
+      '<link rel="preconnect" href="https://cdn.example.com"/>',
+    );
+    expect(html).toContain(
+      '<link rel="preconnect" href="https://cdn.example.com" crossorigin="anonymous"/>',
+    );
+    // Before the stylesheet it warms the connection for.
+    expect(html.indexOf('rel="preconnect"')).toBeLessThan(
+      html.indexOf('rel="stylesheet"'),
+    );
+  });
+
+  it("preconnects to the media host as well when it is a separate one", async () => {
+    const { BaseLayout } = await loadBaseLayout();
+    const html = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured", {
+          siteUrl: "https://example.com",
+          assetBasePath: "https://cdn.example.com/jant",
+          r2PublicUrl: "https://media.example.com",
+        }),
+        children: "Test",
+      }),
+    );
+
+    expect(html).toContain(
+      '<link rel="preconnect" href="https://media.example.com"/>',
+    );
+    expect(html).not.toContain(
+      '<link rel="preconnect" href="https://media.example.com" crossorigin="anonymous"/>',
+    );
+  });
+
+  it("preconnects once to a host that serves both assets and media", async () => {
+    const { BaseLayout } = await loadBaseLayout();
+    const html = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured", {
+          siteUrl: "https://example.com",
+          assetBasePath: "https://cdn.example.com/_assets",
+          r2PublicUrl: "https://cdn.example.com/media",
+        }),
+        children: "Test",
+      }),
+    );
+
+    expect(html.match(/rel="preconnect"/g)).toHaveLength(2);
+  });
+
+  it("preconnects to nothing when assets and media share the site's origin", async () => {
+    const { BaseLayout } = await loadBaseLayout();
+    const sameOrigin = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured", {
+          siteUrl: "https://example.com",
+          assetBasePath: "https://example.com/_assets",
+          r2PublicUrl: "https://example.com/media",
+        }),
+        children: "Test",
+      }),
+    );
+    const samePath = renderToString(
+      BaseLayout({
+        title: "Jant",
+        c: createContext("featured", { assetBasePath: "/_assets" }),
+        children: "Test",
+      }),
+    );
+
+    expect(sameOrigin).not.toContain('rel="preconnect"');
+    expect(samePath).not.toContain('rel="preconnect"');
   });
 
   it("loads the CJK stylesheet for the site language", async () => {

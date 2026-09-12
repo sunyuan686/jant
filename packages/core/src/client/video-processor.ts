@@ -2,7 +2,10 @@
  * Client-side Video Processor
  *
  * Processes videos before upload using mediabunny:
- * - Transcodes to H.264/AAC MP4 (universal playback)
+ * - Remuxes to MP4, transcoding to H.264/AAC only when the source is not
+ *   already in those codecs or does not fit the size caps. A source that
+ *   needs nothing has its encoded packets copied straight across, so it
+ *   reaches the server without a generation of re-encoding loss
  * - Resizes to max 1920px long edge / 1080px short edge
  * - Strips spurious rotation metadata from the output (mediabunny may
  *   bake rotation into pixels AND write a display matrix, causing the
@@ -14,17 +17,8 @@
  * Requires WebCodecs API support — check `isSupported()` before use.
  */
 
-import {
-  Input,
-  Output,
-  Mp4OutputFormat,
-  BufferTarget,
-  BlobSource,
-  CanvasSink,
-  Conversion,
-  QUALITY_HIGH,
-  ALL_FORMATS,
-} from "mediabunny";
+import type { VideoCodec } from "mediabunny";
+import { loadMediabunny } from "./mediabunny.js";
 import { encode } from "blurhash";
 import { normalizeDurationSeconds } from "../lib/video-playback.js";
 import { zeroTrackAlternateGroups } from "../lib/mp4-track-flags.js";
@@ -35,6 +29,66 @@ const MAX_LONG_EDGE = 1920;
 const MAX_SHORT_EDGE = 1080;
 const POSTER_WIDTH = 640;
 const BLURHASH_SIZE = 32;
+
+/**
+ * Bitrate targeted for a 1080p H.264 re-encode; every other size scales from
+ * here. Around 8 Mbps — enough to hold up against the source on a phone or a
+ * laptop, low enough that a clip stays servable over the web.
+ *
+ * This is expressed as a bitrate on purpose. Given a quality *level*,
+ * mediabunny prefers quantizer-based encoding, which has no size ceiling at
+ * all: a frugally-encoded source gets faithfully reproduced — its own
+ * compression artifacts included — at several times its original size. A
+ * bitrate keeps the output predictable.
+ */
+const REFERENCE_BITRATE = 7_900_000;
+const REFERENCE_PIXELS = 1920 * 1080;
+
+/** Bitrate scales slightly sub-linearly with pixel count. */
+const PIXEL_SCALE_EXPONENT = 0.95;
+
+/**
+ * Bits H.264 needs to carry one bit of the source codec at the same quality.
+ * H.264 is the baseline; HEVC and VP9 fit roughly 40% more picture into a
+ * bit, AV1 around 60%. Used to cap the target at what the source content
+ * actually carries — spending more than that reproduces the source's
+ * artifacts in high fidelity and buys nothing, because the detail was never
+ * there to begin with.
+ */
+const CODEC_BITRATE_RATIO: Partial<Record<VideoCodec, number>> = {
+  avc: 1,
+  hevc: 1 / 0.6,
+  vp9: 1 / 0.6,
+  av1: 1 / 0.4,
+  vp8: 1 / 1.2,
+};
+
+/**
+ * Pick the bitrate for a re-encode: the size-appropriate target, but never
+ * more than the source content itself warrants.
+ */
+function reencodeBitrate(
+  source: {
+    pixels: number;
+    bitrate: number | undefined;
+    codec: VideoCodec | null | undefined;
+  },
+  targetPixels: number,
+): number {
+  const target =
+    REFERENCE_BITRATE *
+    (targetPixels / REFERENCE_PIXELS) ** PIXEL_SCALE_EXPONENT;
+
+  if (!source.bitrate || !source.pixels) return Math.round(target);
+
+  const ratio = (source.codec && CODEC_BITRATE_RATIO[source.codec]) ?? 1;
+  const sourceCap =
+    source.bitrate *
+    ratio *
+    (targetPixels / source.pixels) ** PIXEL_SCALE_EXPONENT;
+
+  return Math.round(Math.min(target, sourceCap));
+}
 
 export interface VideoProcessResult {
   file: File;
@@ -54,102 +108,281 @@ function isSupported(): boolean {
   return typeof VideoEncoder !== "undefined";
 }
 
-/**
- * Extract a poster frame, blurhash, and source dimensions from a video file.
- * Seeks to `min(duration × 0.1, 1s)` and captures the frame.
- * Also returns the original video dimensions so the caller can compute
- * the correct output size without opening a second Input instance.
- *
- * @param file - Source video file
- * @returns Poster blob (640px-wide WebP), blurhash string, and source dimensions
- */
-async function extractPoster(file: File): Promise<{
+interface SourceProbe {
   poster?: Blob;
   blurhash?: string;
   sourceWidth?: number;
   sourceHeight?: number;
   rotation?: number;
   durationSeconds?: number;
-}> {
+  /** Source video codec, or `null` when it could not be determined. */
+  videoCodec?: VideoCodec | null;
+  /** Average bitrate of the source video track, in bits per second. */
+  videoBitrate?: number;
+}
+
+/**
+ * Report a probe step that failed. Every step here is optional — the upload
+ * proceeds without it — so the failure has to be visible somewhere, or a
+ * broken decoder reads as a video that merely has no thumbnail.
+ */
+function warnProbeFailure(step: string, error: unknown): void {
+  // eslint-disable-next-line no-console -- an optional step failing is silent by design; say so
+  console.warn(`[jant] video probe: ${step} failed`, error);
+}
+
+/**
+ * Run one optional probe step, returning `undefined` when it fails.
+ *
+ * Each step feeds a different part of the result, and none of them is worth
+ * the others: an unreadable bitrate should not cost the poster, and an
+ * undecodable frame should not cost the codec that decides whether the file
+ * needs re-encoding at all.
+ */
+async function optional<T>(
+  step: string,
+  run: () => Promise<T>,
+): Promise<T | undefined> {
+  try {
+    return await run();
+  } catch (error) {
+    warnProbeFailure(step, error);
+    return undefined;
+  }
+}
+
+/**
+ * Draw the captured frame into a canvas of the given size.
+ * Returns null when the browser refuses a 2D context.
+ */
+function drawFrame(
+  source: HTMLCanvasElement,
+  width: number,
+  height: number,
+): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(source, 0, 0, width, height);
+  return { canvas, ctx };
+}
+
+/**
+ * Probe a video file and extract its poster frame and blurhash in one pass.
+ * Seeks to `min(duration × 0.1, 1s)` and captures the frame.
+ *
+ * Returns the source dimensions, codec, and bitrate alongside, so the caller
+ * can decide whether a re-encode is needed at all — and at what bitrate —
+ * without opening a second Input instance.
+ *
+ * Every field is optional and probed independently. A file whose frames will
+ * not decode still reports its codec and duration; one whose bitrate cannot be
+ * read still yields a poster. Only the container being unreadable — no video
+ * track at all — returns nothing, because then there is nothing to report.
+ *
+ * @param file - Source video file
+ * @returns Poster blob (640px-wide WebP), blurhash, dimensions, codec, bitrate
+ */
+async function probeSource(file: File): Promise<SourceProbe> {
+  const { Input, BlobSource, ALL_FORMATS, CanvasSink } = await loadMediabunny();
   const input = new Input({
     source: new BlobSource(file),
     formats: ALL_FORMATS,
   });
   try {
-    const videoTrack = await input.getPrimaryVideoTrack();
+    const videoTrack = await optional("open video track", () =>
+      input.getPrimaryVideoTrack(),
+    );
     if (!videoTrack) return {};
 
-    const sourceWidth = videoTrack.displayWidth;
-    const sourceHeight = videoTrack.displayHeight;
-    const rotation = videoTrack.rotation;
+    const videoCodec = await optional("read codec", () =>
+      videoTrack.getCodec(),
+    );
+    // Metadata-only scan of the sample table — milliseconds even on a large
+    // file, and exact, unlike dividing file size by duration. Only an input
+    // to the re-encode bitrate, so `undefined` degrades to the size-based
+    // target rather than failing the probe.
+    const videoBitrate = await optional(
+      "compute bitrate",
+      async () => (await videoTrack.computePacketStats()).averageBitrate,
+    );
+    const duration = await optional("compute duration", () =>
+      input.computeDuration(),
+    );
 
-    const duration = await input.computeDuration();
-    const durationSeconds = normalizeDurationSeconds(duration);
-    const seekTime = Math.min(duration * 0.1, 1);
+    // Everything the caller needs to plan the conversion.
+    const base: SourceProbe = {
+      sourceWidth: videoTrack.displayWidth,
+      sourceHeight: videoTrack.displayHeight,
+      rotation: videoTrack.rotation,
+      durationSeconds:
+        duration === undefined ? undefined : normalizeDurationSeconds(duration),
+      videoCodec,
+      videoBitrate,
+    };
 
-    const sink = new CanvasSink(videoTrack);
-    const wrapped = await sink.getCanvas(seekTime);
-    if (!wrapped) {
-      return { sourceWidth, sourceHeight, rotation, durationSeconds };
-    }
+    // A tenth of the way in, so the still is not the fade-from-black most
+    // clips open on. With no duration to take a tenth of, the opening frame
+    // is the only one we can name.
+    const seekTime = duration === undefined ? 0 : Math.min(duration * 0.1, 1);
+    const wrapped = await optional("capture frame", () =>
+      new CanvasSink(videoTrack).getCanvas(seekTime),
+    );
+    if (!wrapped) return base;
 
     const canvas = wrapped.canvas as HTMLCanvasElement;
-
-    // Poster: 640px wide WebP
     const srcW = canvas.width;
     const srcH = canvas.height;
+
+    // Poster: 640px wide WebP
     const posterScale = Math.min(POSTER_WIDTH / srcW, 1);
-    const pw = Math.round(srcW * posterScale);
-    const ph = Math.round(srcH * posterScale);
-
-    const posterCanvas = document.createElement("canvas");
-    posterCanvas.width = pw;
-    posterCanvas.height = ph;
-    const pCtx = posterCanvas.getContext("2d");
-    if (!pCtx) return { sourceWidth, sourceHeight };
-    pCtx.drawImage(canvas, 0, 0, pw, ph);
-
-    const poster = await new Promise<Blob | undefined>((resolve) => {
-      posterCanvas.toBlob(
-        (blob) => resolve(blob ?? undefined),
-        "image/webp",
-        0.8,
-      );
-    });
+    const posterFrame = drawFrame(
+      canvas,
+      Math.round(srcW * posterScale),
+      Math.round(srcH * posterScale),
+    );
+    const poster = posterFrame
+      ? await optional(
+          "encode poster",
+          () =>
+            new Promise<Blob | undefined>((resolve) => {
+              posterFrame.canvas.toBlob(
+                (blob) => resolve(blob ?? undefined),
+                "image/webp",
+                0.8,
+              );
+            }),
+        )
+      : undefined;
 
     // Blurhash: 32px canvas, 4×3 components
     const bhScale = Math.min(BLURHASH_SIZE / srcW, BLURHASH_SIZE / srcH, 1);
     const bw = Math.max(Math.round(srcW * bhScale), 1);
     const bh = Math.max(Math.round(srcH * bhScale), 1);
+    const bhFrame = drawFrame(canvas, bw, bh);
+    const blurhash = bhFrame
+      ? await optional("encode blurhash", async () =>
+          encode(bhFrame.ctx.getImageData(0, 0, bw, bh).data, bw, bh, 4, 3),
+        )
+      : undefined;
 
-    const bhCanvas = document.createElement("canvas");
-    bhCanvas.width = bw;
-    bhCanvas.height = bh;
-    const bhCtx = bhCanvas.getContext("2d");
-    if (!bhCtx) return { poster, sourceWidth, sourceHeight };
-    bhCtx.drawImage(canvas, 0, 0, bw, bh);
-
-    const imageData = bhCtx.getImageData(0, 0, bw, bh);
-    const blurhash = encode(imageData.data, bw, bh, 4, 3);
-
-    return {
-      poster,
-      blurhash,
-      sourceWidth,
-      sourceHeight,
-      rotation,
-      durationSeconds,
-    };
-  } catch {
-    return {};
+    return { ...base, poster, blurhash };
   } finally {
     input.dispose();
   }
 }
 
+/** What a given source needs done to it before upload. */
+export interface VideoProcessPlan {
+  /** True when the video must be scaled down to fit the size caps. */
+  needsResize: boolean;
+  /** Target dimensions — equal to the source dimensions when not resizing. */
+  width: number;
+  height: number;
+  /** True when the video track must be decoded and re-encoded. */
+  videoNeedsReencode: boolean;
+  /**
+   * Target video bitrate in bits per second, or `undefined` when the track
+   * is copied rather than re-encoded.
+   */
+  videoBitrate?: number;
+}
+
 /**
- * Process a video file: transcode to H.264/AAC MP4, resize to fit within
- * 1920×1080, and extract poster frame + blurhash.
+ * Decide what a source video needs: a resize, a re-encode, or nothing at all.
+ *
+ * Asking for a size or a quality is what disables mediabunny's copy fast
+ * path, so anything already within the caps and already in H.264 must come
+ * back with `videoNeedsReencode` false — its encoded packets are then copied
+ * across untouched, sparing it a generation of quality. An unknown codec
+ * (`null`) counts as needing a re-encode, since we can't vouch for it playing
+ * everywhere.
+ *
+ * When a re-encode is unavoidable, the bitrate is the smaller of what the
+ * output size warrants and what the source content actually carries. The
+ * second half matters: an efficiently-encoded source re-encoded at constant
+ * quality can come out several times larger than it went in, all of those
+ * bits spent preserving its own compression artifacts.
+ *
+ * Dimensions are the source's *display* dimensions, i.e. post-rotation, so
+ * the caps apply orientation-agnostically.
+ *
+ * @param source - Display dimensions, codec, and bitrate of the source
+ * @param options - `maxLongEdge` and `maxShortEdge` caps
+ * @returns The processing plan
+ *
+ * @example
+ * ```ts
+ * // Already H.264 and within the caps — copied, not re-encoded
+ * planVideoProcessing(
+ *   { width: 1280, height: 720, videoCodec: "avc" },
+ *   { maxLongEdge: 1920, maxShortEdge: 1080 },
+ * );
+ * // { needsResize: false, width: 1280, height: 720,
+ * //   videoNeedsReencode: false, videoBitrate: undefined }
+ * ```
+ */
+export function planVideoProcessing(
+  source: {
+    width?: number;
+    height?: number;
+    videoCodec?: VideoCodec | null;
+    videoBitrate?: number;
+  },
+  options: { maxLongEdge: number; maxShortEdge: number },
+): VideoProcessPlan {
+  const { width: sourceWidth, height: sourceHeight } = source;
+
+  // Fall back to the caps when the probe could not read the dimensions;
+  // without a source size there is nothing to scale against.
+  let width = sourceWidth || options.maxLongEdge;
+  let height = sourceHeight || options.maxShortEdge;
+  let needsResize = false;
+
+  if (sourceWidth && sourceHeight) {
+    const longSide = Math.max(sourceWidth, sourceHeight);
+    const shortSide = Math.min(sourceWidth, sourceHeight);
+    const scale = Math.min(
+      options.maxLongEdge / longSide,
+      options.maxShortEdge / shortSide,
+      1,
+    );
+    needsResize = scale < 1;
+    if (needsResize) {
+      width = Math.round(sourceWidth * scale);
+      height = Math.round(sourceHeight * scale);
+      // H.264 requires even dimensions
+      width += width % 2;
+      height += height % 2;
+    }
+  }
+
+  const videoNeedsReencode = needsResize || source.videoCodec !== "avc";
+
+  return {
+    needsResize,
+    width,
+    height,
+    videoNeedsReencode,
+    videoBitrate: videoNeedsReencode
+      ? reencodeBitrate(
+          {
+            pixels: (sourceWidth ?? 0) * (sourceHeight ?? 0),
+            bitrate: source.videoBitrate,
+            codec: source.videoCodec,
+          },
+          width * height,
+        )
+      : undefined,
+  };
+}
+
+/**
+ * Process a video file: remux to MP4, re-encoding to H.264/AAC only when the
+ * source needs it, resize to fit within 1920×1080, and extract poster frame
+ * + blurhash.
  *
  * @param file - Source video file
  * @param onProgress - Optional callback receiving progress from 0 to 1
@@ -159,8 +392,8 @@ async function processToFile(
   file: File,
   onProgress?: (progress: number) => void,
 ): Promise<VideoProcessResult> {
-  // Extract poster + blurhash + source dimensions (separate Input instance,
-  // so the transcoding Input below starts with clean demuxer state).
+  // Probe the source and grab poster + blurhash (separate Input instance,
+  // so the conversion Input below starts with clean demuxer state).
   const {
     poster,
     blurhash,
@@ -168,28 +401,36 @@ async function processToFile(
     sourceHeight,
     rotation,
     durationSeconds,
-  } = await extractPoster(file);
+    videoCodec,
+    videoBitrate,
+  } = await probeSource(file);
 
-  // Compute output size from display dimensions (post-rotation).
-  // Orientation-agnostic: long edge ≤ 1920, short edge ≤ 1080.
-  let targetW = sourceWidth || MAX_LONG_EDGE;
-  let targetH = sourceHeight || MAX_SHORT_EDGE;
-  if (sourceWidth && sourceHeight) {
-    const longSide = Math.max(sourceWidth, sourceHeight);
-    const shortSide = Math.min(sourceWidth, sourceHeight);
-    const scale = Math.min(
-      MAX_LONG_EDGE / longSide,
-      MAX_SHORT_EDGE / shortSide,
-      1,
-    );
-    targetW = Math.round(sourceWidth * scale);
-    targetH = Math.round(sourceHeight * scale);
-  }
-  // H.264 requires even dimensions
-  targetW += targetW % 2;
-  targetH += targetH % 2;
+  const {
+    needsResize,
+    width: targetW,
+    height: targetH,
+    videoBitrate: targetBitrate,
+  } = planVideoProcessing(
+    {
+      width: sourceWidth,
+      height: sourceHeight,
+      videoCodec,
+      videoBitrate,
+    },
+    { maxLongEdge: MAX_LONG_EDGE, maxShortEdge: MAX_SHORT_EDGE },
+  );
 
-  // Transcode to MP4 H.264/AAC (fresh Input — not shared with extractPoster)
+  // Convert to MP4 (fresh Input — not shared with probeSource)
+  const {
+    Input,
+    Output,
+    Mp4OutputFormat,
+    BufferTarget,
+    BlobSource,
+    Conversion,
+    Quality,
+    ALL_FORMATS,
+  } = await loadMediabunny();
   const input = new Input({
     source: new BlobSource(file),
     formats: ALL_FORMATS,
@@ -206,14 +447,16 @@ async function processToFile(
       output,
       video: {
         codec: "avc",
-        width: targetW,
-        height: targetH,
-        fit: "contain",
-        bitrate: QUALITY_HIGH,
+        ...(needsResize
+          ? { width: targetW, height: targetH, fit: "contain" as const }
+          : {}),
+        ...(targetBitrate !== undefined
+          ? { quality: new Quality({ bitrate: targetBitrate }) }
+          : {}),
       },
-      audio: {
-        codec: "aac",
-      },
+      // No quality set: an AAC track is copied, and anything else falls back
+      // to mediabunny's default, which for AAC lands on 192 kbps either way.
+      audio: { codec: "aac" },
     });
 
     if (onProgress) {
@@ -237,7 +480,8 @@ async function processToFile(
     // Safari's WebCodecs does NOT bake rotation, so the matrix is needed.
     // Strategy: probe the output as-is; if the dimensions already match
     // the expected display size, leave the file alone.  Otherwise strip
-    // the matrix and re-probe.
+    // the matrix and re-probe.  A copied (not re-encoded) track never hits
+    // this — no encoder touched the pixels — so it falls out via dimsMatch.
     const originalName = file.name.replace(/\.[^.]+$/, "");
     let mp4File = new File([buffer], `${originalName}.mp4`, {
       type: "video/mp4",

@@ -31,7 +31,7 @@ These principles explain _why_ the codebase is structured the way it is. When yo
 
 - **Hosted split**: `jant-core` owns the runtime, the copy, and site display metadata; `jant-cloud` owns billing state, cancel/delete/restore policy, and retained-window rules — core links to those flows but never invents its own hosted billing or deletion semantics. Core stays provider-neutral: show the configured provider label, or fall back to the provider host — never hardcoded product branding. Control-plane copies of core data (cached site name, primary host) are synced projections, never a second editable source of truth. Browser-facing redirects go through the public control-plane URL; server-to-server calls use explicit internal URLs and tokens.
 
-- **Tokens and components over raw values**: CSS tokens (`styles/tokens.css`) and BaseCoat semantic classes (`.alert`, `.btn`, `.badge`, `.card`, `.input`, `.field`) encode design decisions in one place; never hardcode a color or spacing value. BaseCoat variants (`.btn-outline`, `.btn-ghost`, `.badge-outline`, …) are self-contained — never combine them with the base class. See `docs/internal/theming.md` and `references/basecoat/`.
+- **Tokens and components over raw values**: CSS tokens (`styles/tokens.css`) and BaseCoat semantic classes (`.alert`, `.btn`, `.badge`, `.card`, `.input`, `.field`) encode design decisions in one place; never hardcode a color or spacing value. BaseCoat variants (`.btn-outline`, `.btn-ghost`, `.badge-outline`, …) are self-contained — never combine them with the base class. `class="btn btn-outline"` produces an invisible button: equal specificity means source order decides, so the variant wins the background while the base's `text-primary-foreground` survives, and the label only appears on hover. `src/__tests__/basecoat-variants.test.ts` fails the build on any such pairing. See `docs/internal/theming.md` and `references/basecoat/`.
 
 - **Cohesion over small files**: organize code by responsibility. A well-structured 400-line file beats four fragmented 100-line files that constantly import each other.
 
@@ -59,6 +59,8 @@ Non-negotiable regardless of context:
 - **Dual-dialect schema: SQLite AND Postgres must stay in sync**: Jant runs on both SQLite/D1 (`src/db/schema.ts`) and Postgres (`src/db/pg/schema.ts`). When adding or modifying columns, **always update both schema files** and both migration directories (`src/db/migrations/`, `src/db/migrations/pg/`; generate with `mise run db-schema-generate` / `db-schema-generate-pg`). If auto-generation produces "no changes", write the Postgres migration manually and update its `meta/_journal.json`. Forgetting the Postgres schema causes silent data loss — Drizzle ignores columns it doesn't know about.
 - **Seed/import SQL must declare columns and validate against current schema**: committed SQL snapshots and export scripts must use `INSERT INTO table (col, ...) VALUES (...)`, never bare `INSERT INTO table VALUES (...)`. After schema changes, validate seed/import SQL against a fresh local D1 with the current migrations before treating it as safe.
 - **Relative imports only**: no `@/` path aliases anywhere in the codebase.
+- **Client bundles are budgeted**: `client.js` is for readers, `client-auth.js` is a shell, and the editor, settings, and management code load on demand (`src/client/lazy-entries.ts`). Heavy packages stay behind `import()` at the point of use, and server-rendered markup never calls a lazily defined element directly. The client build fails over budget; which entry a component belongs in is in `docs/internal/lit-guide.md`.
+- **Stylesheets are budgeted the same way**: `client.css` is render-blocking on every public page, so it carries reader styles only. Component CSS that renders exclusively for a signed-in author — the composer, the editor chrome, the command palette, the settings pages, the config editor, the navigation manager, the draft preview bar — lives in `styles/ui-author.css` and `styles/components-author.css` and ships as `client-author.css`, which `BaseLayout` links only when the page is authenticated. A selector belongs there when every one of its comma-separated parts names an author-only class; the TipTap classes that also appear in published post HTML stay in `styles/ui.css`. Because the author sheet loads _after_ `client.css`, an author rule that used to lose to a later reader rule of equal specificity would now win — check for that before moving anything, and write the declaration where it actually applies rather than letting the move change it. `src/__tests__/stylesheet-audience.test.ts` enforces the split and the build fails if `client.css` goes over budget.
 - **Data attributes with care**: `data-page`, `data-post`, `data-format`, etc. are consumed by themes and external scripts. Design them thoughtfully and update all references when changing.
 - **No raw strings in `dangerouslySetInnerHTML`**: every string passed to it must be either (a) HTML from a trusted renderer (TipTap, `getHtmlExcerpt`), or (b) plain text passed through `escapeHtml()` first — even single-author content can contain `<`, `>`, `&`. For highlighted output, escape first, then replace control-character sentinels: `escapeHtml(text).replace(/\x02/g, "<mark>").replace(/\x03/g, "</mark>")`, where `char(2)`/`char(3)` (STX/ETX) are the FTS5 snippet markers in SQL. Never inject `<mark>` into unescaped text.
 
@@ -67,6 +69,7 @@ Non-negotiable regardless of context:
 ### Tooling
 
 - **Use mise tasks** for all commands (`mise tasks` to list). Never run `wrangler dev`; use `mise run dev` / `mise run build`.
+- **Assets ship pre-compressed**: `mise run upload-assets` stores text assets brotli-compressed at quality 11 with `Content-Encoding: br`. A CDN compresses at a fixed low quality it does not let you raise (measured: brotli q4, worse than its own gzip and its own zstd), so quality 11 is only reachable by compressing at build time. Clients that cannot take brotli are unaffected — the edge decompresses and re-encodes for them. Objects are content-hashed and skipped when the key exists, but one stored without the compression it should have is re-uploaded anyway, so a change to the compression policy also reaches assets whose content never changed. `--no-compress` opts out; `--force` re-uploads everything.
 - **Deployment shorthand**: when the user says "部署", interpret it as "commit the current work and push the current branch". Site rollout happens automatically after push unless the user says otherwise.
 - **Debug**: `mise run dev-debug` prepares local auth helpers automatically and uses the first free debug port starting at `19020`. For browser testing, use the printed `http://localhost:19xxx/__dev/login?token=...&redirect=/settings` URL with `DEV_API_TOKEN` from `packages/core/.dev.vars`, then continue on `http://localhost:19xxx/settings`. `jant.localtest.me` is still accepted locally, but some browsers upgrade it to HTTPS and break local HTTP dev ports. HTTP agents can call the same local login URL directly and reuse the returned `Set-Cookie`. Stop background processes when done.
 - **Verify before changing**: never assume CLI flags; confirm with `--help` or docs.
@@ -138,13 +141,15 @@ Cloudflare Workers, Hono v4, Vite + SWC, Tailwind v4 + BaseCoat, D1 + Drizzle OR
 
 ## UX Copy Guidelines
 
-These rules govern **UI strings** — buttons, errors, empty states, settings descriptions — in every locale; the Chinese section adds locale-specific rules. For **prose** (anything under `docs/`, `README.md`, multi-sentence `msgstr` values) see `docs/internal/writing-style.md`. Run `mise run check-copy` after touching either.
+These rules govern **UI strings** — buttons, errors, empty states, settings descriptions — in every locale; the Chinese section adds locale-specific rules. For **prose** (anything under `docs/` except the unpublished `docs/internal/`, `README.md`, multi-sentence `msgstr` values) see `docs/internal/writing-style.md`. Run `mise run check-copy` after touching either.
 
-**Style anchor**: write like iA Writer or Bear — a quiet tool, not a companion. Declarative sentences, short lines, no praise, no mascot energy. If a line would fit in a marketing email or an onboarding tour, rewrite it.
+**Style anchor**: write like iA Writer or Bear — a quiet tool, not a companion. No praise, no mascot energy. If a line would fit in a marketing email or an onboarding tour, rewrite it.
+
+**Plain and scannable**: people scan a screen before they read it. Labels, buttons, headings, and settings descriptions are short phrases with the key word first; messages (errors, empty states, confirmations) are short declarative sentences, one idea each. Words are plain and objective — everyday terms over jargon, what a thing does rather than how good it is. Name each feature and state by what it is: `Hidden from Latest`, never a playful coinage or a softer synonym for an existing label.
 
 **Match the existing corpus**: before writing or changing any string, read the neighboring strings — the surrounding component and the same area of `src/i18n/locales/*/en.po` — and match their register, terminology, and casing. The existing copy is the style guide of record.
 
-Banned in any locale: exclamation points; cheerleading ("Awesome", "You're all set", "Oops"); tour-guide framing ("Let's …", "your journey"); marketing adverbs ("seamlessly", "effortlessly", "instantly"); filler ("please", "simply", "just"); "successfully"; emoji; vague failure ("Something went wrong" with no cause or next step).
+Banned in any locale: exclamation points; cheerleading ("Awesome", "You're all set", "Oops"); tour-guide framing ("Let's …", "your journey"); marketing language — adverbs ("seamlessly", "effortlessly", "instantly") and jargon ("unlock", "empower", "supercharge"); hyperbole ("ultimate", "blazing fast", "revolutionary"); filler ("please", "simply", "just"); "successfully"; emoji; vague failure ("Something went wrong" with no cause or next step).
 
 Patterns, each with the shape to copy:
 
@@ -161,7 +166,8 @@ Chinese copy is written, not translated. Say it the way a native product would; 
 
 - **人称**：统一用「你」，禁止「您」。能省则省 — 优先无主语句式（「已发布」，不是「你的文章已发布」），只有指代不清时才写「你」。
 - **标点**：中文句子一律用全角标点（，。？「」（）），不允许半角逗号、句号夹在中文里。纯英文、数字、代码、URL 片段保持半角。
-- **语气**：不用感叹号，不用语气词卖萌（哦、啦、哟、呢）。「请稍后再试」这类惯用语可以用，但一条信息里最多一个「请」。
+- **语气**：不用感叹号，不用语气词卖萌（哦、啦、哟、呢），不用夸张词（极致、完美、神器）和营销黑话（赋能、打造、一站式）。「请稍后再试」这类惯用语可以用，但一条信息里最多一个「请」。
+- **屏幕已经说过的，别再说一遍**：UI 文案的上下文是它周围那一屏，复述它不买信息。标题已经是「欢迎使用 Jant」，`创建你写作用的账户。` 就该是 `创建账户`；第二屏问的本来就是站点设置，`这些之后都可以在设置中更改。` 就该是 `之后可以在设置中更改。` 这是「能省则省」的一般形式——要删的不止主语，是这一屏已经给过的任何词。正误对照见 `.claude/skills/copy-style/SKILL.md`「中文」。
 - **反翻译腔**：先想中文里本来怎么说，再落笔。「{count} 个设置已显示」是翻译腔，「已显示 {count} 个设置」才像话。「进行…操作」「对…进行」一律改写成直接的动词。
 - **术语表**（**以 `src/i18n/locales/glossary.zh-Hans.yml` / `glossary.zh-Hant.yml` 为准**，新增术语先改术语表）：Post→帖子（zh-Hant：貼文）、Note→笔记、Link→链接、Quote→引用、Collection→合集（zh-Hant：選集）、Thread→帖子串（zh-Hant：貼文串）、Draft→草稿；「账户」不写「帐户」。注意区分产品名词和普通名词：`帖子` 指 Jant 的 Post，泛指别人写的文章仍用 `文章`（「我分享一些好文章」是对的）。
 - **zh-Hant 不是简繁转换**：用词按台湾惯用（設定、選集），不要机械转换 zh-Hans。
@@ -174,6 +180,8 @@ If you notice code contradicting this document, think about which side is correc
 
 - **Coding standards** (module deps, error handling, testing): `docs/internal/coding-standards.md`
 - **Writing style** (long-form docs prose, genre discipline, 中文对照): `docs/internal/writing-style.md`
+- **Feed contract** (what an Atom entry carries, and who each field is for): `docs/internal/feed-contract.md`
+- **Reading a Jant feed** (the same contract as a handout for a consumer): `docs/internal/feed-reading.md`
 - **Lit/Datastar conventions**: `docs/internal/lit-guide.md`
 - **Testing guide**: `docs/internal/testing-guide.md`
 - **Agent automation testing**: `docs/internal/agent-automation-testing.md`

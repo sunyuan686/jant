@@ -15,10 +15,7 @@ import type { PostAttachmentInput } from "../types.js";
 import { AudioProcessor } from "./audio-processor.js";
 import { ImageProcessor } from "./image-processor.js";
 import { VideoProcessor } from "./video-processor.js";
-import {
-  extractMediaMetadata,
-  extractAudioWaveform,
-} from "./media-metadata.js";
+import { extractAudioWaveform } from "./audio-waveform.js";
 import {
   showToast,
   showPersistentToast,
@@ -26,7 +23,6 @@ import {
   replaceWithAutoClose,
   queueToastForNextPage,
 } from "./toast.js";
-import { getComposeDialog, openReplyForArticle } from "./compose-launch.js";
 import {
   refreshPostCardView,
   refreshPostPageView,
@@ -37,11 +33,78 @@ import { uploadViaSession } from "./upload-session.js";
 import type { UploadSessionResult } from "./upload-session.js";
 import { publicPath } from "./runtime-paths.js";
 import { tiptapJsonToMarkdown } from "../lib/tiptap-to-markdown.js";
-import { getMediaCategory } from "../lib/upload.js";
+import { getMediaCategory, sniffImageMimeType } from "../lib/upload.js";
 import {
   resolveInlineImageUrls,
   hasPendingInlineImagePlaceholders,
 } from "./tiptap/inline-image-upload.js";
+
+/**
+ * POST a compose payload, treating a dropped connection as a failed response.
+ *
+ * A publish that never reaches the server and a publish the server rejects are
+ * the same event to the author: the post did not go up. Letting `fetch` reject
+ * here would send only one of them down the recovery path, so the request that
+ * failed hardest — no connection at all — would be the one that skipped saving
+ * a draft.
+ *
+ * @param url - Compose endpoint to post to
+ * @param body - Request body, already serialized
+ * @param method - HTTP method, defaulting to POST
+ * @returns The response, or null when the request never completed
+ * @example
+ * const res = await postCompose("/compose/thread", JSON.stringify(threadBody));
+ * if (!res?.ok) await saveAsDraftInstead();
+ */
+async function postCompose(
+  url: string,
+  body: string,
+  method = "POST",
+): Promise<globalThis.Response | null> {
+  try {
+    return await fetch(url, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What to tell the author when a compose request did not land.
+ *
+ * Prefers the server's own words, because it knows what was wrong with the
+ * post. A request that never completed has no words of its own, so it says so
+ * — "no connection" and "the server refused this" call for different next
+ * steps from the author.
+ *
+ * @param res - The response, or null when the request never completed
+ * @param labels - Composer labels, absent before the element has upgraded
+ * @returns A message ready to show in a toast
+ * @example
+ * await handleSubmitError(await submitErrorMessage(res, labels));
+ */
+async function submitErrorMessage(
+  res: globalThis.Response | null,
+  labels: JantComposeDialog["labels"] | undefined,
+): Promise<string> {
+  if (!res) {
+    return (
+      labels?.publishFailedOffline ?? "Couldn't reach the server. Try again."
+    );
+  }
+  const data = await readJsonObject(res);
+  return (
+    getJsonString(data, "error") ??
+    labels?.publishFailed ??
+    "Couldn't publish. Try again."
+  );
+}
 
 /**
  * Whether a serialized post body still references inline image placeholders
@@ -143,18 +206,45 @@ function refreshUploadToast() {
 /**
  * Track completed upload results by clientId.
  *
- * When an attachment is migrated between editor instances (e.g. entering thread
- * mode while an upload is in-flight), `updateAttachmentStatus` fires on the old
- * detached editor — not the new thread editor. By the time the user submits,
- * the upload promise has been deleted from `uploadPromises`, so the deferred
- * handler can't look it up. This map provides a fallback: we record the result
- * here as soon as any upload succeeds, and `buildRequestAttachments` reads it
- * when `attachment.mediaId` is null and the clientId isn't in `uploadPromises`.
+ * By the time the user submits, a finished upload's promise has been deleted
+ * from `uploadPromises`, so the deferred handler can't look it up. This map
+ * provides a fallback: we record the result here as soon as any upload
+ * succeeds, and `buildRequestAttachments` reads it when `attachment.mediaId`
+ * is null and the clientId isn't in `uploadPromises`.
  *
  * The full result (not just the id) is kept so a failed publish can restore
  * uploaded attachments into the reopened compose dialog.
  */
 const completedUploads = new Map<string, UploadSessionResult>();
+
+/**
+ * The editor holding an attachment now.
+ *
+ * Entering or leaving thread mode renders the post in a new editor element,
+ * which takes the attachments over from the one it replaced. An upload that
+ * outlives the swap has to follow the attachment: reporting to the editor it
+ * started in leaves the new one showing "uploading" forever, never showing an
+ * error, and keeping the finished file out of the local draft. Until a
+ * connected editor holds the attachment — the moment between the swap and the
+ * handover — the starting editor is still the one with the latest copy.
+ *
+ * @param started - The editor the upload was started from
+ * @param clientId - The attachment's client-side id
+ * @returns The editor to report progress and status to
+ */
+function attachmentOwner(
+  started: JantComposeEditor | null,
+  clientId: string,
+): JantComposeEditor | null {
+  if (!started || started.isConnected) return started;
+  const editors = document.querySelectorAll<JantComposeEditor>(
+    "jant-compose-editor",
+  );
+  for (const editor of editors) {
+    if (editor.hasAttachment(clientId)) return editor;
+  }
+  return started;
+}
 
 /**
  * Quickly grab the very first decoded frame of a video as a small poster.
@@ -225,6 +315,19 @@ function captureQuickPoster(file: File): Promise<Blob | null> {
   });
 }
 
+/** Bytes that settle whether a file is HEIC: the `ftyp` box and its brand. */
+const HEIC_SNIFF_BYTES = 12;
+
+/**
+ * Whether the file's bytes say HEIC/HEIF, whatever its name or type claims.
+ * Reads the header only — the decoder's own check pulled the whole file into
+ * memory to look at four bytes of it.
+ */
+async function isHeicFile(file: File): Promise<boolean> {
+  const head = await file.slice(0, HEIC_SNIFF_BYTES).arrayBuffer();
+  return sniffImageMimeType(new Uint8Array(head)) === "image/heic";
+}
+
 /**
  * Upload a single file: process locally, then send it through the upload
  * session API so the backend can choose relay vs direct transport.
@@ -235,6 +338,7 @@ async function uploadFile(
   clientId: string,
   editor: JantComposeEditor | null,
 ): Promise<string | null> {
+  const owner = () => attachmentOwner(editor, clientId);
   // Capture cheap metadata up-front so we can release `file` (the original
   // potentially-huge blob) as soon as transcoding finishes. On iOS Safari
   // holding a 300MB+ source blob alongside the transcoded output, upload
@@ -254,7 +358,7 @@ async function uploadFile(
     if (fileType.startsWith("video/")) {
       // Video: transcode with mediabunny (requires WebCodecs)
       if (!VideoProcessor.isSupported()) {
-        editor?.updateAttachmentStatus(
+        owner()?.updateAttachmentStatus(
           clientId,
           "error",
           null,
@@ -265,14 +369,19 @@ async function uploadFile(
 
       // Capture the first frame quickly so Safari shows a preview while
       // the heavy transcoding runs. Chrome shows it natively via
-      // <video preload="metadata">, Safari does not.
-      captureQuickPoster(file).then((blob) => {
-        if (blob) editor?.updateAttachmentPoster(clientId, blob);
-      });
+      // <video preload="metadata">, Safari does not. Kept, rather than shown
+      // and dropped: it is also the fallback for the upload below, so the
+      // card and the stored media can never disagree about having a poster.
+      const quickPoster = captureQuickPoster(file)
+        .then((blob) => {
+          if (blob) owner()?.updateAttachmentPoster(clientId, blob);
+          return blob;
+        })
+        .catch(() => null);
 
-      editor?.updateAttachmentStatus(clientId, "processing", null, null);
+      owner()?.updateAttachmentStatus(clientId, "processing", null, null);
       const result = await VideoProcessor.processToFile(file, (progress) => {
-        editor?.updateAttachmentProgress(clientId, progress);
+        owner()?.updateAttachmentProgress(clientId, progress);
       });
       toUpload = result.file;
       // Drop the original blob ref now that we have the transcoded output.
@@ -281,14 +390,18 @@ async function uploadFile(
       height = result.height;
       durationSeconds = result.durationSeconds;
       blurhash = result.blurhash;
-      poster = result.poster;
+      // The probe's poster is the better one — a frame from a tenth of the way
+      // in, at full decode quality. Falling back to the quick one costs a
+      // slightly worse still; not falling back costs a thumbnail entirely, on
+      // exactly the files whose frames the probe could not read.
+      poster = result.poster ?? (await quickPoster) ?? undefined;
       if (poster) {
-        editor?.updateAttachmentPoster(clientId, poster);
+        owner()?.updateAttachmentPoster(clientId, poster);
       }
     } else if (fileType.startsWith("audio/")) {
       // Audio: transcode to AAC (.m4a) (requires WebCodecs)
       if (!AudioProcessor.isSupported()) {
-        editor?.updateAttachmentStatus(
+        owner()?.updateAttachmentStatus(
           clientId,
           "error",
           null,
@@ -304,9 +417,9 @@ async function uploadFile(
         // Waveform extraction is best-effort
       }
 
-      editor?.updateAttachmentStatus(clientId, "processing", null, null);
+      owner()?.updateAttachmentStatus(clientId, "processing", null, null);
       const result = await AudioProcessor.processToFile(file, (progress) => {
-        editor?.updateAttachmentProgress(clientId, progress);
+        owner()?.updateAttachmentProgress(clientId, progress);
       });
       toUpload = result.file;
       file = null as unknown as File;
@@ -318,9 +431,11 @@ async function uploadFile(
       // Image: convert HEIC/HEIF if needed, then resize + convert to WebP
       let imageFile = file;
       try {
-        const { isHeic, heicTo } = await import("heic-to");
-        if (await isHeic(imageFile)) {
-          editor?.updateAttachmentStatus(clientId, "processing", null, null);
+        if (await isHeicFile(imageFile)) {
+          // heic-to carries libheif — a 3MB chunk — so it is fetched for a
+          // file whose bytes say HEIC, not for every photo on the off chance.
+          const { heicTo } = await import("heic-to");
+          owner()?.updateAttachmentStatus(clientId, "processing", null, null);
           const blob = await heicTo({
             blob: imageFile,
             type: "image/jpeg",
@@ -329,16 +444,17 @@ async function uploadFile(
           imageFile = new File([blob], fileName.replace(/\.heic$/i, ".jpg"), {
             type: "image/jpeg",
           });
-          editor?.updateAttachmentPreview(clientId, imageFile);
+          owner()?.updateAttachmentPreview(clientId, imageFile);
         }
         const result = await ImageProcessor.processToFile(imageFile);
         toUpload = result.file;
         width = result.width;
         height = result.height;
+        blurhash = result.blurhash;
         file = null as unknown as File;
         imageFile = null as unknown as File;
       } catch {
-        editor?.removeAttachment(clientId);
+        owner()?.removeAttachment(clientId);
         showToast("Image format not supported.", "error");
         return null;
       }
@@ -347,21 +463,7 @@ async function uploadFile(
     }
 
     // Update status to uploading
-    editor?.updateAttachmentStatus(clientId, "uploading", null, null);
-
-    // Extract metadata for non-video files (video metadata comes from VideoProcessor)
-    // Audio waveform is already extracted above (before AudioProcessor runs).
-    if (!fileType.startsWith("video/")) {
-      const meta = await extractMediaMetadata(toUpload);
-      width ??= meta.width;
-      height ??= meta.height;
-      blurhash ??= meta.blurhash;
-      waveform ??= meta.waveform;
-      if (!poster && meta.poster) {
-        poster = meta.poster;
-        editor?.updateAttachmentPoster(clientId, poster);
-      }
-    }
+    owner()?.updateAttachmentStatus(clientId, "uploading", null, null);
 
     // Text attachments keep summary/chars in the media record. This covers
     // plain text-file uploads (.md, .txt, .csv). Jant-composed rich text
@@ -398,7 +500,7 @@ async function uploadFile(
         chars,
       },
       (progress) => {
-        editor?.updateAttachmentProgress(clientId, progress);
+        owner()?.updateAttachmentProgress(clientId, progress);
         uploadProgress.set(clientId, progress);
         refreshUploadToast();
       },
@@ -406,7 +508,7 @@ async function uploadFile(
 
     uploadProgress.set(clientId, 1);
     refreshUploadToast();
-    editor?.updateAttachmentStatus(
+    owner()?.updateAttachmentStatus(
       clientId,
       "done",
       result.id,
@@ -419,7 +521,7 @@ async function uploadFile(
     uploadProgress.delete(clientId);
     refreshUploadToast();
     const message = error instanceof Error ? error.message : "Upload failed";
-    editor?.updateAttachmentStatus(clientId, "error", null, message);
+    owner()?.updateAttachmentStatus(clientId, "error", null, message);
     // Error is shown on the attachment thumbnail; only toast when there's no editor context.
     if (!editor) showToast(message, "error");
     return null;
@@ -467,38 +569,6 @@ document.addEventListener("jant:files-selected", (e: Event) => {
     uploadPromises.set(clientId, promise);
     promise.finally(() => uploadPromises.delete(clientId));
   }
-});
-
-// ── Reply trigger handler ───────────────────────────────────────────
-
-document.addEventListener("click", (e: MouseEvent) => {
-  const trigger = (e.target as HTMLElement).closest<HTMLButtonElement>(
-    "[data-reply-trigger]",
-  );
-  if (!trigger) return;
-
-  const article = trigger.closest<HTMLElement>("article[data-post]");
-  if (!article) return;
-  void openReplyForArticle(article);
-});
-
-// ── Draft badge → editor ────────────────────────────────────────────
-//
-// The badge on an inline draft doubles as its most likely next action. Publish
-// and Delete live in the post menu with every other post action.
-
-document.addEventListener("click", (e: MouseEvent) => {
-  const trigger = (e.target as HTMLElement).closest<HTMLElement>(
-    "[data-draft-continue]",
-  );
-  if (!trigger) return;
-
-  const postId =
-    trigger.dataset.postId ??
-    trigger.closest<HTMLElement>("article[data-post]")?.dataset.postId;
-  if (!postId) return;
-
-  void getComposeDialog()?.openEdit(postId);
 });
 
 // ── Submit handler ──────────────────────────────────────────────────
@@ -641,32 +711,49 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
   // Get labels for toast messages
   const labels = composeEl?.labels;
   const uploadingMsg = labels?.uploading ?? "Uploading...";
+  const publishingMsg = labels?.publishing ?? "Publishing...";
+  const savingMsg = labels?.saving ?? "Saving...";
   const hasInlinePending = detail.threadPosts
     ? detail.threadPosts.some((p) => bodyHasPendingInline(p.body))
     : bodyHasPendingInline(detail.body);
   const hasPending = detail.pendingAttachments.length > 0 || hasInlinePending;
   const publishedMsg = labels?.published ?? "Published!";
   const viewLabel = labels?.view ?? "View";
+  const isEdit = !!detail.editPostId;
+  const isThread = !!(detail.threadPosts && detail.threadPosts.length >= 2);
+  // Publishing a draft goes through the edit endpoint but still ends published.
+  const willPublish =
+    detail.status === "published" && (!isEdit || !!detail.draftSourceId);
 
-  // Show persistent toast only when uploads are still in flight
-  if (hasPending) {
-    showPersistentToast("compose-deferred", uploadingMsg);
-    if (detail.pendingAttachments.length > 0) {
-      activeUploadToast = {
-        clientIds: detail.pendingAttachments.map((a) => a.clientId),
-        baseMsg: uploadingMsg,
-      };
-      refreshUploadToast();
-    }
+  // The composer closes the moment it dispatches, so this toast is the only
+  // sign that work is still running. Uploads name themselves and grow a
+  // percentage; everything else says what it is doing — a Link post can sit on
+  // the server for seconds while its preview thumbnail is fetched and stored.
+  let progressToastOpen = true;
+  showPersistentToast(
+    "compose-deferred",
+    hasPending ? uploadingMsg : willPublish ? publishingMsg : savingMsg,
+  );
+  if (detail.pendingAttachments.length > 0) {
+    activeUploadToast = {
+      clientIds: detail.pendingAttachments.map((a) => a.clientId),
+      baseMsg: uploadingMsg,
+    };
+    refreshUploadToast();
   }
 
-  /** Show result toast — replaces persistent toast if one exists, otherwise shows a new one */
+  /**
+   * Show a result toast. The first one takes over the progress toast in place;
+   * a later message (a retry result, say) gets its own toast instead of
+   * overwriting one that has not been read yet.
+   */
   const toastMsg = (msg: string, type: "success" | "error" = "success") => {
     if (activeUploadToast) {
       for (const id of activeUploadToast.clientIds) uploadProgress.delete(id);
       activeUploadToast = null;
     }
-    if (hasPending) {
+    if (progressToastOpen) {
+      progressToastOpen = false;
       replaceWithAutoClose("compose-deferred", msg, type);
     } else {
       showToast(msg, type);
@@ -789,8 +876,6 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
     globalThis.location.assign(composeEl.closeHref || publicPath("/"));
     return true;
   };
-  const isEdit = !!detail.editPostId;
-  const isThread = !!(detail.threadPosts && detail.threadPosts.length >= 2);
   let draftFallback: "upload" | "server" | null = null;
 
   try {
@@ -860,30 +945,23 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
         threadBody.replaceThreadId = detail.editPostId;
       }
 
-      const res = await fetch("/compose/thread", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(threadBody),
-      });
+      const res = await postCompose(
+        "/compose/thread",
+        JSON.stringify(threadBody),
+      );
 
-      if (!res.ok) {
-        // Server error on publish: retry as draft
+      if (!res?.ok) {
+        // The publish did not land — whether the server refused it or the
+        // request never arrived. Try to keep the work as a draft either way.
         if (detail.status === "published" && !draftFallback) {
           const retryPayload = {
             posts: postsPayload.map((p) => ({ ...p, status: "draft" })),
           };
-          const retryRes = await fetch("/compose/thread", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-            body: JSON.stringify(retryPayload),
-          });
-          if (retryRes.ok) {
+          const retryRes = await postCompose(
+            "/compose/thread",
+            JSON.stringify(retryPayload),
+          );
+          if (retryRes?.ok) {
             draftFallback = "server";
             clearRecoveredLocalDraft();
             const fallbackMsg =
@@ -894,10 +972,7 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
             return;
           }
         }
-        const data = await readJsonObject(res);
-        await handleSubmitError(
-          getJsonString(data, "error") ?? "Something went wrong",
-        );
+        await handleSubmitError(await submitErrorMessage(res, labels));
         return;
       }
 
@@ -980,29 +1055,24 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
       requestAttachments,
     );
 
-    const res = await fetch(endpoint, {
+    const res = await postCompose(
+      endpoint,
+      JSON.stringify(bodyPayload),
       method,
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(bodyPayload),
-    });
+    );
 
-    if (!res.ok) {
-      // Server error on a new publish: retry as draft
+    if (!res?.ok) {
+      // As in thread mode: a refused request and a request that never arrived
+      // both mean the post is not up, so both get the save-as-draft attempt.
       if (detail.status === "published" && !isEdit && !draftFallback) {
         const retryPayload = { ...bodyPayload, status: "draft" };
-        const retryRes = await fetch(endpoint, {
+        const retryRes = await postCompose(
+          endpoint,
+          JSON.stringify(retryPayload),
           method,
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify(retryPayload),
-        });
+        );
 
-        if (retryRes.ok) {
+        if (retryRes?.ok) {
           draftFallback = "server";
           clearRecoveredLocalDraft();
           const retryData = await readJsonObject(retryRes);
@@ -1019,10 +1089,7 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
         }
       }
 
-      const data = await readJsonObject(res);
-      await handleSubmitError(
-        getJsonString(data, "error") ?? "Something went wrong",
-      );
+      await handleSubmitError(await submitErrorMessage(res, labels));
       return;
     }
 
@@ -1174,7 +1241,7 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
       dispatchSubmitComplete(composeEl, "draft");
     }
   } catch {
-    await handleSubmitError("Something went wrong");
+    await handleSubmitError(await submitErrorMessage(null, labels));
   }
 });
 

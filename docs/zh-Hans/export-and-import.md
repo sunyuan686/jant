@@ -77,6 +77,8 @@ CLI 启动时会输出一行 `[jant] target = ...`，用于核对实际选中的
 
 CLI 启动时会自动加载 `<cwd>/.env.node`，但已通过 `export` 设置的 shell 变量优先级更高、不会被覆盖。把这些变量写进 `.env.node` 即可，不需要每次手动 `source`。
 
+用 `JANT_ENV_FILE` 可以指定加载另一个文件，一台机器管理多个部署时会用到。把 `JANT_ENV_FILE` 设为空值则完全跳过该文件 —— 自动化任务用这种方式把本地 `.env.node` 挡在环境之外。
+
 完整的环境变量列表见 [配置](configuration.md)。
 
 ## 站点导出（`site export`）
@@ -139,6 +141,25 @@ static/                   用户自有静态文件 + 下载的媒体
 | `/collections/`       | Collections directory                            |
 
 每页条数由 Jant **Settings → Posts per page** 控制。
+
+开启 **Settings → Feeds** 时，Atom feed 与对应页面一起导出：
+
+| URL                            | 内容            |
+| ------------------------------ | --------------- |
+| `/index.xml`                   | 首页时间线      |
+| `/featured/index.xml`          | 精选            |
+| `/archive/index.xml`           | 全部归档        |
+| `/{collection-slug}/index.xml` | 单个 collection |
+
+### Feed 地址会变
+
+Jant 的 feed 都在 `/feed` 下 —— `/feed`、`/latest/feed`、`/featured/feed`、`/archive/feed`、`/{collection-slug}/feed`。Hugo 把同样的内容放在各 section 里的 `index.xml`，导出站上旧地址一个都不存在，而所有已经订阅的读者手里拿的正是旧地址。
+
+导出会写一份 `static/_redirects`，把每个旧地址 301 到新地址。Cloudflare Pages 和 Netlify 会直接读这个文件，站点迁到这两家不会丢订阅者。其他 host 会忽略它 —— 把域名指过去之前，先把里面的规则翻译成该 host 自己的重定向配置。
+
+保住 `/{reply-slug}/` 链接的 `aliases:` 机制对 feed 无效：alias 页面靠 meta refresh 加脚本跳转，而 feed 阅读器只抓取并解析 XML，两者都不执行。
+
+导出站也没有 `/subscribe` 页面 —— 那是 Jant 运行时的一部分。导航里的 **Subscribe** 会指向主 feed 文件。
 
 ### Round-trip 保真
 

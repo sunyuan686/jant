@@ -1,8 +1,7 @@
 // @vitest-environment happy-dom
 
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { readComponentCss } from "../../../__tests__/helpers/component-css.js";
 import type { Editor } from "@tiptap/core";
 import { MAX_THREAD_POSTS } from "../../../types.js";
 
@@ -198,7 +197,11 @@ const labels: ComposeLabels = {
   altHint: "Alt text improves accessibility",
   addMore: "Add",
   removeAttachment: "Remove attachment",
+  moveAttachmentEarlier: "Move attachment earlier",
+  moveAttachmentLater: "Move attachment later",
   uploading: "Uploading...",
+  publishing: "Publishing...",
+  saving: "Saving...",
   loadingPost: "Loading post...",
   loadPostFailed: "Couldn't load this post. Try again.",
   published: "Published!",
@@ -228,10 +231,13 @@ const labels: ComposeLabels = {
   deleteDraft: "Delete Draft",
   draftDeleted: "Draft deleted.",
   publishFailedDraft: "Couldn't publish. Saved as draft.",
+  publishFailed: "Couldn't publish. Try again.",
+  publishFailedOffline: "Couldn't reach the server. Try again.",
   uploadFailedDraft: "Some uploads failed. Saved as draft.",
   addCollection: "Add Collection",
   collectionCountLabel: "%name% + %count% more",
   draftRestored: "Draft restored.",
+  draftStoreFailed: "This browser can't keep a local copy. Save as a draft.",
   reply: "Reply",
   publishHideFromLatest: "Hide from Latest",
   publishPrivate: "Post as Private",
@@ -1252,6 +1258,62 @@ describe("JantComposeDialog", () => {
       expect(internals._confirmPanelOpen).toBe(true);
     });
 
+    it("keeps the citation, the original and the language when a translation grows into a thread", async () => {
+      // The thread path used to be a copy of the single-post one: "Add to
+      // thread" dropped the quote's source link on the way into the thread
+      // editor, and the submit never learned about language or translations.
+      const el = await multilingualElement();
+      await openTranslationOf(el, {
+        id: "pst_source",
+        format: "quote",
+        displayTitle: "关于专注",
+        slug: "focus",
+        quoteText: "专注是一种拒绝。",
+        sourceName: "Some Author",
+        sourceUrl: "https://example.com/focus",
+      });
+      (el as unknown as { _language: string | null })._language = "en";
+      const single = requireElement(
+        el.querySelector<JantComposeEditor>("jant-compose-editor"),
+        "expected the editor",
+      );
+      single._quoteText = "Focus is a refusal.";
+      await flushUpdates(el);
+
+      (el as unknown as { _addThreadItem: () => void })._addThreadItem();
+      await flushUpdates(el);
+      const editors = Array.from(
+        el.querySelectorAll<JantComposeEditor>("jant-compose-editor"),
+      );
+      expect(editors).toHaveLength(2);
+      // The next post starts in the format of the one before it.
+      editors[1]!._quoteText = "And its answer.";
+      await flushUpdates(el);
+
+      let detail: ComposeSubmitDetail | null = null;
+      el.addEventListener("jant:compose-submit-deferred", (event) => {
+        detail = (event as CustomEvent<ComposeSubmitDetail>).detail;
+      });
+      requireElement(
+        el.querySelector<HTMLButtonElement>(".compose-publish-main"),
+        "expected publish button",
+      ).click();
+
+      const [root, reply] = (detail as ComposeSubmitDetail | null)
+        ?.threadPosts ?? [undefined, undefined];
+      expect(root).toMatchObject({
+        format: "quote",
+        quoteText: "Focus is a refusal.",
+        quoteAuthor: "Some Author",
+        url: "https://example.com/focus",
+        translationOfId: "pst_source",
+        language: "en",
+      });
+      // Thread-level facts: only the root states them.
+      expect(reply?.translationOfId).toBeUndefined();
+      expect(reply?.language).toBeUndefined();
+    });
+
     it("leaves the format alone once the author has started writing", async () => {
       // The fetch lands after the composer opens. Overwriting a first sentence
       // to save a format click is a bad trade.
@@ -1533,7 +1595,7 @@ describe("JantComposeDialog", () => {
 
     // Inline coordinates only mean anything if the panel is out of the
     // scroller — `position: absolute` here is the bug, not a style choice.
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
     expect(css).toMatch(
       /\.compose-post-meta-panel\s*\{\s*position:\s*fixed;[\s\S]*max-height:\s*var\(--compose-post-meta-panel-max-height,\s*none\);\s*overflow-y:\s*auto;/,
     );
@@ -2451,8 +2513,7 @@ describe("JantComposeDialog", () => {
     await editor.updateComplete;
 
     let receivedDetail:
-      | (ComposeSubmitDetail & { pendingAttachments: unknown[] })
-      | null = null;
+      (ComposeSubmitDetail & { pendingAttachments: unknown[] }) | null = null;
     el.addEventListener("jant:compose-submit-deferred", (event) => {
       const customEvent = event as CustomEvent<
         ComposeSubmitDetail & { pendingAttachments: unknown[] }
@@ -4102,8 +4163,7 @@ describe("JantComposeDialog", () => {
     await el.updateComplete;
 
     let receivedDetail:
-      | (ComposeSubmitDetail & { pendingAttachments: unknown[] })
-      | null = null;
+      (ComposeSubmitDetail & { pendingAttachments: unknown[] }) | null = null;
     el.addEventListener("jant:compose-submit-deferred", (event) => {
       const customEvent = event as CustomEvent<
         ComposeSubmitDetail & { pendingAttachments: unknown[] }
@@ -4335,6 +4395,236 @@ describe("JantComposeDialog", () => {
     await flushUpdates(el);
 
     expect(scroller.scrollTop).toBe(640);
+  });
+
+  describe("thread mode keeps what each post holds", () => {
+    type ThreadInternals = {
+      _addThreadItem: () => void;
+      _removeThreadItem: (index: number) => void;
+      _checkSlugAvailability: (slug: string, index?: number) => Promise<void>;
+      _slug: string;
+      _publishedAtInput: string;
+      _publishedAtTimeMinutes: number | null;
+    };
+
+    const internals = (el: JantComposeDialog) =>
+      el as unknown as ThreadInternals;
+
+    const editorsOf = (el: JantComposeDialog) =>
+      Array.from(el.querySelectorAll<JantComposeEditor>("jant-compose-editor"));
+
+    const paragraph = (text: string) => ({
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    });
+
+    function submit(el: JantComposeDialog): ComposeSubmitDetail {
+      let detail: ComposeSubmitDetail | null = null;
+      el.addEventListener(
+        "jant:compose-submit-deferred",
+        (event) => {
+          detail = (event as CustomEvent<ComposeSubmitDetail>).detail;
+        },
+        { once: true },
+      );
+      requireElement(
+        el.querySelector<HTMLButtonElement>(".compose-publish-main"),
+        "expected publish button",
+      ).click();
+      if (!detail) throw new Error("expected a submit");
+      return detail;
+    }
+
+    it("keeps a quote's source link on the way into a thread and back out", async () => {
+      const el = await createElement();
+      el._format = "quote";
+      await flushUpdates(el);
+      const single = editorsOf(el)[0]!;
+      single._quoteText = "A borrowed sentence.";
+      single._quoteAuthor = "Someone Else";
+      single._url = "https://example.com/source";
+      await flushUpdates(el);
+
+      internals(el)._addThreadItem();
+      await flushUpdates(el);
+      const root = editorsOf(el)[0]!;
+      expect(root.getData()).toMatchObject({
+        url: "https://example.com/source",
+        quoteText: "A borrowed sentence.",
+        quoteAuthor: "Someone Else",
+      });
+
+      internals(el)._removeThreadItem(1);
+      await flushUpdates(el);
+      expect(el._threadItems).toHaveLength(0);
+      expect(editorsOf(el)[0]!.getData().url).toBe(
+        "https://example.com/source",
+      );
+      expect(submit(el).url).toBe("https://example.com/source");
+    });
+
+    it("publishes an attached text that has no media beside it after entering a thread", async () => {
+      // The strip and the submit both walk the attachment order, which was
+      // only carried across when the post also had media.
+      const el = await createElement();
+      const single = editorsOf(el)[0]!;
+      single._bodyJson = paragraph("See the notes below.");
+      single._attachedTexts = [
+        {
+          clientId: "text-1",
+          bodyJson: paragraph("The notes."),
+          bodyHtml: "",
+          summary: "The notes.",
+        },
+      ];
+      single._attachmentOrder = ["text-1"];
+      await flushUpdates(el);
+
+      internals(el)._addThreadItem();
+      await flushUpdates(el);
+      const [root, next] = editorsOf(el);
+      expect(root!.querySelectorAll("[data-attachment-list] > *")).toHaveLength(
+        1,
+      );
+      next!._bodyJson = paragraph("More.");
+      await flushUpdates(el);
+
+      const detail = submit(el);
+      expect(detail.threadPosts?.[0]?.attachments).toEqual([
+        expect.objectContaining({ type: "text", clientId: "text-1" }),
+      ]);
+    });
+
+    it("moves the next post's own permalink and date up when the first post is removed", async () => {
+      // The root's permalink and date live on the dialog, every other post's
+      // on its thread item. Removing the root used to leave its values on the
+      // post that took its place, and drop that post's own.
+      const el = await createElement();
+      el._threadItems = [
+        { id: "a", format: "note" },
+        {
+          id: "b",
+          format: "note",
+          slug: "part-two",
+          publishedAtInput: "2025-01-02",
+          publishedAtTimeMinutes: 600,
+        },
+        { id: "c", format: "note" },
+      ];
+      internals(el)._slug = "part-one";
+      internals(el)._publishedAtInput = "2025-01-01";
+      internals(el)._publishedAtTimeMinutes = 480;
+      await flushUpdates(el);
+      editorsOf(el).forEach((editor, i) => {
+        editor._bodyJson = paragraph(`Post ${i + 1}`);
+      });
+      await flushUpdates(el);
+
+      internals(el)._removeThreadItem(0);
+      await flushUpdates(el);
+
+      expect(internals(el)._slug).toBe("part-two");
+      expect(internals(el)._publishedAtInput).toBe("2025-01-02");
+      expect(internals(el)._publishedAtTimeMinutes).toBe(600);
+      const detail = submit(el);
+      expect(detail.threadPosts?.map((post) => post.slug)).toEqual([
+        "part-two",
+        undefined,
+      ]);
+    });
+
+    function mockThreadDraft(requests: string[]) {
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        requests.push(url);
+        const json = (body: unknown) =>
+          new Response(JSON.stringify(body), {
+            headers: { "Content-Type": "application/json" },
+          });
+        if (url === "/api/posts/pst_draft_root") {
+          return json({
+            id: "pst_draft_root",
+            threadId: "pst_draft_root",
+            format: "note",
+            status: "draft",
+            slug: "draft-thread",
+            title: "Draft thread",
+            body: null,
+            attachments: [],
+            collectionIds: [],
+          });
+        }
+        if (url === "/api/posts?status=draft&limit=50") {
+          return json({
+            posts: [
+              {
+                id: "pst_draft_reply",
+                threadId: "pst_draft_root",
+                replyToId: "pst_draft_root",
+                format: "quote",
+                status: "draft",
+                slug: "part-two",
+                quoteText: "Draft reply",
+                sourceName: "Someone Else",
+                attachments: [],
+              },
+            ],
+          });
+        }
+        if (url.startsWith("/api/posts/slug?")) {
+          return json({ available: true });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+    }
+
+    it("keeps each reply's permalink when a saved thread draft is reopened", async () => {
+      // Saving a thread draft recreates it, so a slug not loaded back into
+      // the composer came back as a random id on the next save.
+      const requests: string[] = [];
+      mockThreadDraft(requests);
+      const el = await createElement();
+      await el.openDraft("pst_draft_root");
+      await flushUpdates(el);
+
+      expect(el._threadItems[1]?.slug).toBe("part-two");
+
+      // A reply's slug already belongs to the saved reply, not to the root.
+      await internals(el)._checkSlugAvailability("part-two", 1);
+      await internals(el)._checkSlugAvailability("draft-thread", 0);
+      const checks = requests
+        .filter((url) => url.startsWith("/api/posts/slug?"))
+        .map((url) => new URL(url, "http://x").searchParams.get("postId"));
+      expect(checks).toEqual(["pst_draft_reply", "pst_draft_root"]);
+
+      expect(submit(el).threadPosts?.map((post) => post.slug)).toEqual([
+        "draft-thread",
+        "part-two",
+      ]);
+    });
+
+    it("folds a thread post's quote into its body when its format changes on a saved draft", async () => {
+      // Single-post drafts already did this; a thread post kept the quote in
+      // a hidden field, which the next save then dropped.
+      mockThreadDraft([]);
+      const el = await createElement();
+      await el.openDraft("pst_draft_root");
+      await flushUpdates(el);
+
+      const reply = editorsOf(el)[1]!;
+      const noteButton = requireElement(
+        Array.from(
+          reply.querySelectorAll<HTMLButtonElement>(".compose-segmented-item"),
+        ).find((button) => button.textContent?.trim() === labels.note) ?? null,
+        "expected the reply's Note button",
+      );
+      noteButton.click();
+      await flushUpdates(el);
+
+      expect(el._threadItems[1]?.format).toBe("note");
+      expect(reply.getData().body).toContain("Draft reply");
+      expect(submit(el).threadPosts?.[1]?.body).toContain("Draft reply");
+    });
   });
 
   it("omits visibility from locked edit submissions", async () => {
@@ -5189,7 +5479,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("scrolls in exactly one place across every compose mode", async () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // `.compose-scroll` owns the scrolling for single-post, reply and thread
     // alike. Anything nested inside it that scrolls on its own is the bug this
@@ -5216,7 +5506,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("lets attachment previews take the room the pinned toolbar used to need", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     expect(css).toMatch(
       /\.compose-attachment-img\s*\{[\s\S]*max-height:\s*min\(420px,\s*46dvh\);/,
@@ -5224,12 +5514,35 @@ describe("JantComposeDialog", () => {
     expect(css).toMatch(
       /\.compose-attachment:only-child\s+\.compose-attachment-img\s*\{[\s\S]*max-height:\s*min\(460px,\s*52dvh\);/,
     );
+    // The strip's row height is one variable every kind of attachment reads,
+    // so the number is asserted where it is declared.
     expect(css).toMatch(
-      /\.compose-attachment:not\(:only-child\)\s+\.compose-attachment-img\s*\{[\s\S]*height:\s*min\(340px,\s*40dvh\);/,
+      /\.compose-attachments\s*\{[\s\S]*?--compose-strip-height:\s*min\(340px,\s*40dvh\);/,
+    );
+    expect(css).toMatch(
+      /\.compose-attachment:not\(:only-child\)\s+\.compose-attachment-img\s*\{[\s\S]*height:\s*var\(--compose-strip-height\);/,
     );
     // Reply compose no longer shrinks its previews to 96×72 to spare the
     // toolbar — one preview size everywhere.
     expect(css).not.toMatch(/--compose-reply-attachment-width/);
+  });
+
+  it("gives a card in the strip the same height as the pictures beside it", () => {
+    const css = readComponentCss();
+
+    // A card is chrome, not content: it fills the height a picture sets, so a
+    // mixed strip reads as one row and every control row lands on one line.
+    expect(css).toMatch(
+      /\.compose-attachments:has\(\.compose-attachment-img\)\s+\.compose-attachment:not\(:only-child\)\s+:is\(\s*\.compose-attachment-file-card,\s*\.compose-attachment-text-card,\s*\.compose-attachment-preview-fallback\s*\)\s*\{\s*height:\s*var\(--compose-strip-height\);/,
+    );
+    // With no picture to match, cards keep their own compact height rather
+    // than growing into a row of empty boxes.
+    expect(css).toMatch(
+      /\.compose-attachment:not\(:only-child\)\s+\.compose-attachment-file-card\s*\{[\s\S]*?height:\s*200px;/,
+    );
+    expect(css).toMatch(
+      /\.compose-attachment:not\(:only-child\)\s+\.compose-attachment-text-card\s*\{[\s\S]*?height:\s*200px;/,
+    );
   });
 
   it("routes a format change straight off the single-post editor", async () => {
@@ -5251,7 +5564,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("shows the replied-to post at the same scale as the reply", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // Same ceiling as the composer's own previews — the parent is not a
     // thumbnail strip.
@@ -5276,7 +5589,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("keeps reply compose tools inside the editor's text column", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // `flex: 1` on the editor is horizontal — it claims the width the rail dot
     // leaves. Height comes from content.
@@ -5287,7 +5600,7 @@ describe("JantComposeDialog", () => {
       /\.compose-reply-compose-layout\s+\.compose-thread-post-header\s*\+\s*\.compose-body\s*\{[\s\S]*padding-top:\s*12px;/,
     );
     expect(css).toMatch(
-      /@media \(max-width:\s*760px\),\s*\(hover:\s*none\) and \(pointer:\s*coarse\)\s*\{[\s\S]*\.compose-thread-layout\s*\{[\s\S]*padding-top:\s*0\.75rem;/,
+      /@media \(max-width:\s*699px\),\s*\(hover:\s*none\) and \(pointer:\s*coarse\)\s*\{[\s\S]*\.compose-thread-layout\s*\{[\s\S]*padding-top:\s*0\.75rem;/,
     );
     expect(css).toMatch(
       /\.compose-dialog,[\s\S]*\.compose-page-shell\s*>\s*jant-compose-dialog\s*\{[\s\S]*--compose-quote-input-size:\s*var\(--type-content-subtitle\);[\s\S]*--compose-quote-input-leading:\s*1\.32;/,
@@ -5327,7 +5640,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("opens every compose text surface at a floor stated in lines", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // Two lines for the editor, four for the quote — as multiples of the
     // leading, not pixels, so the floor follows the type instead of going
@@ -5345,7 +5658,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("runs the thread rail from the first dot to the last post's, and no further", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // Drawn per row rather than as one strip down the layout, which is what
     // lets both ends be trimmed back to a dot.
@@ -5372,7 +5685,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("starts every compose row's ink on one text column", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // One knob for the column itself, read by every row rather than restated
     // as a literal per row.
@@ -5422,7 +5735,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("declares one marker vocabulary for the compose and reading rails", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // Both rails draw the same dot; only the surface behind it differs.
     // `[^}]*` rather than `[\s\S]*` throughout: a greedy any-char run walks past
@@ -5480,7 +5793,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("punches the dot's gap with the surface colour on both rails", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // Compose stops at the punch-out; reading layers its ring inside the same
     // radius, so the outermost layer — the one that breaks the rail line — is
@@ -5504,7 +5817,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("marks the post a view is about with an accent fill, not a bigger dot", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // Feed hero, curated highlight and the opened detail post share one rule,
     // matching compose's `.is-current`. Size is not a second signal.
@@ -5530,7 +5843,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("centres every rail child on the line by giving them a shared track", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // The line's x is derived from the track, never from a dot's own size — a
     // hardcoded half-marker is what put the line down the dot's edge before.
@@ -5555,7 +5868,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("accents the dot of the post holding the cursor, not every editor row", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     // Which selector carries the highlight — the colour itself is pinned by
     // "marks the post a view is about…", so this stays token-agnostic.
@@ -5600,7 +5913,7 @@ describe("JantComposeDialog", () => {
   });
 
   it("keeps passive footnote references quiet until the editor selects them", () => {
-    const css = readFileSync(resolve("src/styles/ui.css"), "utf8");
+    const css = readComponentCss();
 
     expect(css).toMatch(
       /\.compose-tiptap-body \.tiptap \.tiptap-footnote-reference\s*\{[^}]*color:\s*var\(--site-footnote-marker\);/,
@@ -5749,8 +6062,7 @@ describe("JantComposeDialog", () => {
     await editor.updateComplete;
 
     let receivedDetail:
-      | (ComposeSubmitDetail & { pendingAttachments: unknown[] })
-      | null = null;
+      (ComposeSubmitDetail & { pendingAttachments: unknown[] }) | null = null;
     el.addEventListener("jant:compose-submit-deferred", (event) => {
       const customEvent = event as CustomEvent<
         ComposeSubmitDetail & { pendingAttachments: unknown[] }

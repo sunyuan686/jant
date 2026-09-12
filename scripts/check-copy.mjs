@@ -6,7 +6,7 @@
  * docs/internal/writing-style.md across user-facing prose and translations.
  *
  * Scans:
- *   - docs/ **.md and README.md
+ *   - docs/ **.md (except `internal/`, which is never published) and README.md
  *   - packages/core/src/i18n/locales/ ** /*.po (msgstr values only)
  *
  * Judgment calls stay with the author. Errors fail the run; warnings do not.
@@ -20,7 +20,7 @@
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -36,6 +36,22 @@ const EXCLUDED = new Set([
   join("docs", "internal", "writing-style.md"),
   join(".claude", "skills", "copy-style", "SKILL.md"),
 ]);
+
+/**
+ * Whether a doc reaches readers. The jant-cloud docs sync skips every
+ * `internal` directory under docs/, so those files are working notes for
+ * whoever builds Jant, not reader-facing prose.
+ *
+ * @param {string} path Repo-relative path.
+ * @returns {boolean}
+ * @example
+ * isPublished("docs/multilingual.md"); // => true
+ * isPublished("docs/internal/lit-guide.md"); // => false
+ */
+function isPublished(path) {
+  const segments = path.split(sep);
+  return !(segments[0] === "docs" && segments.includes("internal"));
+}
 
 const ZH = ["zhHans", "zhHant"];
 
@@ -109,8 +125,25 @@ const RULES = [
     langs: ZH,
     severity: "warn",
     pattern:
-      /轻松|輕鬆|轻而易举|輕而易舉|瞬间完成|瞬間完成|强大的|強大的|完美地|无缝|無縫|一目了然/gu,
+      /轻松|輕鬆|轻而易举|輕而易舉|瞬间完成|瞬間完成|无缝|無縫|一目了然/gu,
     message: "删掉效率形容词——不携带信息",
+  },
+  {
+    // `不完美` is an ordinary word, not a boast.
+    id: "zh-hyperbole",
+    langs: ZH,
+    severity: "warn",
+    pattern:
+      /(?<!不)完美|极致|極致|超强|超強|最强|最強|神器|黑科技|颠覆|顛覆|革命性|惊艳|驚豔|惊人|驚人|丝滑|絲滑|超好用|史上最/gu,
+    message: "删掉夸张词——陈述事实或给出数字",
+  },
+  {
+    id: "zh-marketing",
+    langs: ZH,
+    severity: "warn",
+    pattern:
+      /强大|強大|赋能|賦能|打造|一站式|全方位|沉浸式|闭环|閉環|抓手|解锁|解鎖|尽享|盡享|畅享|暢享/gu,
+    message: "删掉营销黑话——说它做什么",
   },
   {
     id: "zh-translationese",
@@ -208,11 +241,21 @@ const RULES = [
     message: "filler — delete it",
   },
   {
-    id: "en-powerful",
+    id: "en-hyperbole",
     langs: ["en"],
     severity: "warn",
-    pattern: /\bpowerful\b/giu,
-    message: "marketing adjective — say what it does instead",
+    pattern:
+      /\b(ultimate|revolutionary|game[- ]chang(?:er|ing)|best[- ]in[- ]class|world[- ]class|cutting[- ]edge|(?:blazing(?:ly)?|lightning)[- ]fast|incredibl[ey]|amazing(?:ly)?|stunning|next[- ]generation|state[- ]of[- ]the[- ]art)\b/giu,
+    message: "hyperbole — state the fact or the number instead",
+  },
+  {
+    // "Unlocked" and "elevated" stay out: both name real states in UI and CSS.
+    id: "en-marketing",
+    langs: ["en"],
+    severity: "warn",
+    pattern:
+      /\b(powerful|unlock(?:s|ing)?|unleash(?:es|ed|ing)?|empower(?:s|ed|ing)?|supercharg(?:e|es|ed|ing)|elevates?|leverag(?:e|es|ed|ing)|synerg(?:y|ies)|hassle[- ]free|all[- ]in[- ]one|one[- ]stop)\b/giu,
+    message: "marketing language — say what it does instead",
   },
   {
     id: "en-significance-claim",
@@ -453,6 +496,7 @@ function main() {
 
   const byFile = new Map();
   const corpus = [];
+  let checked = 0;
   let errors = 0;
   let warnings = 0;
 
@@ -467,7 +511,10 @@ function main() {
       continue;
     }
 
+    // Unpublished docs are still repo text a ✅ example may quote.
     corpus.push(raw);
+    if (!isPublished(path)) continue;
+    checked += 1;
 
     const locale = localeOf(path);
     const findings = [];
@@ -545,7 +592,7 @@ function main() {
   }
 
   console.log(
-    `\n${errors} error(s), ${warnings} warning(s) across ${targets.length} file(s).`,
+    `\n${errors} error(s), ${warnings} warning(s) across ${checked} file(s).`,
   );
   if (errors > 0) {
     console.log("Fix the errors, or mark an intentional line with `copy-ok`.");

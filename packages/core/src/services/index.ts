@@ -152,9 +152,11 @@ export function createServices(
       databaseSchema,
     ),
     apiTokens: createApiTokenService(db, siteId, databaseSchema),
-    bootstrap: createBootstrapService(db, {
+    bootstrap: createBootstrapService(db, siteId, {
       schema: databaseSchema,
+      databaseDialect: dialect,
       bootstrapSite: config?.bootstrapSite,
+      siteResolutionMode: config?.siteResolutionMode,
     }),
     siteAdmin: createSiteAdminService(db, databaseSchema, dialect, {
       siteResolutionMode: config?.siteResolutionMode,
@@ -207,7 +209,9 @@ export type { AuthService, DeleteAccountDeps } from "./auth.js";
 export type { ApiTokenService } from "./api-token.js";
 export type {
   BootstrapService,
-  CompleteInitialSetupData,
+  CompleteSiteSetupData,
+  CompleteSiteSetupDeps,
+  ProvisionOwnerAccountData,
 } from "./bootstrap.js";
 export type { SiteMemberService } from "./site-member.js";
 export type { SiteProfileService } from "./site-profile.js";

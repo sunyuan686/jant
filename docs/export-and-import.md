@@ -77,6 +77,8 @@ The CLI prints a `[jant] target = ...` line at startup so you can confirm which 
 
 The CLI auto-loads `<cwd>/.env.node` at startup, but variables already exported in the shell take precedence and won't be overwritten. Drop your variables into `.env.node` once and skip the manual `source` step.
 
+Set `JANT_ENV_FILE` to load a different file — handy when one machine drives several deployments. An empty `JANT_ENV_FILE` skips the file entirely, which is how automated runs keep a local `.env.node` out of their environment.
+
 For the full environment variable list, see [Configuration](configuration.md).
 
 ## Site export (`site export`)
@@ -139,6 +141,25 @@ The root `layouts/` and `static/` directories are yours to maintain. Hugo loads 
 | `/collections/`       | Collections directory                                             |
 
 Page size is controlled by Jant's **Settings → Posts per page**.
+
+Atom feeds are emitted alongside the pages they carry, when **Settings → Feeds** is on:
+
+| URL                            | Carries           |
+| ------------------------------ | ----------------- |
+| `/index.xml`                   | The home timeline |
+| `/featured/index.xml`          | Featured          |
+| `/archive/index.xml`           | The full archive  |
+| `/{collection-slug}/index.xml` | One collection    |
+
+### Feed addresses change
+
+Jant serves its feeds under `/feed` — `/feed`, `/latest/feed`, `/featured/feed`, `/archive/feed`, `/{collection-slug}/feed`. Hugo serves the same documents as `index.xml` inside each section, so none of the old addresses exist on the exported site, and every reader subscribed in a feed reader is holding one of them.
+
+The export writes `static/_redirects`, mapping each old address to its new one with a 301. Cloudflare Pages and Netlify read that file as published, so a site moved to either host keeps its subscribers. Other hosts ignore it — translate its rules into that host's redirect configuration before you point the domain at the export.
+
+The `aliases:` mechanism that preserves `/{reply-slug}/` links cannot cover feeds. An alias page redirects with a meta refresh and a script, and feed readers fetch XML without running either.
+
+The exported site has no `/subscribe` page either — that page belongs to the Jant runtime. The **Subscribe** navigation entry resolves to the main feed file instead.
 
 ### Round-trip fidelity
 

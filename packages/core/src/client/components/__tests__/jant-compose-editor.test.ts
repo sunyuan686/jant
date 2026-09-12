@@ -7,11 +7,12 @@ vi.mock("../../upload-with-metadata.js", () => ({
 import type { Editor, JSONContent } from "@tiptap/core";
 import type { Slice } from "@tiptap/pm/model";
 import * as ProseMirrorView from "@tiptap/pm/view";
-import type { ComposeLabels } from "../compose-types.js";
+import type { ComposeAttachment, ComposeLabels } from "../compose-types.js";
 import { renderTiptapJson } from "../../../lib/tiptap-render.js";
 import "../jant-compose-editor.js";
 import type { JantComposeEditor } from "../jant-compose-editor.js";
 import { uploadWithMetadata } from "../../upload-with-metadata.js";
+import Sortable from "sortablejs";
 
 function requireElement<T extends globalThis.Element>(
   element: T | null,
@@ -108,6 +109,57 @@ function triggerEditorPaste(el: JantComposeEditor, files: File[]) {
   return { handled, event };
 }
 
+/**
+ * Drops files on the element itself, the way a drag onto the composer chrome
+ * (rather than into the ProseMirror body) arrives.
+ */
+function triggerEditorDrop(el: JantComposeEditor, files: File[]) {
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", {
+    value: {
+      items: files.map((file) => ({
+        kind: "file",
+        type: file.type,
+        getAsFile: () => file,
+      })),
+      files,
+    },
+  });
+  el.dispatchEvent(event);
+  return event;
+}
+
+/** Every image src currently in the editor's document, in document order. */
+function imageSrcs(el: JantComposeEditor): string[] {
+  const srcs: string[] = [];
+  requireEditor(el).state.doc.descendants((node) => {
+    if (node.type.name === "image") srcs.push(node.attrs.src as string);
+  });
+  return srcs;
+}
+
+/** The same, read off the JSON the composer would submit. */
+function bodyImageSrcs(json: unknown): string[] {
+  const srcs: string[] = [];
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    const candidate = node as {
+      type?: string;
+      attrs?: { src?: unknown };
+      content?: unknown[];
+    };
+    if (
+      candidate.type === "image" &&
+      typeof candidate.attrs?.src === "string"
+    ) {
+      srcs.push(candidate.attrs.src);
+    }
+    for (const child of candidate.content ?? []) walk(child);
+  };
+  walk(json);
+  return srcs;
+}
+
 function parsePastedText(el: JantComposeEditor, text: string): Slice | null {
   const editor = requireEditor(el);
   let slice: Slice | null = null;
@@ -191,7 +243,11 @@ const labels: ComposeLabels = {
   altHint: "Alt text improves accessibility",
   addMore: "Add",
   removeAttachment: "Remove attachment",
+  moveAttachmentEarlier: "Move attachment earlier",
+  moveAttachmentLater: "Move attachment later",
   uploading: "Uploading...",
+  publishing: "Publishing...",
+  saving: "Saving...",
   loadingPost: "Loading post...",
   loadPostFailed: "Couldn't load this post. Try again.",
   published: "Published!",
@@ -221,10 +277,13 @@ const labels: ComposeLabels = {
   deleteDraft: "Delete Draft",
   draftDeleted: "Draft deleted.",
   publishFailedDraft: "Couldn't publish. Saved as draft.",
+  publishFailed: "Couldn't publish. Try again.",
+  publishFailedOffline: "Couldn't reach the server. Try again.",
   uploadFailedDraft: "Some uploads failed. Saved as draft.",
   addCollection: "Add Collection",
   collectionCountLabel: "%name% + %count% more",
   draftRestored: "Draft restored.",
+  draftStoreFailed: "This browser can't keep a local copy. Save as a draft.",
   reply: "Reply",
   publishHideFromLatest: "Hide from Latest",
   publishPrivate: "Post as Private",
@@ -329,6 +388,58 @@ async function createElement(
   return el;
 }
 
+function mediaAttachment(clientId: string, mediaId: string): ComposeAttachment {
+  const blob = new Blob(["fake"], { type: "image/png" });
+  return {
+    clientId,
+    file: new File([blob], `${clientId}.png`, { type: "image/png" }),
+    previewUrl: URL.createObjectURL(blob),
+    status: "done",
+    progress: null,
+    mediaId,
+    alt: "",
+    error: null,
+    posterUrl: null,
+    remoteUrl: null,
+    summary: null,
+    chars: null,
+  };
+}
+
+/**
+ * Forces the primary-pointer media query, and returns a restore function.
+ * Every call site restores in a `finally` so one test cannot leak into another.
+ */
+function stubPrimaryPointer(kind: "coarse" | "fine"): () => void {
+  const original = window.matchMedia;
+  // Overrides `matches` on a real MediaQueryList, so the component still gets
+  // a live object to subscribe to.
+  window.matchMedia = (query: string) => {
+    const list = original.call(window, query);
+    Object.defineProperty(list, "matches", {
+      configurable: true,
+      value: query.includes(`pointer: ${kind}`),
+    });
+    return list;
+  };
+  return () => {
+    window.matchMedia = original;
+  };
+}
+
+function moveButton(
+  el: JantComposeEditor,
+  clientId: string,
+  direction: "earlier" | "later",
+): HTMLButtonElement {
+  return requireElement(
+    el.querySelector<HTMLButtonElement>(
+      `[data-attachment-id="${clientId}"] [data-attachment-move="${direction}"]`,
+    ),
+    `expected ${direction} move button for ${clientId}`,
+  );
+}
+
 function tiptapDoc(...content: JSONContent[]): JSONContent {
   return { type: "doc", content };
 }
@@ -346,6 +457,22 @@ function tiptapParagraph(text: string): JSONContent {
     type: "paragraph",
     content: [{ type: "text", text }],
   };
+}
+
+/**
+ * Replays a pointer gesture. The browser retargets a click to the nearest
+ * common ancestor of the press and the release, so `clickTarget` is separate
+ * from the two — a drag that starts on the text and ends over a layout wrapper
+ * reports the wrapper.
+ */
+function pressAndClick(
+  pressTarget: HTMLElement,
+  releaseTarget: HTMLElement,
+  clickTarget: HTMLElement = releaseTarget,
+) {
+  pressTarget.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  releaseTarget.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  clickTarget.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
 async function toggleEmojiPicker(el: JantComposeEditor) {
@@ -1270,37 +1397,9 @@ describe("JantComposeEditor", () => {
 
   it("moves attachments later with keyboard controls", async () => {
     const el = await createElement("note");
-    const blob = new Blob(["fake"], { type: "image/png" });
-    const file = new File([blob], "test.png", { type: "image/png" });
     el._attachments = [
-      {
-        clientId: "a1",
-        file,
-        previewUrl: URL.createObjectURL(blob),
-        status: "done",
-        progress: null,
-        mediaId: "m1",
-        alt: "",
-        error: null,
-        posterUrl: null,
-        remoteUrl: null,
-        summary: null,
-        chars: null,
-      },
-      {
-        clientId: "a2",
-        file,
-        previewUrl: URL.createObjectURL(blob),
-        status: "done",
-        progress: null,
-        mediaId: "m2",
-        alt: "",
-        error: null,
-        posterUrl: null,
-        remoteUrl: null,
-        summary: null,
-        chars: null,
-      },
+      mediaAttachment("a1", "m1"),
+      mediaAttachment("a2", "m2"),
     ];
     el._attachmentOrder = ["a1", "a2"];
     await el.updateComplete;
@@ -1320,6 +1419,127 @@ describe("JantComposeEditor", () => {
     await el.updateComplete;
 
     expect(el._attachmentOrder).toEqual(["a2", "a1"]);
+  });
+
+  it("reorders attachments with the move buttons", async () => {
+    const el = await createElement("note");
+    el._attachments = [
+      mediaAttachment("a1", "m1"),
+      mediaAttachment("a2", "m2"),
+      mediaAttachment("a3", "m3"),
+    ];
+    el._attachmentOrder = ["a1", "a2", "a3"];
+    await el.updateComplete;
+
+    moveButton(el, "a1", "later").click();
+    await el.updateComplete;
+    expect(el._attachmentOrder).toEqual(["a2", "a1", "a3"]);
+
+    moveButton(el, "a1", "earlier").click();
+    await el.updateComplete;
+    expect(el._attachmentOrder).toEqual(["a1", "a2", "a3"]);
+  });
+
+  it("disables the move button at each end of the strip", async () => {
+    const el = await createElement("note");
+    el._attachments = [
+      mediaAttachment("a1", "m1"),
+      mediaAttachment("a2", "m2"),
+    ];
+    el._attachmentOrder = ["a1", "a2"];
+    await el.updateComplete;
+
+    expect(moveButton(el, "a1", "earlier").disabled).toBe(true);
+    expect(moveButton(el, "a1", "later").disabled).toBe(false);
+    expect(moveButton(el, "a2", "earlier").disabled).toBe(false);
+    expect(moveButton(el, "a2", "later").disabled).toBe(true);
+  });
+
+  it("keeps focus on the attachment that moved", async () => {
+    const el = await createElement("note");
+    el._attachments = [
+      mediaAttachment("a1", "m1"),
+      mediaAttachment("a2", "m2"),
+      mediaAttachment("a3", "m3"),
+    ];
+    el._attachmentOrder = ["a1", "a2", "a3"];
+    await el.updateComplete;
+
+    const later = moveButton(el, "a1", "later");
+    later.focus();
+    later.click();
+    await el.updateComplete;
+
+    expect(document.activeElement).toBe(moveButton(el, "a1", "later"));
+  });
+
+  it("falls back to the opposite button when a move reaches the end", async () => {
+    const el = await createElement("note");
+    el._attachments = [
+      mediaAttachment("a1", "m1"),
+      mediaAttachment("a2", "m2"),
+    ];
+    el._attachmentOrder = ["a1", "a2"];
+    await el.updateComplete;
+
+    const later = moveButton(el, "a1", "later");
+    later.focus();
+    later.click();
+    await el.updateComplete;
+
+    expect(el._attachmentOrder).toEqual(["a2", "a1"]);
+    expect(moveButton(el, "a1", "later").disabled).toBe(true);
+    expect(document.activeElement).toBe(moveButton(el, "a1", "earlier"));
+  });
+
+  it("omits move buttons when there is nothing to reorder", async () => {
+    const el = await createElement("note");
+    el._attachments = [mediaAttachment("a1", "m1")];
+    el._attachmentOrder = ["a1"];
+    await el.updateComplete;
+
+    expect(el.querySelector("[data-attachment-move]")).toBeNull();
+    expect(el.querySelector(".compose-attachment-alt")).not.toBeNull();
+  });
+
+  it("leaves drag reordering off on a touch device", async () => {
+    const create = vi.spyOn(Sortable, "create");
+    const restorePointer = stubPrimaryPointer("coarse");
+    try {
+      const el = await createElement("note");
+      el._attachments = [
+        mediaAttachment("a1", "m1"),
+        mediaAttachment("a2", "m2"),
+      ];
+      el._attachmentOrder = ["a1", "a2"];
+      await el.updateComplete;
+
+      expect(create).not.toHaveBeenCalled();
+      // The buttons are the whole reordering path there, so they must stay.
+      expect(moveButton(el, "a1", "later").disabled).toBe(false);
+    } finally {
+      restorePointer();
+      create.mockRestore();
+    }
+  });
+
+  it("keeps drag reordering on a pointer device", async () => {
+    const create = vi.spyOn(Sortable, "create");
+    const restorePointer = stubPrimaryPointer("fine");
+    try {
+      const el = await createElement("note");
+      el._attachments = [
+        mediaAttachment("a1", "m1"),
+        mediaAttachment("a2", "m2"),
+      ];
+      el._attachmentOrder = ["a1", "a2"];
+      await el.updateComplete;
+
+      expect(create).toHaveBeenCalledTimes(1);
+    } finally {
+      restorePointer();
+      create.mockRestore();
+    }
   });
 
   it("preserves mixed attachment order when populate provides one", async () => {
@@ -1435,4 +1655,280 @@ describe("JantComposeEditor", () => {
       "clipboard.png",
     ]);
   });
+
+  it("pastes images as attachments in a link, title or no title", async () => {
+    const uploadWithMetadataMock = vi.mocked(uploadWithMetadata);
+    const el = await createElement("link");
+    // A link's title is required to publish, so it is filled in every link
+    // worth pasting into — it can't be the signal that picks inline.
+    el._title = "An article worth linking";
+    await el.updateComplete;
+
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+    const { handled } = triggerEditorPaste(el, [image]);
+    await el.updateComplete;
+
+    expect(handled).toBe(true);
+    expect(uploadWithMetadataMock).not.toHaveBeenCalled();
+    expect(el._attachments.map((attachment) => attachment.file.name)).toEqual([
+      "clipboard.png",
+    ]);
+  });
+
+  it("pastes images as attachments in a quote carrying a title from a format switch", async () => {
+    const uploadWithMetadataMock = vi.mocked(uploadWithMetadata);
+    const el = await createElement("quote");
+    // A quote has no title field, but switching over from a note leaves one
+    // behind. Nothing the author can see may decide where the image lands.
+    el._title = "Essay";
+    await el.updateComplete;
+
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+    const { handled } = triggerEditorPaste(el, [image]);
+    await el.updateComplete;
+
+    expect(handled).toBe(true);
+    expect(uploadWithMetadataMock).not.toHaveBeenCalled();
+    expect(el._attachments.map((attachment) => attachment.file.name)).toEqual([
+      "clipboard.png",
+    ]);
+  });
+
+  it("carries an in-flight inline upload across a format switch", async () => {
+    const uploadWithMetadataMock = vi.mocked(uploadWithMetadata);
+    let finishUpload: (value: { url: string; id: string }) => void = () => {};
+    uploadWithMetadataMock.mockReturnValue(
+      new Promise((resolve) => {
+        finishUpload = resolve;
+      }),
+    );
+
+    const el = await createElement("note");
+    el._title = "Essay";
+    await el.updateComplete;
+
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+    triggerEditorPaste(el, [image]);
+    await el.updateComplete;
+    expect(imageSrcs(el).every((src) => src.startsWith("blob:"))).toBe(true);
+    expect(imageSrcs(el)).toHaveLength(1);
+
+    // The body survives the switch, so the upload watching it has to survive
+    // too — otherwise the blob: placeholder is what gets published.
+    el.format = "quote";
+    await el.updateComplete;
+    await el.updateComplete;
+
+    finishUpload({
+      url: "https://example.test/clipboard.webp",
+      id: "med_test",
+    });
+    await vi.waitFor(() => {
+      expect(imageSrcs(el)).toEqual(["https://example.test/clipboard.webp"]);
+    });
+    expect(bodyImageSrcs(el._bodyJson)).toEqual([
+      "https://example.test/clipboard.webp",
+    ]);
+  });
+
+  it("drops images into a link as attachments, same as pasting them", async () => {
+    const uploadWithMetadataMock = vi.mocked(uploadWithMetadata);
+    const el = await createElement("link");
+    el._title = "An article worth linking";
+    await el.updateComplete;
+
+    const image = new File(["image"], "dropped.png", { type: "image/png" });
+    triggerEditorDrop(el, [image]);
+    await el.updateComplete;
+
+    expect(uploadWithMetadataMock).not.toHaveBeenCalled();
+    expect(el._attachments.map((attachment) => attachment.file.name)).toEqual([
+      "dropped.png",
+    ]);
+  });
+
+  it("focuses the body end when blank space around the editor is clicked", async () => {
+    const el = await createElement("note");
+    const editor = requireEditor(el);
+    editor.commands.setContent(
+      tiptapDoc(tiptapParagraph("One two three"), tiptapParagraph("Tail")),
+    );
+    editor.commands.setTextSelection(1);
+
+    const blank = requireElement(
+      el.querySelector<HTMLElement>(".compose-tiptap-wrap"),
+      "expected compose tiptap wrapper",
+    );
+    pressAndClick(blank, blank);
+
+    expect(editor.state.selection.empty).toBe(true);
+    expect(editor.state.selection.from).toBe(editor.state.doc.content.size - 1);
+  });
+
+  it("keeps a drag-selection that lifts off the text onto blank space", async () => {
+    const el = await createElement("note");
+    const editor = requireEditor(el);
+    editor.commands.setContent(
+      tiptapDoc(
+        {
+          type: "blockquote",
+          content: [tiptapParagraph("One two three four five six")],
+        },
+        tiptapParagraph("Tail after the quote"),
+      ),
+    );
+    // Right-to-left drag across the quote: anchor after "six", head before "One".
+    editor.commands.setTextSelection({ from: 2, to: 29 });
+
+    const quote = requireElement(
+      el.querySelector<HTMLElement>(".compose-tiptap-body blockquote p"),
+      "expected blockquote paragraph",
+    );
+    const blank = requireElement(
+      el.querySelector<HTMLElement>(".compose-tiptap-wrap"),
+      "expected compose tiptap wrapper",
+    );
+    // The pointer went down on the text and came up over the wrapper, so the
+    // browser retargets the click to their common ancestor.
+    pressAndClick(quote, blank, blank);
+
+    expect(editor.state.selection.from).toBe(2);
+    expect(editor.state.selection.to).toBe(29);
+  });
+});
+
+describe("JantComposeEditor.takeOver", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    vi.clearAllMocks();
+  });
+
+  /** An editor the dialog is about to render in place of another one. */
+  function unrenderedEditor(format: "note" | "link" | "quote") {
+    const el = document.createElement(
+      "jant-compose-editor",
+    ) as JantComposeEditor;
+    el.format = format;
+    el.labels = labels;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  it("hands every post field to the editor that replaces it", async () => {
+    // One sample per field the editor holds for its post. The first assertion
+    // keeps this table complete: a field the editor gains without a way across
+    // is how a quote's source link used to vanish on "Add to thread".
+    const samples: Record<string, unknown> = {
+      _title: "Left behind by a format switch",
+      _showTitle: false,
+      _bodyJson: tiptapDoc(tiptapParagraph("My thoughts on it")),
+      _url: "https://example.com/source",
+      _quoteText: "A borrowed sentence.",
+      _quoteAuthor: "Someone Else",
+      _rating: 4,
+      _showRating: true,
+      _attachedTexts: [
+        {
+          clientId: "text-1",
+          bodyJson: tiptapDoc(tiptapParagraph("Attached")),
+          bodyHtml: "",
+          summary: "Attached",
+        },
+      ],
+      _attachments: [mediaAttachment("media-1", "med_1")],
+      _attachmentOrder: ["text-1", "media-1"],
+    };
+    const contentProps = (
+      customElements.get("jant-compose-editor") as unknown as {
+        _CONTENT_PROPS: Set<string>;
+      }
+    )._CONTENT_PROPS;
+    expect(Object.keys(samples).sort()).toEqual(
+      [...contentProps, "_attachments"].sort(),
+    );
+
+    const previous = await createElement("quote");
+    for (const [key, value] of Object.entries(samples)) {
+      if (key === "_bodyJson") continue;
+      (previous as unknown as Record<string, unknown>)[key] = value;
+    }
+    requireEditor(previous).commands.setContent(
+      samples._bodyJson as JSONContent,
+    );
+    await previous.updateComplete;
+    // The dialog swaps elements before handing over, so the old one has
+    // already left the DOM — and taken its TipTap instance with it.
+    previous.remove();
+
+    const next = await createElement("quote");
+    next.takeOver(previous);
+    await next.updateComplete;
+
+    for (const [key, value] of Object.entries(samples)) {
+      if (key === "_bodyJson") continue;
+      expect((next as unknown as Record<string, unknown>)[key], key).toEqual(
+        value,
+      );
+    }
+    expect(next.getNormalizedBodyJson()).toEqual(
+      previous.getNormalizedBodyJson(),
+    );
+    expect(requireEditor(next).getText()).toBe("My thoughts on it");
+    expect(next.getData().url).toBe("https://example.com/source");
+  });
+
+  it("keeps a handed-over title toggle through its first render", async () => {
+    const previous = await createElement("note", { titleByDefault: true });
+    previous._showTitle = false;
+    previous.remove();
+
+    const next = unrenderedEditor("note");
+    next.titleByDefault = true;
+    next.takeOver(previous);
+    await next.updateComplete;
+
+    expect(next._showTitle).toBe(false);
+  });
+
+  it.each([
+    ["after", true],
+    ["before", false],
+  ])(
+    "carries an in-flight inline upload to an editor taking over %s its first render",
+    async (_when, renderFirst) => {
+      const uploadWithMetadataMock = vi.mocked(uploadWithMetadata);
+      let finishUpload: (value: { url: string; id: string }) => void = () => {};
+      uploadWithMetadataMock.mockReturnValue(
+        new Promise((resolve) => {
+          finishUpload = resolve;
+        }),
+      );
+
+      const previous = await createElement("note");
+      previous._title = "Essay";
+      await previous.updateComplete;
+      const image = new File(["image"], "clipboard.png", { type: "image/png" });
+      triggerEditorPaste(previous, [image]);
+      await previous.updateComplete;
+      expect(imageSrcs(previous)).toHaveLength(1);
+      expect(imageSrcs(previous)[0]).toMatch(/^blob:/);
+      previous.remove();
+
+      const next = unrenderedEditor("note");
+      if (renderFirst) await next.updateComplete;
+      next.takeOver(previous);
+      await next.updateComplete;
+      expect(imageSrcs(next)[0]).toMatch(/^blob:/);
+
+      finishUpload({ url: "https://example.test/clipboard.webp", id: "med_1" });
+      await vi.waitFor(() => {
+        expect(imageSrcs(next)).toEqual([
+          "https://example.test/clipboard.webp",
+        ]);
+      });
+      expect(bodyImageSrcs(next._bodyJson)).toEqual([
+        "https://example.test/clipboard.webp",
+      ]);
+    },
+  );
 });

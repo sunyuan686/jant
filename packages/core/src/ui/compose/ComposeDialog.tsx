@@ -347,10 +347,37 @@ export const ComposeForm: FC<ComposeFormProps> = ({
         comment: "@context: Button to remove an uploaded attachment in compose",
       }),
     ),
+    moveAttachmentEarlier: i18n._(
+      msg({
+        message: "Move attachment earlier",
+        comment:
+          "@context: Button that moves an attachment one place toward the start in compose",
+      }),
+    ),
+    moveAttachmentLater: i18n._(
+      msg({
+        message: "Move attachment later",
+        comment:
+          "@context: Button that moves an attachment one place toward the end in compose",
+      }),
+    ),
     uploading: i18n._(
       msg({
         message: "Uploading...",
         comment: "@context: Toast shown during background upload",
+      }),
+    ),
+    publishing: i18n._(
+      msg({
+        message: "Publishing...",
+        comment: "@context: Toast shown while a post is being published",
+      }),
+    ),
+    saving: i18n._(
+      msg({
+        message: "Saving...",
+        comment:
+          "@context: Toast shown while a draft or an edited post is being saved",
       }),
     ),
     loadingPost: i18n._(
@@ -533,6 +560,20 @@ export const ComposeForm: FC<ComposeFormProps> = ({
         message: "Couldn't publish. Saved as draft.",
         comment:
           "@context: Toast when publish fails and post is auto-saved as draft",
+      }),
+    ),
+    publishFailed: i18n._(
+      msg({
+        message: "Couldn't publish. Try again.",
+        comment:
+          "@context: Toast when publish fails and the server gave no reason",
+      }),
+    ),
+    publishFailedOffline: i18n._(
+      msg({
+        message: "Couldn't reach the server. Try again.",
+        comment:
+          "@context: Toast when a publish request never reached the server",
       }),
     ),
     uploadFailedDraft: i18n._(
@@ -818,6 +859,13 @@ export const ComposeForm: FC<ComposeFormProps> = ({
         message: "Draft restored.",
         comment:
           "@context: Toast shown when a local draft is restored on compose open",
+      }),
+    ),
+    draftStoreFailed: i18n._(
+      msg({
+        message: "This browser can't keep a local copy. Save as a draft.",
+        comment:
+          "@context: Toast shown when the composer cannot write its local draft to browser storage",
       }),
     ),
     editing: i18n._(

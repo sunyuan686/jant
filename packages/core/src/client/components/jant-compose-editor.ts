@@ -9,6 +9,7 @@
  */
 
 import { LitElement, html, nothing } from "lit";
+import type { TemplateResult } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { unsafeSVG } from "lit/directives/unsafe-svg.js";
@@ -36,11 +37,7 @@ import {
   promoteLeadingH1Title as getLeadingH1TitlePromotion,
   type LeadingH1TitlePromotion,
 } from "./compose-title-from-heading.js";
-import {
-  UPLOAD_ACCEPT,
-  getMediaCategory,
-  validateUploadFile,
-} from "../../lib/upload.js";
+import { getMediaCategory, validateUploadFile } from "../../lib/upload.js";
 import type { MediaCategory } from "../../lib/upload.js";
 import {
   DECORATIVE_QUOTE_MARK_SVG_CONTENT,
@@ -69,6 +66,13 @@ import { getInlineImageNodeLabels } from "./inline-image-issues.js";
 interface ComposeFilePickerCloseDetail {
   cancelled: boolean;
 }
+
+/**
+ * Which control a reordered attachment hands focus back to. The strip renders
+ * positionally, so without this the focused DOM slot silently retargets a
+ * different attachment after every move.
+ */
+type AttachmentFocusTarget = "handle" | "move";
 
 const COMPOSE_TOOLBAR_ICONS = {
   media: `
@@ -281,12 +285,24 @@ export class JantComposeEditor extends LitElement {
    * to run this cycle.
    */
   private _suppressContentChangedOnce = false;
+  /**
+   * Set when the title toggle arrives with the post rather than from the
+   * owner's default — a handed-over editor keeps the answer it was given
+   * instead of having the first update reseed it from `titleByDefault`.
+   */
+  #showTitleHandedOver = false;
   #inlineImageUploadGeneration = 0;
   #inlineImageUploadPromises = new Set<Promise<void>>();
   #rehostFailureCount = 0;
   #rehostFailureNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   #sortable: { destroy(): void } | null = null;
   #revertNextSibling: globalThis.Node | null = null;
+  #focusAfterMove: {
+    clientId: string;
+    direction: -1 | 1;
+    focusTarget: AttachmentFocusTarget;
+  } | null = null;
+  #coarsePointerQuery: globalThis.MediaQueryList | null | undefined;
 
   createRenderRoot() {
     return this;
@@ -338,6 +354,10 @@ export class JantComposeEditor extends LitElement {
     this.addEventListener("dragover", this._onDragOver, true);
     this.addEventListener("dragleave", this._onDragLeave);
     this.addEventListener("drop", this._onDrop);
+    this.#coarsePointer()?.addEventListener(
+      "change",
+      this._onPointerTypeChange,
+    );
   }
 
   disconnectedCallback() {
@@ -362,6 +382,10 @@ export class JantComposeEditor extends LitElement {
     this._emojiPickerEl = null;
     this._filePickerCleanup?.();
     this._filePickerCleanup = null;
+    this.#coarsePointer()?.removeEventListener(
+      "change",
+      this._onPointerTypeChange,
+    );
   }
 
   // Tracks dragenter/dragleave nesting so the highlight only clears when the
@@ -1108,6 +1132,12 @@ export class JantComposeEditor extends LitElement {
       tableControlLabels: this.labels.tableControls,
     });
     this._lastEditorSelection = this._readEditorSelection();
+    // An editor built from existing content — after a format switch, or on a
+    // replacement element that took over a post — inherits the uploads still
+    // working on that content. Without this the `blob:` placeholder is left
+    // with nothing watching it: the finished upload has no editor to write
+    // into, and publishing puts the blob URL in the post.
+    this.adoptPendingUploads();
   }
 
   private _destroyEditor() {
@@ -1136,7 +1166,7 @@ export class JantComposeEditor extends LitElement {
     // `titleByDefault` is an owner-supplied prop, so it is only known once the
     // first update runs. Seed the toggle from it there and leave it alone after
     // that — from then on the value belongs to the user (and to `reset()`).
-    if (!this.hasUpdated) {
+    if (!this.hasUpdated && !this.#showTitleHandedOver) {
       this._showTitle = this.titleByDefault;
     }
   }
@@ -1176,6 +1206,7 @@ export class JantComposeEditor extends LitElement {
         this.#sortable?.destroy();
         this.#sortable = null;
       }
+      this.#restoreAttachmentFocus();
     }
 
     // Every field that can change this row's answer is reactive, so `updated()`
@@ -1241,6 +1272,63 @@ export class JantComposeEditor extends LitElement {
     this._quoteAuthor = fields.quoteAuthor;
     this._showTitle = fields.showTitle;
     this._bodyJson = fields.bodyJson;
+  }
+
+  /**
+   * Take over everything another editor holds for its post.
+   *
+   * Entering or leaving thread mode renders a different editor element for the
+   * same post, and the element being replaced has the only copy of what was
+   * written. Every field that belongs to the post moves here, in this one
+   * place: a caller picking fields out by hand drops whichever one it forgets,
+   * which is how a quote's source link used to vanish on "Add to thread".
+   * Fields hidden by the current format move too, so switching back still
+   * finds them.
+   *
+   * Safe before or after this editor's first render, and on a `previous` that
+   * has already left the DOM — its TipTap instance is gone by then, but
+   * `_bodyJson` tracks every edit.
+   *
+   * @param previous - The editor this one replaces
+   * @example
+   * await dialog.updateComplete;
+   * threadRootEditor.takeOver(singlePostEditor);
+   */
+  takeOver(previous: JantComposeEditor) {
+    this._title = previous._title;
+    this._showTitle = previous._showTitle;
+    this.#showTitleHandedOver = true;
+    this._bodyJson = previous._editor?.getJSON() ?? previous._bodyJson;
+    this._url = previous._url;
+    this._quoteText = previous._quoteText;
+    this._quoteAuthor = previous._quoteAuthor;
+    this._rating = previous._rating;
+    this._showRating = previous._showRating;
+    this._attachedTexts = [...previous._attachedTexts];
+    this._attachments = [...previous._attachments];
+    this._attachmentOrder = [...previous._attachmentOrder];
+    this._lastEditorSelection = previous.getEditorSelection();
+    // Before the first render there is no TipTap instance yet; `_initEditor`
+    // builds it from `_bodyJson` and adopts the uploads then.
+    if (this._editor) {
+      this._editor.commands.setContent(
+        this._bodyJson ?? { type: "doc", content: [{ type: "paragraph" }] },
+      );
+      this.adoptPendingUploads();
+    }
+    this.#notifyStatus();
+  }
+
+  /**
+   * Whether this editor holds the attachment an upload is working on.
+   *
+   * @param clientId - The attachment's client-side id
+   * @returns True when the attachment strip includes it
+   * @example
+   * editor.hasAttachment(clientId); // false once the post moved to another editor
+   */
+  hasAttachment(clientId: string): boolean {
+    return this._attachments.some((a) => a.clientId === clientId);
   }
 
   /** Pre-fill all fields for edit mode or draft restore */
@@ -1427,7 +1515,11 @@ export class JantComposeEditor extends LitElement {
     );
   }
 
-  private _moveAttachment(clientId: string, direction: -1 | 1) {
+  private _moveAttachment(
+    clientId: string,
+    direction: -1 | 1,
+    focusTarget: AttachmentFocusTarget = "handle",
+  ) {
     const index = this._attachmentOrder.indexOf(clientId);
     const nextIndex = index + direction;
     if (
@@ -1443,7 +1535,48 @@ export class JantComposeEditor extends LitElement {
     if (!item) return;
     nextOrder.splice(nextIndex, 0, item);
     this._attachmentOrder = nextOrder;
+    this.#focusAfterMove = { clientId, direction, focusTarget };
     this.#scrollAttachmentIntoView(clientId);
+  }
+
+  /**
+   * Returns focus to the attachment that just moved.
+   *
+   * Lit reuses the strip's DOM slots, so the element that held focus now
+   * renders a different attachment. Called from `updated()`, once the new
+   * order is in the DOM.
+   */
+  #restoreAttachmentFocus() {
+    const pending = this.#focusAfterMove;
+    if (!pending) return;
+    this.#focusAfterMove = null;
+
+    const item = this.querySelector<HTMLElement>(
+      `[data-attachment-id="${pending.clientId}"]`,
+    );
+    if (!item) return;
+
+    if (pending.focusTarget === "handle") {
+      item
+        .querySelector<HTMLElement>("[data-attachment-sortable]")
+        ?.focus({ preventScroll: true });
+      return;
+    }
+
+    // The pressed button turns disabled at either end of the strip, and a
+    // disabled button cannot hold focus — fall back to its twin so the
+    // keyboard path never dead-ends.
+    const target =
+      this.#findMoveButton(item, pending.direction) ??
+      this.#findMoveButton(item, pending.direction === 1 ? -1 : 1);
+    target?.focus({ preventScroll: true });
+  }
+
+  #findMoveButton(item: HTMLElement, direction: -1 | 1) {
+    const button = item.querySelector<HTMLButtonElement>(
+      `[data-attachment-move="${direction === -1 ? "earlier" : "later"}"]`,
+    );
+    return button && !button.disabled ? button : null;
   }
 
   private _handleAttachmentKeydown(
@@ -1469,13 +1602,45 @@ export class JantComposeEditor extends LitElement {
     }
   }
 
+  /**
+   * Matches when the primary pointer is a finger.
+   *
+   * Cached because `matchMedia` allocates a new list each call, and `undefined`
+   * distinguishes "not looked up yet" from "this environment has no
+   * `matchMedia`".
+   */
+  #coarsePointer(): globalThis.MediaQueryList | null {
+    if (this.#coarsePointerQuery !== undefined) return this.#coarsePointerQuery;
+    this.#coarsePointerQuery =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(pointer: coarse)")
+        : null;
+    return this.#coarsePointerQuery;
+  }
+
+  private _onPointerTypeChange = () => {
+    this.#sortable?.destroy();
+    this.#sortable = null;
+    this.#initSortable();
+  };
+
   #initSortable() {
     const list = this.querySelector<HTMLElement>("[data-attachment-list]");
     if (!list || this.#sortable || this._attachmentOrder.length <= 1) return;
 
+    // Touch reorders through the move buttons, never by dragging. This strip
+    // scrolls along the axis it would drag, and a near-full-width thumbnail's
+    // drop target sits off-screen — so on a touch device the gesture is worth
+    // more as a plain scroll than as a reorder.
+    if (this.#coarsePointer()?.matches) return;
+
     this.#sortable = Sortable.create(list, {
       ...responsiveSortableOptions,
       chosenClass: "compose-attachment-chosen",
+      // Only reachable on a fine-pointer device that also has a touchscreen,
+      // where the scroll-versus-drag conflict above still applies to touch.
+      // Longer than the shared default so an ambiguous gesture scrolls.
+      delay: 250,
       direction: "horizontal",
       dragClass: "compose-attachment-drag",
       filter:
@@ -1624,14 +1789,44 @@ export class JantComposeEditor extends LitElement {
   }
 
   /**
+   * Where the current pointer gesture over the body went down and came up. A
+   * `click` reports the nearest common ancestor of the two, so these are the
+   * only way to tell a press on blank paper from a drag that merely started or
+   * ended there.
+   */
+  #bodyPressTarget: globalThis.EventTarget | null = null;
+  #bodyReleaseTarget: globalThis.EventTarget | null = null;
+
+  private _recordBodyPress = (e: MouseEvent) => {
+    this.#bodyPressTarget = e.target;
+    this.#bodyReleaseTarget = null;
+  };
+
+  private _recordBodyRelease = (e: MouseEvent) => {
+    this.#bodyReleaseTarget = e.target;
+  };
+
+  /**
    * Puts the caret in the body when the click landed on blank section instead
    * of on the editor. The surfaces that reserve height — the `/new` page, the
    * dialog on a phone — leave a stretch of empty paper under a two-line
    * editor, and it should behave like paper: click it, write there. Only the
    * layout wrappers forward; a click that reached a real control belongs to
    * that control.
+   *
+   * Selecting a line right-to-left normally lifts the pointer off the text and
+   * over one of those wrappers, and the resulting click is retargeted to the
+   * wrapper — indistinguishable from a click on blank paper by its target
+   * alone. Requiring the press and the release to have landed on that same
+   * blank space keeps a drag-selection from being thrown away.
    */
   private _focusBodyFromBlankSpace = (e: MouseEvent) => {
+    const pressTarget = this.#bodyPressTarget;
+    const releaseTarget = this.#bodyReleaseTarget;
+    this.#bodyPressTarget = null;
+    this.#bodyReleaseTarget = null;
+    if (pressTarget !== e.target || releaseTarget !== e.target) return;
+
     const target = e.target as HTMLElement | null;
     if (!target) return;
     const forwards =
@@ -1646,9 +1841,25 @@ export class JantComposeEditor extends LitElement {
     this._rating = this._rating === star ? 0 : star;
   }
 
+  /**
+   * Where a pasted or dropped image lands: inline in the body, or in the
+   * attachment dock.
+   *
+   * Only a note has an article mode to fall into, and a visible, filled title
+   * is what says the body is prose an image belongs inside. A link's body is
+   * commentary beside a link card and a quote's is commentary beside the
+   * quotation — images there are attachments, always. `_title` couldn't answer
+   * this for them anyway: a link's title is required, so it is never empty
+   * once the post is publishable, and a quote has no title field at all yet
+   * can still be holding one carried over from a format switch.
+   *
+   * Only the default moves — the slash `/image` command inserts inline in
+   * every format.
+   */
   private _shouldPasteInlineImage(file: File): boolean {
     if (!file.type.startsWith("image/")) return false;
-    if (this.format === "note" && !this._showTitle) return false;
+    if (this.format !== "note") return false;
+    if (!this._showTitle) return false;
     return this._title.trim().length > 0;
   }
 
@@ -1656,7 +1867,9 @@ export class JantComposeEditor extends LitElement {
     if (!this._fileInput) {
       this._fileInput = document.createElement("input");
       this._fileInput.type = "file";
-      this._fileInput.accept = UPLOAD_ACCEPT;
+      // No `accept`: the composer takes any file, and leaving the attribute
+      // off is how HTML says so. `*/*` is not a valid accept token, so every
+      // browser had to work out what it meant before the dialog could open.
       this._fileInput.multiple = true;
       this._fileInput.style.display = "none";
       this._fileInput.addEventListener("change", () =>
@@ -2074,15 +2287,17 @@ export class JantComposeEditor extends LitElement {
         <span class="compose-attachment-preview-fallback-label">
           ${unavailableLabel}
         </span>
-        ${category === "video"
-          ? html`
-              <div class="compose-attachment-play-icon">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </div>
-            `
-          : nothing}
+        ${
+          category === "video"
+            ? html`
+                <div class="compose-attachment-play-icon">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+                    <path d="M8 5v14l11-7z" />
+                  </svg>
+                </div>
+              `
+            : nothing
+        }
       </div>
     `;
   }
@@ -2092,17 +2307,19 @@ export class JantComposeEditor extends LitElement {
   private _renderNoteFields() {
     return html`
       <div class="compose-field-enter">
-        ${this._showTitle
-          ? html`<input
-              type="text"
-              .value=${this._title}
-              @input=${(e: Event) => this._onInput("_title", e)}
-              @focus=${(e: Event) => this._onFieldFocus(e)}
-              @keydown=${this._handleTitleKeydown}
-              class="compose-input compose-note-title"
-              placeholder=${this.labels.titlePlaceholder}
-            />`
-          : nothing}
+        ${
+          this._showTitle
+            ? html`<input
+                type="text"
+                .value=${this._title}
+                @input=${(e: Event) => this._onInput("_title", e)}
+                @focus=${(e: Event) => this._onFieldFocus(e)}
+                @keydown=${this._handleTitleKeydown}
+                class="compose-input compose-note-title"
+                placeholder=${this.labels.titlePlaceholder}
+              />`
+            : nothing
+        }
         <div class="compose-tiptap-wrap">
           <div class="compose-tiptap-body"></div>
           <span class="compose-slash-discovery-hint" aria-hidden="true">
@@ -2149,15 +2366,17 @@ export class JantComposeEditor extends LitElement {
             )}
           />
         </div>
-        ${urlError
-          ? html`<p
-              id=${this._urlStatusId}
-              class="compose-url-status compose-url-status-error"
-              data-compose-url-status="error"
-            >
-              ${urlError}
-            </p>`
-          : nothing}
+        ${
+          urlError
+            ? html`<p
+                id=${this._urlStatusId}
+                class="compose-url-status compose-url-status-error"
+                data-compose-url-status="error"
+              >
+                ${urlError}
+              </p>`
+            : nothing
+        }
         <input
           type="text"
           .value=${this._title}
@@ -2172,14 +2391,16 @@ export class JantComposeEditor extends LitElement {
           placeholder=${this.labels.linkTitlePlaceholder}
           aria-invalid=${titleError ? "true" : "false"}
         />
-        ${titleError
-          ? html`<p
-              class="compose-url-status compose-url-status-error"
-              data-compose-link-title-error="error"
-            >
-              ${titleError}
-            </p>`
-          : nothing}
+        ${
+          titleError
+            ? html`<p
+                class="compose-url-status compose-url-status-error"
+                data-compose-link-title-error="error"
+              >
+                ${titleError}
+              </p>`
+            : nothing
+        }
         <div class="compose-divider"></div>
         <div class="compose-tiptap-wrap">
           <div class="compose-tiptap-body compose-tiptap-link"></div>
@@ -2236,15 +2457,17 @@ export class JantComposeEditor extends LitElement {
               urlError ? this._urlStatusId : undefined,
             )}
           />
-          ${urlError
-            ? html`<p
-                id=${this._urlStatusId}
-                class="compose-url-status compose-url-status-error"
-                data-compose-url-status="error"
-              >
-                ${urlError}
-              </p>`
-            : nothing}
+          ${
+            urlError
+              ? html`<p
+                  id=${this._urlStatusId}
+                  class="compose-url-status compose-url-status-error"
+                  data-compose-url-status="error"
+                >
+                  ${urlError}
+                </p>`
+              : nothing
+          }
         </div>
         <div
           class="compose-divider compose-divider-quote"
@@ -2279,9 +2502,11 @@ export class JantComposeEditor extends LitElement {
             </button>
           `,
         )}
-        ${this._rating > 0
-          ? html`<span class="compose-star-label">${this._rating}/5</span>`
-          : nothing}
+        ${
+          this._rating > 0
+            ? html`<span class="compose-star-label">${this._rating}/5</span>`
+            : nothing
+        }
       </div>
     `;
   }
@@ -2355,16 +2580,20 @@ export class JantComposeEditor extends LitElement {
             ${this._renderFileIcon(a.file.type, 20)}
           </div>
           <span class="compose-attachment-file-name">${a.file.name}</span>
-          ${a.summary
-            ? html`<span class="compose-attachment-text-summary"
-                >${a.summary}</span
-              >`
-            : nothing}
-          ${typeof a.chars === "number" && a.chars > 0
-            ? html`<span class="compose-attachment-file-size"
-                >${this._formatChars(a.chars)}</span
-              >`
-            : nothing}
+          ${
+            a.summary
+              ? html`<span class="compose-attachment-text-summary"
+                  >${a.summary}</span
+                >`
+              : nothing
+          }
+          ${
+            typeof a.chars === "number" && a.chars > 0
+              ? html`<span class="compose-attachment-file-size"
+                  >${this._formatChars(a.chars)}</span
+                >`
+              : nothing
+          }
         </div>
       `;
     }
@@ -2394,46 +2623,52 @@ export class JantComposeEditor extends LitElement {
 
   private _renderAttachmentOverlay(a: ComposeAttachment, index: number) {
     return html`
-      ${a.status === "error"
-        ? html`
-            <button
-              type="button"
-              class="compose-attachment-overlay compose-attachment-retry"
-              @click=${(e: Event) => {
-                e.stopPropagation();
-                this._retryAllFailed();
-              }}
-            >
-              <span class="compose-retry-content">
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path
-                    d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
-                  />
-                  <path d="M3 3v5h5" />
-                  <path
-                    d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"
-                  />
-                  <path d="M16 16h5v5" />
-                </svg>
-                <span class="compose-retry-label">${this.labels.retryAll}</span>
-              </span>
-              ${a.error
-                ? html`<span class="compose-attachment-error-msg"
-                    >${a.error}</span
-                  >`
-                : nothing}
-            </button>
-          `
-        : nothing}
+      ${
+        a.status === "error"
+          ? html`
+              <button
+                type="button"
+                class="compose-attachment-overlay compose-attachment-retry"
+                @click=${(e: Event) => {
+                  e.stopPropagation();
+                  this._retryAllFailed();
+                }}
+              >
+                <span class="compose-retry-content">
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+                    />
+                    <path d="M3 3v5h5" />
+                    <path
+                      d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"
+                    />
+                    <path d="M16 16h5v5" />
+                  </svg>
+                  <span class="compose-retry-label"
+                    >${this.labels.retryAll}</span
+                  >
+                </span>
+                ${
+                  a.error
+                    ? html`<span class="compose-attachment-error-msg"
+                        >${a.error}</span
+                      >`
+                    : nothing
+                }
+              </button>
+            `
+          : nothing
+      }
       ${this._renderAttachmentRemoveButton((e: Event) => {
         e.stopPropagation();
         this._removeAttachment(index);
@@ -2465,6 +2700,87 @@ export class JantComposeEditor extends LitElement {
     `;
   }
 
+  private _renderAttachmentMoveButton(
+    clientId: string,
+    direction: -1 | 1,
+    disabled: boolean,
+  ) {
+    const earlier = direction === -1;
+    const label = earlier
+      ? this.labels.moveAttachmentEarlier
+      : this.labels.moveAttachmentLater;
+
+    return html`
+      <button
+        type="button"
+        class="compose-attachment-move"
+        data-attachment-move=${earlier ? "earlier" : "later"}
+        ?disabled=${disabled}
+        aria-label=${label}
+        title=${label}
+        @click=${(e: Event) => {
+          e.stopPropagation();
+          this._moveAttachment(clientId, direction, "move");
+        }}
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 14 14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.9"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path
+            d=${
+              earlier ? "M8.75 3.5 5.25 7l3.5 3.5" : "M5.25 3.5 8.75 7l-3.5 3.5"
+            }
+          />
+        </svg>
+      </button>
+    `;
+  }
+
+  /**
+   * Renders the quiet control row under an attachment thumbnail.
+   *
+   * Reorder buttons are the touch-reliable path: dragging a thumbnail competes
+   * with the strip's own horizontal scroll, and a near-full-width thumbnail's
+   * drop target is off-screen anyway. They appear only once there is something
+   * to reorder against.
+   */
+  private _renderAttachmentActions(
+    clientId: string,
+    extra: TemplateResult | typeof nothing = nothing,
+  ) {
+    const total = this._attachmentOrder.length;
+    const index = this._attachmentOrder.indexOf(clientId);
+    const canReorder = total > 1 && index !== -1;
+    if (!canReorder && extra === nothing) return nothing;
+
+    return html`
+      <div class="compose-attachment-actions">
+        ${
+          canReorder
+            ? html`
+                <div class="compose-attachment-move-group">
+                  ${this._renderAttachmentMoveButton(clientId, -1, index === 0)}
+                  ${this._renderAttachmentMoveButton(
+                    clientId,
+                    1,
+                    index === total - 1,
+                  )}
+                </div>
+              `
+            : nothing
+        }
+        ${extra}
+      </div>
+    `;
+  }
+
   private _renderAttachedTextCard(item: AttachedTextItem, index: number) {
     return html`
       <div class="compose-attachment" data-attachment-id=${item.clientId}>
@@ -2483,19 +2799,22 @@ export class JantComposeEditor extends LitElement {
               ${this._renderFileIcon("text/html; charset=utf-8", 20)}
             </div>
             <span class="compose-attachment-text-summary">${item.summary}</span>
-            ${item.bodyJson
-              ? html`<span class="compose-attachment-file-size"
-                  >${this._formatChars(
-                    this._extractPlainText(item.bodyJson).length,
-                  )}</span
-                >`
-              : nothing}
+            ${
+              item.bodyJson
+                ? html`<span class="compose-attachment-file-size"
+                    >${this._formatChars(
+                      this._extractPlainText(item.bodyJson).length,
+                    )}</span
+                  >`
+                : nothing
+            }
           </div>
           ${this._renderAttachmentRemoveButton((e: Event) => {
             e.stopPropagation();
             this._removeAttachedText(index);
           })}
         </div>
+        ${this._renderAttachmentActions(item.clientId)}
       </div>
     `;
   }
@@ -2508,115 +2827,122 @@ export class JantComposeEditor extends LitElement {
 
     return html`
       <div class="compose-attachment" data-attachment-id=${a.clientId}>
-        ${isFileCard
-          ? html`
-              <div class="compose-attachment-thumb">
-                <div
-                  class="compose-attachment-sortable"
-                  data-attachment-sortable
-                  tabindex="0"
-                  @keydown=${(e: globalThis.KeyboardEvent) =>
-                    this._handleAttachmentKeydown(a.clientId, e)}
-                >
-                  ${this._renderAttachmentPreview(a)}
+        ${
+          isFileCard
+            ? html`
+                <div class="compose-attachment-thumb">
+                  <div
+                    class="compose-attachment-sortable"
+                    data-attachment-sortable
+                    tabindex="0"
+                    @keydown=${(e: globalThis.KeyboardEvent) =>
+                      this._handleAttachmentKeydown(a.clientId, e)}
+                  >
+                    ${this._renderAttachmentPreview(a)}
+                  </div>
+                  ${this._renderAttachmentOverlay(a, i)}
                 </div>
-                ${this._renderAttachmentOverlay(a, i)}
-              </div>
-            `
-          : html`
-              <div class="compose-attachment-thumb">
-                <div
-                  class="compose-attachment-sortable"
-                  data-attachment-sortable
-                  tabindex="0"
-                  @keydown=${(e: globalThis.KeyboardEvent) =>
-                    this._handleAttachmentKeydown(a.clientId, e)}
-                >
-                  ${previewFailed
-                    ? this._renderAttachmentPreviewFallback(visualCategory)
-                    : category === "video"
-                      ? html`
-                          <video
-                            src=${a.previewUrl}
-                            poster=${a.posterUrl ?? nothing}
-                            class="compose-attachment-img"
-                            preload="metadata"
-                            .playsInline=${true}
-                            .muted=${true}
-                            @loadeddata=${() =>
-                              this._setAttachmentPreviewFailure(
-                                a.clientId,
-                                false,
-                              )}
-                            @error=${() =>
-                              this._setAttachmentPreviewFailure(
-                                a.clientId,
-                                true,
-                              )}
-                          ></video>
-                          <div class="compose-attachment-play-icon">
-                            <svg
-                              width="24"
-                              height="24"
-                              viewBox="0 0 24 24"
-                              fill="white"
-                            >
-                              <path d="M8 5v14l11-7z" />
-                            </svg>
-                          </div>
-                        `
-                      : a.status === "processing"
-                        ? html`
-                            <div class="compose-attachment-processing">
-                              <svg
-                                class="animate-spin size-5"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                              >
-                                <path
-                                  d="M12 2a10 10 0 1 0 10 10"
-                                  stroke-linecap="round"
+              `
+            : html`
+                <div class="compose-attachment-thumb">
+                  <div
+                    class="compose-attachment-sortable"
+                    data-attachment-sortable
+                    tabindex="0"
+                    @keydown=${(e: globalThis.KeyboardEvent) =>
+                      this._handleAttachmentKeydown(a.clientId, e)}
+                  >
+                    ${
+                      previewFailed
+                        ? this._renderAttachmentPreviewFallback(visualCategory)
+                        : category === "video"
+                          ? html`
+                              <video
+                                src=${a.previewUrl}
+                                poster=${a.posterUrl ?? nothing}
+                                class="compose-attachment-img"
+                                preload="metadata"
+                                .playsInline=${true}
+                                .muted=${true}
+                                @loadeddata=${() =>
+                                  this._setAttachmentPreviewFailure(
+                                    a.clientId,
+                                    false,
+                                  )}
+                                @error=${() =>
+                                  this._setAttachmentPreviewFailure(
+                                    a.clientId,
+                                    true,
+                                  )}
+                              ></video>
+                              <div class="compose-attachment-play-icon">
+                                <svg
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="white"
+                                >
+                                  <path d="M8 5v14l11-7z" />
+                                </svg>
+                              </div>
+                            `
+                          : a.status === "processing"
+                            ? html`
+                                <div class="compose-attachment-processing">
+                                  <svg
+                                    class="animate-spin size-5"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                  >
+                                    <path
+                                      d="M12 2a10 10 0 1 0 10 10"
+                                      stroke-linecap="round"
+                                    />
+                                  </svg>
+                                </div>
+                              `
+                            : html`
+                                <img
+                                  src=${a.previewUrl}
+                                  alt=""
+                                  class="compose-attachment-img"
+                                  @load=${() =>
+                                    this._setAttachmentPreviewFailure(
+                                      a.clientId,
+                                      false,
+                                    )}
+                                  @error=${() =>
+                                    this._setAttachmentPreviewFailure(
+                                      a.clientId,
+                                      true,
+                                    )}
                                 />
-                              </svg>
-                            </div>
-                          `
-                        : html`
-                            <img
-                              src=${a.previewUrl}
-                              alt=""
-                              class="compose-attachment-img"
-                              @load=${() =>
-                                this._setAttachmentPreviewFailure(
-                                  a.clientId,
-                                  false,
-                                )}
-                              @error=${() =>
-                                this._setAttachmentPreviewFailure(
-                                  a.clientId,
-                                  true,
-                                )}
-                            />
-                          `}
+                              `
+                    }
+                  </div>
+                  ${this._renderAttachmentOverlay(a, i)}
                 </div>
-                ${this._renderAttachmentOverlay(a, i)}
-              </div>
-            `}
-        ${category === "image"
-          ? html`
-              <button
-                type="button"
-                class=${classMap({
-                  "compose-attachment-alt": true,
-                  "compose-attachment-alt-set": a.alt.length > 0,
-                })}
-                @click=${() => this._openAltPanel(i)}
-              >
-                ${a.alt.length > 0 ? "ALT" : "+ ALT"}
-              </button>
-            `
-          : nothing}
+              `
+        }
+        ${this._renderAttachmentActions(
+          a.clientId,
+          category === "image"
+            ? html`
+                <button
+                  type="button"
+                  class=${classMap({
+                    "compose-attachment-alt": true,
+                    "compose-attachment-alt-set": a.alt.length > 0,
+                  })}
+                  @click=${() => this._openAltPanel(i)}
+                >
+                  ${a.alt.length > 0 ? "ALT" : "+ ALT"}
+                </button>
+              `
+            : nothing,
+        )}
       </div>
     `;
   }
@@ -2675,11 +3001,13 @@ export class JantComposeEditor extends LitElement {
           @click=${() => this._openFilePicker()}
         >
           ${renderComposeToolbarIcon(COMPOSE_TOOLBAR_ICONS.media)}
-          ${this._attachments.length > 0
-            ? html`<span class="compose-tool-label"
-                >${this.labels.addMore}</span
-              >`
-            : nothing}
+          ${
+            this._attachments.length > 0
+              ? html`<span class="compose-tool-label"
+                  >${this.labels.addMore}</span
+                >`
+              : nothing
+          }
         </button>
 
         <button
@@ -2692,11 +3020,13 @@ export class JantComposeEditor extends LitElement {
           @click=${() => this._openAttachedText()}
         >
           ${renderComposeToolbarIcon(COMPOSE_TOOLBAR_ICONS.attachedText)}
-          ${hasAttached
-            ? html`<span class="compose-tool-label"
-                >${this.labels.addMore}</span
-              >`
-            : nothing}
+          ${
+            hasAttached
+              ? html`<span class="compose-tool-label"
+                  >${this.labels.addMore}</span
+                >`
+              : nothing
+          }
         </button>
 
         <button
@@ -2738,57 +3068,61 @@ export class JantComposeEditor extends LitElement {
           ${renderComposeToolbarIcon(COMPOSE_TOOLBAR_ICONS.rate)}
         </button>
 
-        ${this.format === "note"
-          ? html`
-              <button
-                type="button"
-                class=${classMap({
-                  "compose-tool-btn": true,
-                  "compose-tool-btn-active": this._showTitle,
-                })}
-                title=${this.labels.title}
-                aria-pressed=${this._showTitle ? "true" : "false"}
-                @click=${() => {
-                  const willShow = !this._showTitle;
-                  this._showTitle = willShow;
-                  // Only this deliberate click is worth remembering. The other
-                  // writers of `_showTitle` — H1 promotion, format conversion,
-                  // fullscreen reveal — are the program acting on one post, not
-                  // the author stating a habit, so they stay silent.
-                  this.dispatchEvent(
-                    new CustomEvent("jant:title-toggle", {
-                      bubbles: true,
-                      detail: { showTitle: willShow },
-                    }),
-                  );
-                  if (willShow) {
-                    this.updateComplete.then(() => {
-                      this.querySelector<HTMLInputElement>(
-                        ".compose-note-title",
-                      )?.focus();
-                    });
-                  }
-                }}
-              >
-                ${renderComposeToolbarIcon(COMPOSE_TOOLBAR_ICONS.title)}
-              </button>
-            `
-          : nothing}
-        ${this.format === "note"
-          ? html`
-              <div class="compose-tool-view-group">
+        ${
+          this.format === "note"
+            ? html`
                 <button
                   type="button"
-                  class="compose-tool-btn compose-tool-btn-view"
-                  title=${this.labels.fullscreen}
-                  aria-label=${this.labels.fullscreen}
-                  @click=${() => this.openFullscreen()}
+                  class=${classMap({
+                    "compose-tool-btn": true,
+                    "compose-tool-btn-active": this._showTitle,
+                  })}
+                  title=${this.labels.title}
+                  aria-pressed=${this._showTitle ? "true" : "false"}
+                  @click=${() => {
+                    const willShow = !this._showTitle;
+                    this._showTitle = willShow;
+                    // Only this deliberate click is worth remembering. The other
+                    // writers of `_showTitle` — H1 promotion, format conversion,
+                    // fullscreen reveal — are the program acting on one post, not
+                    // the author stating a habit, so they stay silent.
+                    this.dispatchEvent(
+                      new CustomEvent("jant:title-toggle", {
+                        bubbles: true,
+                        detail: { showTitle: willShow },
+                      }),
+                    );
+                    if (willShow) {
+                      this.updateComplete.then(() => {
+                        this.querySelector<HTMLInputElement>(
+                          ".compose-note-title",
+                        )?.focus();
+                      });
+                    }
+                  }}
                 >
-                  ${renderComposeToolbarIcon(COMPOSE_TOOLBAR_ICONS.fullscreen)}
+                  ${renderComposeToolbarIcon(COMPOSE_TOOLBAR_ICONS.title)}
                 </button>
-              </div>
-            `
-          : nothing}
+              `
+            : nothing
+        }
+        ${
+          this.format === "note"
+            ? html`
+                <div class="compose-tool-view-group">
+                  <button
+                    type="button"
+                    class="compose-tool-btn compose-tool-btn-view"
+                    title=${this.labels.fullscreen}
+                    aria-label=${this.labels.fullscreen}
+                    @click=${() => this.openFullscreen()}
+                  >
+                    ${renderComposeToolbarIcon(COMPOSE_TOOLBAR_ICONS.fullscreen)}
+                  </button>
+                </div>
+              `
+            : nothing
+        }
       </div>
     `;
   }
@@ -2832,42 +3166,48 @@ export class JantComposeEditor extends LitElement {
             `,
           )}
         </div>
-        ${this.positionLabel
-          ? html`<span class="compose-post-position"
-              >${this.positionLabel}</span
-            >`
-          : nothing}
-        ${this.badgeLabel
-          ? html`<span class="compose-post-position compose-post-badge"
-              >${this.badgeLabel}</span
-            >`
-          : nothing}
+        ${
+          this.positionLabel
+            ? html`<span class="compose-post-position"
+                >${this.positionLabel}</span
+              >`
+            : nothing
+        }
+        ${
+          this.badgeLabel
+            ? html`<span class="compose-post-position compose-post-badge"
+                >${this.badgeLabel}</span
+              >`
+            : nothing
+        }
         ${this.headerExtra ?? nothing}
-        ${this.removable
-          ? html`<button
-              type="button"
-              class="compose-thread-post-remove"
-              title="Remove post"
-              @click=${() => {
-                this.dispatchEvent(
-                  new CustomEvent("jant:thread-remove", { bubbles: true }),
-                );
-              }}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.8"
-                stroke-linecap="round"
-                aria-hidden="true"
+        ${
+          this.removable
+            ? html`<button
+                type="button"
+                class="compose-thread-post-remove"
+                title="Remove post"
+                @click=${() => {
+                  this.dispatchEvent(
+                    new CustomEvent("jant:thread-remove", { bubbles: true }),
+                  );
+                }}
               >
-                ${unsafeSVG(CLOSE_ICON)}
-              </svg>
-            </button>`
-          : nothing}
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  aria-hidden="true"
+                >
+                  ${unsafeSVG(CLOSE_ICON)}
+                </svg>
+              </button>`
+            : nothing
+        }
       </div>
     `;
   }
@@ -2888,12 +3228,19 @@ export class JantComposeEditor extends LitElement {
     // thread item alike — so there is exactly one place it can be.
     return html`
       ${this._renderFormatHeader()}
-      <section class="compose-body" @click=${this._focusBodyFromBlankSpace}>
-        ${this.format === "note"
-          ? this._renderNoteFields()
-          : this.format === "link"
-            ? this._renderLinkFields()
-            : this._renderQuoteFields()}
+      <section
+        class="compose-body"
+        @mousedown=${this._recordBodyPress}
+        @mouseup=${this._recordBodyRelease}
+        @click=${this._focusBodyFromBlankSpace}
+      >
+        ${
+          this.format === "note"
+            ? this._renderNoteFields()
+            : this.format === "link"
+              ? this._renderLinkFields()
+              : this._renderQuoteFields()
+        }
       </section>
       ${this._renderAttachmentDock()} ${this._renderStarRating()}
       ${this._renderToolsRow()}

@@ -128,7 +128,7 @@ export interface SiteHeaderProps {
    * view leads home to `/ja` rather than to the primary language.
    */
   basePath?: string;
-  siteAvatarUrl?: string;
+  siteAvatarThumbUrl?: string;
   showHeaderAvatar?: boolean;
   /** Languages this site publishes in. Empty on a single-language site. */
   languageSwitcher?: LanguageSwitcherOption[];
@@ -162,7 +162,7 @@ export const SiteHeader: FC<SiteHeaderProps> = ({
   currentPath,
   sitePathPrefix = "",
   basePath = sitePathPrefix,
-  siteAvatarUrl,
+  siteAvatarThumbUrl,
   showHeaderAvatar,
   languageSwitcher = [],
 }) => {
@@ -260,8 +260,8 @@ export const SiteHeader: FC<SiteHeaderProps> = ({
             class={`site-header-top site-header-top-bordered${isHomePage ? " site-header-top-home" : ""}`}
           >
             <a href={homeHref} class="site-logo">
-              {showHeaderAvatar && siteAvatarUrl && (
-                <img src={siteAvatarUrl} class="site-logo-avatar" alt="" />
+              {showHeaderAvatar && siteAvatarThumbUrl && (
+                <img src={siteAvatarThumbUrl} class="site-logo-avatar" alt="" />
               )}
               {siteName}
             </a>
@@ -531,9 +531,9 @@ export const SiteHeader: FC<SiteHeaderProps> = ({
       >
         <div class="site-nav-drawer-header">
           <a href={homeHref} class="site-nav-drawer-brand">
-            {showHeaderAvatar && siteAvatarUrl && (
+            {showHeaderAvatar && siteAvatarThumbUrl && (
               <img
-                src={siteAvatarUrl}
+                src={siteAvatarThumbUrl}
                 class="site-nav-drawer-brand-avatar"
                 alt=""
               />
@@ -628,7 +628,7 @@ export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
   basePath = sitePathPrefix,
   isAuthenticated,
   collections,
-  siteAvatarUrl,
+  siteAvatarThumbUrl,
   showHeaderAvatar,
   siteDescriptionHtml,
   siteFooterHtml,
@@ -661,11 +661,6 @@ export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
   const showMobileComposeFab = Boolean(
     (isHomePage || composeCollectionId) && isAuthenticated && showComposeDialog,
   );
-  const mobileComposeFabClick = composeCollectionId
-    ? `document.getElementById('compose-dialog')?.querySelector('jant-compose-dialog')?.openNew(${JSON.stringify(
-        { collectionId: composeCollectionId },
-      )})`
-    : "document.getElementById('compose-dialog')?.querySelector('jant-compose-dialog')?.openNew()";
   const contentClass = [
     "site-content",
     isHomePage ? "site-content-home" : "",
@@ -683,7 +678,7 @@ export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
           currentPath={currentPath}
           sitePathPrefix={sitePathPrefix}
           basePath={basePath}
-          siteAvatarUrl={siteAvatarUrl}
+          siteAvatarThumbUrl={siteAvatarThumbUrl}
           showHeaderAvatar={showHeaderAvatar}
           languageSwitcher={languageSwitcher}
         />
@@ -732,7 +727,10 @@ export const SiteLayout: FC<PropsWithChildren<SiteLayoutProps>> = ({
           type="button"
           class="site-mobile-compose-fab"
           aria-label={newPostLabel}
-          data-on:click={mobileComposeFabClick}
+          data-compose-open
+          {...(composeCollectionId
+            ? { "data-compose-collection-id": composeCollectionId }
+            : {})}
         >
           <ComposeFeatherIcon class="site-mobile-compose-fab-icon" />
         </button>

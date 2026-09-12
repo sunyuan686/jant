@@ -1,6 +1,6 @@
 # Jant - 产品设计文档
 
-**一句话**：像 Threads, Tumblr 一样丝滑的个人轻博客系统。
+**一句话**：像 Threads, Tumblr 一样流畅的个人轻博客系统。
 
 > **Jant** = Jantelagen（詹代法则）缩写
 > j 强调低调、去社交化的个人表达
@@ -157,7 +157,7 @@ Link 格式的帖子，后端根据 URL 在 API 返回时计算渲染信息（�
 
 ### 3.1 设计理念
 
-**参考**：Pika.page 的简洁 + Threads.net 的丝滑
+**参考**：Pika.page 的简洁 + Threads.net 的流畅
 
 **关键词**：
 
@@ -380,7 +380,7 @@ Link 格式的帖子，后端根据 URL 在 API 返回时计算渲染信息（�
 | `SITE_ORIGIN`             | 单站点模式下可选的公开 origin 覆盖 |
 | `SITE_PATH_PREFIX`        | 单站点模式下的公开路径前缀         |
 | `MAIN_RSS_FEED`           | 主 RSS Feed（featured / latest）   |
-| `PAGE_SIZE`               | 默认分页大小（默认 50）            |
+| `PAGE_SIZE`               | 默认分页大小（默认 25）            |
 | `SEARCH_PAGE_SIZE`        | 搜索页分页覆盖                     |
 | `ARCHIVE_PAGE_SIZE`       | 归档页分页覆盖                     |
 | `R2_PUBLIC_URL`           | R2 公开 URL（CDN 直接访问）        |

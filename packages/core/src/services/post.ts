@@ -48,12 +48,17 @@ import {
   tryPreparePostBodyHtml,
 } from "../lib/post-body-html.js";
 import { extractSummary, extractBodyText } from "../lib/summary.js";
+import {
+  THREAD_LEADING_REPLIES,
+  THREAD_TRAILING_REPLIES,
+} from "../lib/thread-fold.js";
 import { markdownToTiptapJson } from "../lib/markdown-to-tiptap.js";
 import { tiptapJsonToMarkdown } from "../lib/tiptap-to-markdown.js";
 import { generatePostSlug } from "../lib/slug.js";
 import { getSlugValidationIssue } from "../lib/slug-format.js";
 import { isReservedPath } from "../lib/constants.js";
-import { normalizePath, slugify } from "../lib/url.js";
+import { normalizePath } from "../lib/url.js";
+import { slugify } from "../lib/slugify.js";
 import type { StorageDriver } from "../lib/storage.js";
 import type { MediaService } from "./media.js";
 import {
@@ -151,6 +156,12 @@ export interface PostFilters {
   /** Exclude private posts from results */
   excludePrivate?: boolean;
   threadId?: string;
+  /**
+   * Restrict to these Posts. The list becomes one `IN (…)`, so a caller keeps
+   * it within a single statement's parameter budget — 50 is what D1 leaves
+   * room for beside the other conditions.
+   */
+  ids?: string[];
   /** Unix timestamp (inclusive) — only posts published at or after this time */
   publishedAfter?: number;
   /** Unix timestamp (exclusive) — only posts published before this time */
@@ -222,7 +233,7 @@ export interface SummaryConfig {
   maxChars: number;
 }
 
-interface ThreadRootPageOptions {
+export interface ThreadRootPageOptions {
   status?: Status;
   excludePrivate?: boolean;
   excludeLatestHidden?: boolean;
@@ -230,6 +241,8 @@ interface ThreadRootPageOptions {
   lang?: string;
   /** Exclude Posts published at or after this Unix timestamp. */
   publishedBefore?: number;
+  /** Restrict to these Threads, by root ID. Same budget as `PostFilters.ids`. */
+  threadIds?: string[];
   /** Restrict by the Thread root's format without excluding Child Posts. */
   rootFormat?: Format;
   /** Restrict to Threads with at least one rated published post. */
@@ -1251,6 +1264,9 @@ export function createPostService(
     if (filters.threadId) {
       conditions.push(eq(posts.threadId, filters.threadId));
     }
+    if (filters.ids !== undefined) {
+      conditions.push(inArray(posts.id, filters.ids));
+    }
     if (filters.excludeReplies) {
       conditions.push(isNull(posts.replyToId));
     }
@@ -1637,6 +1653,9 @@ export function createPostService(
     }
     if (options?.hasRating) {
       conditions.push(isNotNull(posts.rating));
+    }
+    if (options?.threadIds !== undefined) {
+      conditions.push(inArray(posts.threadId, options.threadIds));
     }
 
     return conditions;
@@ -4092,8 +4111,11 @@ export function createPostService(
         .from(rankedReplies)
         .where(
           or(
-            lte(rankedReplies.firstReplyRank, 2),
-            lte(rankedReplies.latestReplyRank, 3),
+            // One past the leading window: that extra row is never rendered,
+            // it is only where the gap link points. Without it the gap has to
+            // aim at a reply already on screen.
+            lte(rankedReplies.firstReplyRank, THREAD_LEADING_REPLIES + 1),
+            lte(rankedReplies.latestReplyRank, THREAD_TRAILING_REPLIES),
           ),
         );
 
@@ -4107,6 +4129,7 @@ export function createPostService(
           leadingReplyIds: Map<number, string>;
           trailingReplyIds: Map<number, string>;
           latestReplyId: string | null;
+          firstHiddenReplyId: string | null;
           totalReplyCount: number;
         }
       >();
@@ -4115,13 +4138,20 @@ export function createPostService(
           leadingReplyIds: new Map<number, string>(),
           trailingReplyIds: new Map<number, string>(),
           latestReplyId: null,
+          firstHiddenReplyId: null,
           totalReplyCount: row.totalReplyCount,
         };
 
-        if (row.firstReplyRank <= 2) {
+        if (row.firstReplyRank <= THREAD_LEADING_REPLIES) {
           existing.leadingReplyIds.set(row.firstReplyRank, row.id);
         }
-        if (row.latestReplyRank === 2 || row.latestReplyRank === 3) {
+        if (row.firstReplyRank === THREAD_LEADING_REPLIES + 1) {
+          existing.firstHiddenReplyId = row.id;
+        }
+        if (
+          row.latestReplyRank > 1 &&
+          row.latestReplyRank <= THREAD_TRAILING_REPLIES
+        ) {
           existing.trailingReplyIds.set(row.latestReplyRank, row.id);
         }
         if (row.latestReplyRank === 1) {
@@ -4143,16 +4173,36 @@ export function createPostService(
             .map((id) => (id ? hydratedPosts.get(id) : undefined))
             .filter((post): post is Post => post !== undefined);
 
+        const leadingReplies = hydrateReplyIds(
+          Array.from({ length: THREAD_LEADING_REPLIES }, (_unused, index) =>
+            context.leadingReplyIds.get(index + 1),
+          ),
+        );
+        // Ranked newest-first, so walking down to rank 2 puts them back in
+        // thread order. Rank 1 is the hero and is carried separately.
+        const trailingReplies = hydrateReplyIds(
+          Array.from(
+            { length: THREAD_TRAILING_REPLIES - 1 },
+            (_unused, index) =>
+              context.trailingReplyIds.get(THREAD_TRAILING_REPLIES - index),
+          ),
+        );
+        const firstHiddenReply =
+          (context.firstHiddenReplyId
+            ? hydratedPosts.get(context.firstHiddenReplyId)
+            : undefined) ?? null;
+
         result.set(threadId, {
-          leadingReplies: hydrateReplyIds([
-            context.leadingReplyIds.get(1),
-            context.leadingReplyIds.get(2),
-          ]),
-          trailingReplies: hydrateReplyIds([
-            context.trailingReplyIds.get(3),
-            context.trailingReplyIds.get(2),
-          ]),
+          leadingReplies,
+          // Left overlapping on purpose. These are the ranked buckets, not the
+          // rendered fold: on a short thread a reply lands in both windows, and
+          // dropping the duplicate is a presentation rule that `ThreadPreview`
+          // and `getThreadHiddenCount` each already apply.
+          trailingReplies,
           latestReply,
+          // Only a gap target: the query fetches it one past the leading
+          // window, and nothing renders it.
+          firstHiddenReply,
           totalReplyCount: context.totalReplyCount,
         });
       }
@@ -4542,20 +4592,25 @@ export function createPostService(
       const result = new Map<string, Post[]>();
       if (rootIds.length === 0) return result;
 
-      const unique = [...new Set(rootIds)];
-      const conditions = [
-        eq(posts.siteId, siteId),
-        inArray(posts.threadId, unique),
-        eq(posts.status, "published"),
-      ];
-      if (options.publishedBefore !== undefined) {
-        conditions.push(sql`${posts.publishedAt} < ${options.publishedBefore}`);
-      }
-      const rows = await db
-        .select()
-        .from(posts)
-        .where(and(...conditions))
-        .orderBy(posts.threadId, posts.createdAt, posts.id);
+      // A feed loads every Thread it renders at once, which can be hundreds.
+      // Each Thread lands in one chunk, so its posts keep their order.
+      const rows = await batchQueryRows([...new Set(rootIds)], (chunk) => {
+        const conditions = [
+          eq(posts.siteId, siteId),
+          inArray(posts.threadId, chunk),
+          eq(posts.status, "published"),
+        ];
+        if (options.publishedBefore !== undefined) {
+          conditions.push(
+            sql`${posts.publishedAt} < ${options.publishedBefore}`,
+          );
+        }
+        return db
+          .select()
+          .from(posts)
+          .where(and(...conditions))
+          .orderBy(posts.threadId, posts.createdAt, posts.id);
+      });
 
       for (const post of await hydratePosts(rows)) {
         const thread = result.get(post.threadId);

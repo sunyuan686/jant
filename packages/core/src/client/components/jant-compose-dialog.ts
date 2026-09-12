@@ -27,6 +27,7 @@ import type {
   ComposeAttachment,
   ComposeRowStatus,
   DraftItem,
+  DraftRestoreOutcome,
   LocalDraft,
   LocalDraftMedia,
   ComposeFullscreenOpenDetail,
@@ -80,6 +81,11 @@ interface ThreadItem {
   slug?: string;
   /** Last availability answer for this post's slug. */
   slugTaken?: boolean;
+  /**
+   * The saved draft post this row was loaded from, if any. Its slug already
+   * belongs to that post, so the availability check leaves it out.
+   */
+  sourcePostId?: string;
 }
 
 interface ApiMediaAttachment {
@@ -787,15 +793,26 @@ export class JantComposeDialog extends LitElement {
   private _confirmForAttachedText = false;
   private _draftSaveTimer: ReturnType<typeof setTimeout> | null = null;
   private _draftRestored = false;
+  /**
+   * Whether this composer has ever held content under its current storage key.
+   *
+   * The stored draft is shared: one key answers for new posts and for replies,
+   * across every tab. A composer that opens empty — a reply whose parent does
+   * not match the stored draft, a restore that bailed, a second tab sitting
+   * idle — is empty because it never loaded anything, not because the author
+   * threw the draft away. Only a composer that actually held the content may
+   * decide it is gone; without this, any empty composer deletes work it never
+   * showed.
+   */
+  private _hasOwnedContent = false;
+  /** Whether the author has already been told this composer cannot store drafts. */
+  private _reportedStorageFailure = false;
   private _initialSnapshot: string | null = null;
   private _pageFocusApplied = false;
   private _pageLeaveRequested = false;
   private _replyThreadRootId: string | null = null;
   private _replyRefreshKind:
-    | "timeline-item"
-    | "post-card"
-    | "post-view"
-    | null = null;
+    "timeline-item" | "post-card" | "post-view" | null = null;
   private _replyRefreshId: string | null = null;
   private _publishedAtTimeMinutes: number | null = null;
   private _originalPublishedAt: number | null = null;
@@ -1045,6 +1062,8 @@ export class JantComposeDialog extends LitElement {
     this._confirmForDrafts = false;
     this._confirmForAttachedText = false;
     this._initialSnapshot = null;
+    this._hasOwnedContent = false;
+    this._reportedStorageFailure = false;
     this._pageFocusApplied = false;
     this._pageLeaveRequested = false;
     this._slugSuggestRequestId += 1;
@@ -1202,8 +1221,9 @@ export class JantComposeDialog extends LitElement {
     // answer, which is right: that one belongs to the draft, not to the habit.
     this._editor?.setTitleDefault(JantComposeDialog._getNoteTitleDefault());
 
+    let restored: DraftRestoreOutcome = "none";
     if (options?.restoreDraft !== false) {
-      await this.restoreLocalDraft({
+      restored = await this.restoreLocalDraft({
         notify: options?.restoreToast,
         extraMedia: options?.restoreMedia,
       });
@@ -1220,12 +1240,18 @@ export class JantComposeDialog extends LitElement {
       this._collectionIds = [options.collectionId, ...this._collectionIds];
     }
 
-    // Restore per-collection visibility preference (only for new posts, not restored drafts)
+    // The collection's remembered visibility is a default for a fresh post. A
+    // restored draft already carries the answer the author gave it, and a
+    // default must not quietly overwrite a choice — unlike the collection
+    // itself just above, visibility is one value, so applying it here would
+    // replace what they picked rather than add to it, with nothing on screen
+    // to show that it changed.
     if (options?.collectionId) {
       this._sourceCollectionId = options.collectionId;
-      const saved = JantComposeDialog._getCollectionVisibility(
-        options.collectionId,
-      );
+      const saved =
+        restored === "restored"
+          ? null
+          : JantComposeDialog._getCollectionVisibility(options.collectionId);
       if (saved) {
         this._visibility = saved;
       }
@@ -1626,7 +1652,12 @@ export class JantComposeDialog extends LitElement {
     }
   }
 
-  /** Build the submit payload for a single thread editor (index-aware). */
+  /**
+   * Build the submit payload for the post at `index` — the single post, or one
+   * post of a thread. The one builder for both, so a field the single post
+   * gains reaches a thread's root too: the thread path used to be a copy that
+   * never learned about language or translations.
+   */
   private _buildEditorPostDetail(
     editor: JantComposeEditor,
     format: ComposeFormat,
@@ -1699,6 +1730,17 @@ export class JantComposeDialog extends LitElement {
         ? (this._replyRefreshKind ?? undefined)
         : undefined,
       replyRefreshId: isRoot ? (this._replyRefreshId ?? undefined) : undefined,
+      // Only a Thread's root carries a language: its other posts, and a reply
+      // to an existing Thread, inherit it server-side. An automatic choice
+      // resolves here to whatever the pill beside this button has been showing
+      // — what detection read, or the page's language while it has read
+      // nothing. Absent only on a single-language site, where the server
+      // decides.
+      language:
+        isRoot && !this._replyToId
+          ? (this._effectiveLanguage() ?? undefined)
+          : undefined,
+      translationOfId: isRoot ? this._translationOf?.id : undefined,
     };
   }
 
@@ -1708,77 +1750,10 @@ export class JantComposeDialog extends LitElement {
     const editor = this._editor;
     if (!editor) return null;
 
-    editor.promoteLeadingH1Title({ force: true });
-    const editorData = editor.getData();
-    const mediaAttachments = new Map(
-      (editorData.attachments ?? []).map((attachment) => [
-        attachment.clientId,
-        attachment,
-      ]),
-    );
-    const textAttachments = new Map(
-      editorData.attachedTexts.map((item) => [item.clientId, item]),
-    );
-    const orderedAttachments: ComposeSubmitAttachment[] = [];
-    for (const clientId of editorData.attachmentOrder) {
-      const mediaAttachment = mediaAttachments.get(clientId);
-      if (mediaAttachment) {
-        orderedAttachments.push({
-          type: "media",
-          clientId,
-          mediaId: mediaAttachment.mediaId,
-          alt: mediaAttachment.alt || undefined,
-        });
-        continue;
-      }
-
-      const textAttachment = textAttachments.get(clientId);
-      if (textAttachment?.bodyJson) {
-        orderedAttachments.push({
-          type: "text",
-          clientId,
-          bodyJson: textAttachment.bodyJson,
-          summary: textAttachment.summary,
-          mediaId: textAttachment.mediaId,
-          originalBodyJson: normalizeComposeDoc(
-            textAttachment.originalBodyJson ?? null,
-          ),
-        });
-      }
-    }
-
     return {
-      format: this._format,
-      title: editorData.title,
-      body: editorData.body,
-      url: editorData.url,
-      quoteText: editorData.quoteText,
-      quoteAuthor: editorData.quoteAuthor,
-      slug: this._slug.trim() || undefined,
-      publishedAt: this._getPublishedAtSubmitValue(status),
-      status,
-      visibility: this._visibilityLocked ? undefined : this._visibility,
-      rating: editorData.rating,
-      collectionIds: this._replyToId ? [] : [...this._collectionIds],
-      attachments: orderedAttachments,
+      ...this._buildEditorPostDetail(editor, this._format, 0, status),
       editPostId: this._editPostId ?? this._draftSourceId ?? undefined,
       draftSourceId: this._draftSourceId ?? undefined,
-      replyToId: this._replyToId ?? undefined,
-      quietReply: this._canReplyQuietly()
-        ? this._quietReply || undefined
-        : undefined,
-      replyThreadRootId: this._replyThreadRootId ?? undefined,
-      replyRefreshKind: this._replyRefreshKind ?? undefined,
-      replyRefreshId: this._replyRefreshId ?? undefined,
-      // Only the root carries a language: a reply belongs to its Thread and
-      // inherits it server-side. An automatic choice resolves here to whatever
-      // the pill beside this button has been showing — what detection read, or
-      // the page's language while it has read nothing. Absent only on a
-      // single-language site, where the server decides.
-      language: this._replyToId
-        ? undefined
-        : (this._effectiveLanguage() ?? undefined),
-      translationOfId: this._translationOf?.id,
     };
   }
 
@@ -2414,7 +2389,12 @@ export class JantComposeDialog extends LitElement {
       mode: "check",
       slug,
     });
-    const postId = this._currentSlugOwnerId();
+    // Each post is checked against its own saved copy: a reply's slug is not
+    // the root's to release, and the root's is not the reply's.
+    const postId =
+      index === 0
+        ? this._currentSlugOwnerId()
+        : this._threadItems[index]?.sourcePostId;
     if (postId) params.set("postId", postId);
 
     try {
@@ -3031,8 +3011,7 @@ export class JantComposeDialog extends LitElement {
       const res = await fetch("/api/posts?status=draft&limit=50");
       if (!res.ok) throw new Error("Failed to load drafts");
       const json = (await res.json()) as
-        | DraftsResponse
-        | Record<string, unknown>[];
+        DraftsResponse | Record<string, unknown>[];
       const posts = Array.isArray(json) ? json : (json.posts ?? []);
       const allDraftItems = (posts as Record<string, unknown>[]).map(
         (p): DraftItem => ({
@@ -3163,8 +3142,7 @@ export class JantComposeDialog extends LitElement {
         const draftsRes = await fetch("/api/posts?status=draft&limit=50");
         if (draftsRes.ok) {
           const draftsJson = (await draftsRes.json()) as
-            | { posts?: Record<string, unknown>[] }
-            | Record<string, unknown>[];
+            { posts?: Record<string, unknown>[] } | Record<string, unknown>[];
           const allDrafts = Array.isArray(draftsJson)
             ? draftsJson
             : (draftsJson.posts ?? []);
@@ -3180,6 +3158,7 @@ export class JantComposeDialog extends LitElement {
             .map((p) => ({
               id: p.id as string,
               format: p.format as ComposeFormat,
+              slug: (p.slug as string | null) ?? null,
               replyToId: (p.replyToId as string) ?? null,
               title: (p.title as string) ?? null,
               body: (p.body as string) ?? null,
@@ -3207,12 +3186,16 @@ export class JantComposeDialog extends LitElement {
               if (!ordered.includes(p)) ordered.push(p);
             }
 
-            // Enter thread mode
+            // Enter thread mode. Each reply keeps its own permalink: saving
+            // recreates the thread, so a slug left behind here would come back
+            // as a random id.
             this._threadItems = [
               { id: randomUUID(), format: post.format },
               ...ordered.map((p) => ({
                 id: randomUUID(),
                 format: p.format,
+                slug: p.slug ?? "",
+                sourcePostId: p.id,
               })),
             ];
             this._focusedThreadIndex = 0;
@@ -3411,7 +3394,7 @@ export class JantComposeDialog extends LitElement {
       });
 
       if (!hasContent) {
-        globalThis.localStorage.removeItem(this._currentDraftStorageKey());
+        this._releaseStoredDraft();
         return;
       }
 
@@ -3430,6 +3413,10 @@ export class JantComposeDialog extends LitElement {
             url: data.url,
             quoteText: data.quoteText,
             quoteAuthor: data.quoteAuthor,
+            // Same rules as the single-post draft below.
+            rating: data.rating,
+            showTitle: item.format === "note" ? editor._showTitle : false,
+            showRating: data.rating > 0 ? editor._showRating : false,
             attachedTexts: data.attachedTexts.map((t) => ({
               clientId: t.clientId,
               bodyJson: t.bodyJson,
@@ -3468,14 +3455,7 @@ export class JantComposeDialog extends LitElement {
         savedAt: Date.now(),
       };
 
-      try {
-        globalThis.localStorage.setItem(
-          this._currentDraftStorageKey(),
-          JSON.stringify(draft),
-        );
-      } catch {
-        // Storage full or unavailable — silently ignore
-      }
+      this._writeStoredDraft(draft);
       return;
     }
 
@@ -3487,7 +3467,7 @@ export class JantComposeDialog extends LitElement {
     // for edit (or restoring a draft) would write a local draft of the
     // unchanged content, since loading fires content-change events.
     if (!this._hasUnsavedChanges()) {
-      globalThis.localStorage.removeItem(this._currentDraftStorageKey());
+      this._releaseStoredDraft();
       return;
     }
 
@@ -3503,7 +3483,7 @@ export class JantComposeDialog extends LitElement {
       data.attachedTexts.length > 0;
 
     if (!hasContent) {
-      globalThis.localStorage.removeItem(this._currentDraftStorageKey());
+      this._releaseStoredDraft();
       return;
     }
 
@@ -3541,18 +3521,49 @@ export class JantComposeDialog extends LitElement {
       savedAt: Date.now(),
     };
 
+    this._writeStoredDraft(draft);
+  }
+
+  /**
+   * Persist the draft and take ownership of the key it went to.
+   *
+   * A write that does not stick is the one failure the author must hear about:
+   * the local copy is the last thing standing between a dropped connection and
+   * lost work, and a composer that cannot store one looks exactly like a
+   * composer that can. Said once per composer, not once per keystroke.
+   */
+  private _writeStoredDraft(draft: LocalDraft) {
     try {
       globalThis.localStorage.setItem(
         this._currentDraftStorageKey(),
         JSON.stringify(draft),
       );
-    } catch {
-      // Storage full or unavailable — silently ignore
+      this._hasOwnedContent = true;
+    } catch (error) {
+      // eslint-disable-next-line no-console -- the local copy is the last safety net; a lost one must be visible
+      console.warn("[jant] compose draft could not be stored", error);
+      if (!this._reportedStorageFailure) {
+        this._reportedStorageFailure = true;
+        showToast(this.labels.draftStoreFailed, "error");
+      }
     }
+  }
+
+  /**
+   * Drop the stored draft, but only when this composer is the one holding it.
+   *
+   * See `_hasOwnedContent`: an empty composer that never loaded anything has
+   * nothing to say about a draft written by another composer or another tab.
+   */
+  private _releaseStoredDraft() {
+    if (!this._hasOwnedContent) return;
+    this._hasOwnedContent = false;
+    globalThis.localStorage.removeItem(this._currentDraftStorageKey());
   }
 
   private _clearDraftFromStorage() {
     this._cancelDraftSaveTimer();
+    this._hasOwnedContent = false;
     globalThis.localStorage.removeItem(this._currentDraftStorageKey());
   }
 
@@ -3626,39 +3637,44 @@ export class JantComposeDialog extends LitElement {
     notify?: boolean;
     /** Completed uploads known to the bridge at failure time */
     extraMedia?: LocalDraftMedia[];
-  }) {
+  }): Promise<DraftRestoreOutcome> {
+    const key = JantComposeDialog._DRAFT_KEY;
     // Don't restore if already in edit or draft-load mode
-    if (this._editPostId || this._draftSourceId) return;
+    if (this._editPostId || this._draftSourceId) {
+      return this._reportRestoreOutcome("composer-busy", key);
+    }
     // Don't restore if the editor already has content (e.g. reopened dialog)
-    if (this._hasContent()) return;
+    if (this._hasContent()) {
+      return this._reportRestoreOutcome("composer-has-content", key);
+    }
 
     let raw: string | null;
     try {
-      raw = globalThis.localStorage.getItem(JantComposeDialog._DRAFT_KEY);
+      raw = globalThis.localStorage.getItem(key);
     } catch {
-      return;
+      return "none";
     }
-    if (!raw) return;
+    if (!raw) return "none";
 
     let draft: LocalDraft;
     try {
       draft = JSON.parse(raw) as LocalDraft;
     } catch {
-      globalThis.localStorage.removeItem(JantComposeDialog._DRAFT_KEY);
-      return;
+      // Deliberately kept: bytes we cannot parse are still something the author
+      // wrote, and deleting them here would turn a bad read into a lost draft.
+      return this._reportRestoreOutcome("unreadable", key, raw);
     }
 
-    // Discard stale drafts
+    // Too old to put back, but still theirs — leave it where it is.
     if (Date.now() - draft.savedAt > JantComposeDialog._DRAFT_MAX_AGE) {
-      globalThis.localStorage.removeItem(JantComposeDialog._DRAFT_KEY);
-      return;
+      return this._reportRestoreOutcome("expired", key, raw, draft);
     }
 
     if (
       options?.expectedReplyToId !== undefined &&
       draft.replyToId !== options.expectedReplyToId
     ) {
-      return;
+      return this._reportRestoreOutcome("other-reply", key, raw, draft);
     }
 
     this._collectionIds = draft.replyToId
@@ -3739,6 +3755,9 @@ export class JantComposeDialog extends LitElement {
           url: item.url || undefined,
           quoteText: item.quoteText || undefined,
           quoteAuthor: item.quoteAuthor || undefined,
+          rating: item.rating || undefined,
+          showTitle: item.showTitle,
+          showRating: item.showRating,
           media: media.length
             ? JantComposeDialog._restoredMediaToPopulate(media)
             : undefined,
@@ -3750,11 +3769,12 @@ export class JantComposeDialog extends LitElement {
       }
 
       this._draftRestored = true;
+      this._hasOwnedContent = true;
       if (options?.notify !== false) showToast(this.labels.draftRestored);
       globalThis.requestAnimationFrame(() => {
         this._captureInitialSnapshot();
       });
-      return;
+      return "restored";
     }
 
     // ── Single-post draft restore ────────────────────────────────────
@@ -3800,10 +3820,59 @@ export class JantComposeDialog extends LitElement {
     });
 
     this._draftRestored = true;
+    this._hasOwnedContent = true;
     if (options?.notify !== false) showToast(this.labels.draftRestored);
     globalThis.requestAnimationFrame(() => {
       this._captureInitialSnapshot();
     });
+    return "restored";
+  }
+
+  /**
+   * Say why a stored draft did not reach the composer.
+   *
+   * A composer that opens empty looks the same whether there was nothing to
+   * restore or something went wrong reading what was there. That costs nothing
+   * until an author asks where their work went, at which point there is nothing
+   * to look at. `none` — the ordinary "no draft stored" case — stays quiet;
+   * everything else means bytes existed and did not come back, which is worth
+   * saying out loud.
+   *
+   * @param outcome - Why the restore stopped
+   * @param key - Storage key that was read
+   * @param raw - The stored string, when one was found
+   * @param draft - The parsed draft, when it parsed
+   * @returns The outcome, so callers can `return` this directly
+   * @example
+   * return this._reportRestoreOutcome("expired", key, raw, draft);
+   */
+  private _reportRestoreOutcome(
+    outcome: DraftRestoreOutcome,
+    key: string,
+    raw?: string | null,
+    draft?: LocalDraft,
+  ): DraftRestoreOutcome {
+    if (outcome === "restored" || outcome === "none") return outcome;
+
+    let stored = raw;
+    if (stored === undefined) {
+      try {
+        stored = globalThis.localStorage.getItem(key);
+      } catch {
+        stored = null;
+      }
+    }
+    // Nothing was stored, so nothing was lost — the composer just opened empty.
+    if (!stored) return "none";
+
+    // eslint-disable-next-line no-console -- the one record of why recovered work did not come back
+    console.warn(`[jant] compose draft not restored: ${outcome}`, {
+      key,
+      bytes: stored.length,
+      savedAt: draft?.savedAt ? new Date(draft.savedAt).toISOString() : null,
+      thread: draft?.threadItems?.length ?? null,
+    });
+    return outcome;
   }
 
   /**
@@ -3828,12 +3897,13 @@ export class JantComposeDialog extends LitElement {
     try {
       draft = JSON.parse(raw) as LocalDraft;
     } catch {
-      globalThis.localStorage.removeItem(key);
+      // Kept, not deleted: see `restoreLocalDraft`.
+      this._reportRestoreOutcome("unreadable", key, raw);
       return false;
     }
 
     if (Date.now() - draft.savedAt > JantComposeDialog._DRAFT_MAX_AGE) {
-      globalThis.localStorage.removeItem(key);
+      this._reportRestoreOutcome("expired", key, raw, draft);
       return false;
     }
 
@@ -3880,6 +3950,7 @@ export class JantComposeDialog extends LitElement {
     });
 
     this._draftRestored = true;
+    this._hasOwnedContent = true;
     if (notify !== false) showToast(this.labels.draftRestored);
     return true;
   }
@@ -3950,37 +4021,43 @@ export class JantComposeDialog extends LitElement {
           </button>
           <span class="compose-alt-title">${this.labels.drafts}</span>
         </div>
-        ${this._draftsLoading
-          ? html`<div class="compose-drafts-loading">
-              <svg
-                class="animate-spin size-5"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-              </svg>
-            </div>`
-          : this._draftsError
-            ? html`<div class="compose-drafts-empty">${this._draftsError}</div>`
-            : this._drafts.length === 0
+        ${
+          this._draftsLoading
+            ? html`<div class="compose-drafts-loading">
+                <svg
+                  class="animate-spin size-5"
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              </div>`
+            : this._draftsError
               ? html`<div class="compose-drafts-empty">
-                  ${this.labels.draftsEmpty}
+                  ${this._draftsError}
                 </div>`
-              : html`<div class="compose-drafts-list">
-                  ${this._drafts.map(
-                    (draft, i) => html`
-                      ${i > 0
-                        ? html`<div class="compose-drafts-divider"></div>`
-                        : nothing}
-                      ${this._renderDraftItem(draft)}
-                    `,
-                  )}
-                </div>`}
+              : this._drafts.length === 0
+                ? html`<div class="compose-drafts-empty">
+                    ${this.labels.draftsEmpty}
+                  </div>`
+                : html`<div class="compose-drafts-list">
+                    ${this._drafts.map(
+                      (draft, i) => html`
+                        ${
+                          i > 0
+                            ? html`<div class="compose-drafts-divider"></div>`
+                            : nothing
+                        }
+                        ${this._renderDraftItem(draft)}
+                      `,
+                    )}
+                  </div>`
+        }
       </div>
     `;
   }
@@ -3994,13 +4071,15 @@ export class JantComposeDialog extends LitElement {
     return html`
       <div class="compose-draft-item" @click=${() => this.openDraft(draft.id)}>
         <div class="compose-draft-content">
-          ${preview
-            ? html`<div class="compose-draft-preview">${preview}</div>`
-            : html`<div
-                class="compose-draft-preview compose-draft-preview-empty"
-              >
-                Empty draft
-              </div>`}
+          ${
+            preview
+              ? html`<div class="compose-draft-preview">${preview}</div>`
+              : html`<div
+                  class="compose-draft-preview compose-draft-preview-empty"
+                >
+                  Empty draft
+                </div>`
+          }
           <div class="compose-draft-meta">
             <span class="compose-draft-format">${formatLabel}</span>
             <span aria-hidden="true">·</span>
@@ -4008,15 +4087,17 @@ export class JantComposeDialog extends LitElement {
           </div>
         </div>
         <div class="relative">
-          ${menuOpen
-            ? html`<div
-                class="compose-dropdown-backdrop"
-                @click=${(e: Event) => {
-                  e.stopPropagation();
-                  this._draftMenuOpenId = null;
-                }}
-              ></div>`
-            : nothing}
+          ${
+            menuOpen
+              ? html`<div
+                  class="compose-dropdown-backdrop"
+                  @click=${(e: Event) => {
+                    e.stopPropagation();
+                    this._draftMenuOpenId = null;
+                  }}
+                ></div>`
+              : nothing
+          }
           <button
             type="button"
             class="compose-draft-more"
@@ -4036,44 +4117,46 @@ export class JantComposeDialog extends LitElement {
               <circle cx="12" cy="8" r="1.2" />
             </svg>
           </button>
-          ${menuOpen
-            ? html`
-                <div
-                  id=${menuId}
-                  class="compose-dropdown compose-dropdown-right"
-                  role="menu"
-                >
-                  <a
-                    class="compose-dropdown-item"
-                    href=${publicPath(`/preview/${draft.slug}`)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    role="menuitem"
-                    @click=${(e: Event) => {
-                      e.stopPropagation();
-                      this._draftMenuOpenId = null;
-                    }}
-                  >
-                    ${this.labels.previewDraft}
-                  </a>
+          ${
+            menuOpen
+              ? html`
                   <div
-                    class="compose-dropdown-separator"
-                    role="separator"
-                  ></div>
-                  <button
-                    type="button"
-                    class="compose-dropdown-item compose-dropdown-item-danger"
-                    role="menuitem"
-                    @click=${(e: Event) => {
-                      e.stopPropagation();
-                      this._deleteDraft(draft.id);
-                    }}
+                    id=${menuId}
+                    class="compose-dropdown compose-dropdown-right"
+                    role="menu"
                   >
-                    ${this.labels.deleteDraft}
-                  </button>
-                </div>
-              `
-            : nothing}
+                    <a
+                      class="compose-dropdown-item"
+                      href=${publicPath(`/preview/${draft.slug}`)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      role="menuitem"
+                      @click=${(e: Event) => {
+                        e.stopPropagation();
+                        this._draftMenuOpenId = null;
+                      }}
+                    >
+                      ${this.labels.previewDraft}
+                    </a>
+                    <div
+                      class="compose-dropdown-separator"
+                      role="separator"
+                    ></div>
+                    <button
+                      type="button"
+                      class="compose-dropdown-item compose-dropdown-item-danger"
+                      role="menuitem"
+                      @click=${(e: Event) => {
+                        e.stopPropagation();
+                        this._deleteDraft(draft.id);
+                      }}
+                    >
+                      ${this.labels.deleteDraft}
+                    </button>
+                  </div>
+                `
+              : nothing
+          }
         </div>
       </div>
     `;
@@ -4124,30 +4207,34 @@ export class JantComposeDialog extends LitElement {
 
     return html`
       <div class="compose-translation-context">
-        ${collapsed
-          ? nothing
-          : source.previewHtml
-            ? html`<div
-                class="compose-translation-original"
-                tabindex="0"
-                role="region"
-                aria-label=${this.labels.translationContextOriginal}
-              >
-                <div class="compose-translation-preview">
-                  ${unsafeHTML(source.previewHtml)}
-                </div>
-              </div>`
-            : html`<p class="compose-translation-fallback">
-                ${source.href
-                  ? html`<a
-                      href=${source.href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title=${this.labels.translationContextOpen}
-                      >${source.title}</a
-                    >`
-                  : source.title}
-              </p>`}
+        ${
+          collapsed
+            ? nothing
+            : source.previewHtml
+              ? html`<div
+                  class="compose-translation-original"
+                  tabindex="0"
+                  role="region"
+                  aria-label=${this.labels.translationContextOriginal}
+                >
+                  <div class="compose-translation-preview">
+                    ${unsafeHTML(source.previewHtml)}
+                  </div>
+                </div>`
+              : html`<p class="compose-translation-fallback">
+                  ${
+                    source.href
+                      ? html`<a
+                          href=${source.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title=${this.labels.translationContextOpen}
+                          >${source.title}</a
+                        >`
+                      : source.title
+                  }
+                </p>`
+        }
         <div class="compose-translation-seam">
           <span class="compose-translation-seam-label">
             ${this._iconArrowDown()}${seam}
@@ -4157,16 +4244,20 @@ export class JantComposeDialog extends LitElement {
             type="button"
             class="compose-translation-seam-toggle"
             aria-expanded=${collapsed ? "false" : "true"}
-            aria-label=${collapsed
-              ? this.labels.translationContextShowLong
-              : this.labels.translationContextHideLong}
+            aria-label=${
+              collapsed
+                ? this.labels.translationContextShowLong
+                : this.labels.translationContextHideLong
+            }
             @click=${() => {
               this._translationCollapsed = !this._translationCollapsed;
             }}
           >
-            ${collapsed
-              ? this.labels.translationContextShow
-              : this.labels.translationContextHide}
+            ${
+              collapsed
+                ? this.labels.translationContextShow
+                : this.labels.translationContextHide
+            }
           </button>
         </div>
       </div>
@@ -4251,42 +4342,44 @@ export class JantComposeDialog extends LitElement {
         >
           <div class="compose-reply-context-body">
             ${unsafeHTML(contentHtml)}
-            ${media?.length
-              ? html`<div
-                  class="compose-reply-context-media"
-                  data-post-media
-                  data-lightbox-group=${JSON.stringify(
-                    media.map((m) => ({
-                      url: m.url,
-                      alt: m.alt ?? "",
-                      width: m.width,
-                      height: m.height,
-                      mimeType: m.mimeType,
-                    })),
-                  )}
-                >
-                  ${media.map(
-                    (m, i) => html`
-                      <a
-                        href=${m.url}
-                        data-lightbox-index=${i}
-                        class="compose-reply-context-media-link"
-                      >
-                        <img
-                          src=${m.previewUrl}
-                          alt=${m.alt ?? ""}
-                          class="compose-reply-context-media-img"
-                          loading="lazy"
-                        />
-                      </a>
-                    `,
-                  )}
-                </div>`
-              : nothing}
+            ${
+              media?.length
+                ? html`<div
+                    class="compose-reply-context-media"
+                    data-post-media
+                    data-lightbox-group=${JSON.stringify(
+                      media.map((m) => ({
+                        url: m.url,
+                        alt: m.alt ?? "",
+                        width: m.width,
+                        height: m.height,
+                        mimeType: m.mimeType,
+                      })),
+                    )}
+                  >
+                    ${media.map(
+                      (m, i) => html`
+                        <a
+                          href=${m.url}
+                          data-lightbox-index=${i}
+                          class="compose-reply-context-media-link"
+                        >
+                          <img
+                            src=${m.previewUrl}
+                            alt=${m.alt ?? ""}
+                            class="compose-reply-context-media-img"
+                            loading="lazy"
+                          />
+                        </a>
+                      `,
+                    )}
+                  </div>`
+                : nothing
+            }
           </div>
-          ${!isExpanded
-            ? html`<div class="compose-reply-fade"></div>`
-            : nothing}
+          ${
+            !isExpanded ? html`<div class="compose-reply-fade"></div>` : nothing
+          }
         </div>
       </div>
       <div class="compose-reply-meta">
@@ -4316,23 +4409,30 @@ export class JantComposeDialog extends LitElement {
     return !!(this._editPostId || this._draftSourceId);
   }
 
+  /**
+   * Fold fields the target format can't hold into the body before the format
+   * change recreates the editor from `_bodyJson`. Only a post that already
+   * exists on the server needs it — anything else keeps hidden fields in the
+   * editor, so switching back finds them — and every post of a saved thread
+   * draft is one. Synchronous, so the old Tiptap instance can't fire onUpdate
+   * and clobber what we just wrote. `applyConvertedFields` suppresses the one
+   * content-change event the conversion emits, so the switch itself never
+   * schedules a draft save.
+   */
+  private _convertForFormatSwitch(
+    editor: JantComposeEditor | null,
+    from: ComposeFormat,
+    to: ComposeFormat,
+  ) {
+    if (!editor || from === to || !this._shouldConvertOnFormatSwitch()) return;
+    editor.applyConvertedFields(
+      convertComposeFormat(from, to, editor.getConvertibleFields()),
+    );
+  }
+
   private _switchFormat(target: ComposeFormat) {
     if (this._format === target) return;
-    const editor = this._editor;
-    if (editor && this._shouldConvertOnFormatSwitch()) {
-      // Fold fields the target can't hold into the body before the format
-      // change recreates the editor from `_bodyJson`. Synchronous, so the old
-      // Tiptap instance can't fire onUpdate and clobber what we just wrote.
-      // `applyConvertedFields` suppresses the one content-change event the
-      // conversion emits, so the switch itself never schedules a draft save.
-      editor.applyConvertedFields(
-        convertComposeFormat(
-          this._format,
-          target,
-          editor.getConvertibleFields(),
-        ),
-      );
-    }
+    this._convertForFormatSwitch(this._editor, this._format, target);
     // A bare format switch shouldn't persist a local draft, so drop any save
     // already pending from loading the post.
     this._cancelDraftSaveTimer();
@@ -4404,12 +4504,14 @@ export class JantComposeDialog extends LitElement {
 
     return html`
       <div class="flex-1 min-w-0">
-        ${this._showCollection
-          ? html`<div
-              class="compose-dropdown-backdrop"
-              @click=${() => this._closeCollectionPicker()}
-            ></div>`
-          : nothing}
+        ${
+          this._showCollection
+            ? html`<div
+                class="compose-dropdown-backdrop"
+                @click=${() => this._closeCollectionPicker()}
+              ></div>`
+            : nothing
+        }
         <div
           class="select compose-collection-select"
           data-select-initialized
@@ -4449,100 +4551,106 @@ export class JantComposeDialog extends LitElement {
             data-popover
             aria-hidden=${this._showCollection ? "false" : "true"}
           >
-            ${collections.length > 0
-              ? html`<div class="compose-collection-popover-header">
-                  <label class="compose-collection-search-shell">
-                    ${renderComposeCollectionPickerIcon(
-                      COMPOSE_COLLECTION_PICKER_ICONS.search,
-                      "compose-collection-search-icon",
-                    )}
-                    <input
-                      type="text"
-                      role="combobox"
-                      class="compose-collection-search-input"
-                      placeholder=${this.labels.searchCollections}
-                      autocomplete="off"
-                      autocorrect="off"
-                      spellcheck="false"
-                      .value=${this._collectionSearch}
-                      @keydown=${this._handleCollectionSearchKeydown}
-                      @input=${(e: Event) => {
-                        this._collectionSearch = (
-                          e.target as HTMLInputElement
-                        ).value;
-                      }}
-                    />
-                  </label>
-                </div>`
-              : nothing}
+            ${
+              collections.length > 0
+                ? html`<div class="compose-collection-popover-header">
+                    <label class="compose-collection-search-shell">
+                      ${renderComposeCollectionPickerIcon(
+                        COMPOSE_COLLECTION_PICKER_ICONS.search,
+                        "compose-collection-search-icon",
+                      )}
+                      <input
+                        type="text"
+                        role="combobox"
+                        class="compose-collection-search-input"
+                        placeholder=${this.labels.searchCollections}
+                        autocomplete="off"
+                        autocorrect="off"
+                        spellcheck="false"
+                        .value=${this._collectionSearch}
+                        @keydown=${this._handleCollectionSearchKeydown}
+                        @input=${(e: Event) => {
+                          this._collectionSearch = (
+                            e.target as HTMLInputElement
+                          ).value;
+                        }}
+                      />
+                    </label>
+                  </div>`
+                : nothing
+            }
             <div
               role="listbox"
               class="compose-collection-options"
               aria-multiselectable="true"
             >
-              ${filtered.length > 0
-                ? filtered.map((col) => {
-                    const selected = this._collectionIds.includes(col.id);
+              ${
+                filtered.length > 0
+                  ? filtered.map((col) => {
+                      const selected = this._collectionIds.includes(col.id);
 
-                    return html`
-                      <button
-                        type="button"
-                        class=${classMap({
-                          "compose-collection-option": true,
-                          "compose-collection-option-selected": selected,
-                        })}
-                        role="option"
-                        data-value=${col.id}
-                        aria-selected=${selected ? "true" : "false"}
-                        @keydown=${(event: globalThis.KeyboardEvent) =>
-                          this._handleCollectionOptionKeydown(event, col.id)}
-                        @click=${() =>
-                          this._handleCollectionOptionClick(col.id)}
-                      >
-                        <span class="compose-collection-option-label"
-                          >${col.title}</span
-                        >
-                        <span
+                      return html`
+                        <button
+                          type="button"
                           class=${classMap({
-                            "compose-collection-option-marker": true,
-                            "compose-collection-option-marker-selected":
-                              selected,
-                            "compose-collection-option-marker-add": !selected,
+                            "compose-collection-option": true,
+                            "compose-collection-option-selected": selected,
                           })}
+                          role="option"
+                          data-value=${col.id}
+                          aria-selected=${selected ? "true" : "false"}
+                          @keydown=${(event: globalThis.KeyboardEvent) =>
+                            this._handleCollectionOptionKeydown(event, col.id)}
+                          @click=${() =>
+                            this._handleCollectionOptionClick(col.id)}
                         >
-                          ${selected
-                            ? html`<svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                class="compose-collection-option-check-circle"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                aria-hidden="true"
-                              >
-                                <circle
-                                  cx="12"
-                                  cy="12"
-                                  r="10"
-                                  fill="currentColor"
-                                />
-                                <path
-                                  d="M8 12.5 10.7 15.2 16.4 9.5"
-                                  stroke="var(--site-page-bg)"
-                                  stroke-width="2.3"
-                                  stroke-linecap="round"
-                                  stroke-linejoin="round"
-                                />
-                              </svg>`
-                            : renderComposeCollectionPickerIcon(
-                                COMPOSE_COLLECTION_PICKER_ICONS.plusCircle,
-                                "compose-collection-option-plus-circle",
-                              )}
-                        </span>
-                      </button>
-                    `;
-                  })
-                : html`<div class="compose-collection-empty">
-                    ${emptyLabel}
-                  </div>`}
+                          <span class="compose-collection-option-label"
+                            >${col.title}</span
+                          >
+                          <span
+                            class=${classMap({
+                              "compose-collection-option-marker": true,
+                              "compose-collection-option-marker-selected":
+                                selected,
+                              "compose-collection-option-marker-add": !selected,
+                            })}
+                          >
+                            ${
+                              selected
+                                ? html`<svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    class="compose-collection-option-check-circle"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    aria-hidden="true"
+                                  >
+                                    <circle
+                                      cx="12"
+                                      cy="12"
+                                      r="10"
+                                      fill="currentColor"
+                                    />
+                                    <path
+                                      d="M8 12.5 10.7 15.2 16.4 9.5"
+                                      stroke="var(--site-page-bg)"
+                                      stroke-width="2.3"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                    />
+                                  </svg>`
+                                : renderComposeCollectionPickerIcon(
+                                    COMPOSE_COLLECTION_PICKER_ICONS.plusCircle,
+                                    "compose-collection-option-plus-circle",
+                                  )
+                            }
+                          </span>
+                        </button>
+                      `;
+                    })
+                  : html`<div class="compose-collection-empty">
+                      ${emptyLabel}
+                    </div>`
+              }
             </div>
             <div class="compose-collection-footer">
               <button
@@ -4586,8 +4694,7 @@ export class JantComposeDialog extends LitElement {
     if (!detail) return;
 
     const formEl = this.querySelector("jant-collection-form") as
-      | (HTMLElement & { loading: boolean })
-      | null;
+      (HTMLElement & { loading: boolean }) | null;
     if (formEl) formEl.loading = true;
 
     try {
@@ -4768,22 +4875,24 @@ export class JantComposeDialog extends LitElement {
           <span class="compose-alt-title">${this.labels.addAltTitle}</span>
         </div>
         <div class="compose-alt-preview">
-          ${category === "image"
-            ? html`<img
-                src=${attachment.previewUrl}
-                alt=""
-                class="compose-alt-preview-img"
-              />`
-            : category === "video"
-              ? html`<video
+          ${
+            category === "image"
+              ? html`<img
                   src=${attachment.previewUrl}
+                  alt=""
                   class="compose-alt-preview-img"
-                  preload="metadata"
-                  muted
-                ></video>`
-              : html`<span class="text-sm text-muted-foreground"
-                  >${attachment.file.name}</span
-                >`}
+                />`
+              : category === "video"
+                ? html`<video
+                    src=${attachment.previewUrl}
+                    class="compose-alt-preview-img"
+                    preload="metadata"
+                    muted
+                  ></video>`
+                : html`<span class="text-sm text-muted-foreground"
+                    >${attachment.file.name}</span
+                  >`
+          }
         </div>
         <div class="compose-alt-input-row">
           <input
@@ -5207,14 +5316,16 @@ export class JantComposeDialog extends LitElement {
           <span class="compose-sheet-title">${label}</span>
           <span class="compose-sheet-sub">${hint}</span>
         </span>
-        ${selected
-          ? html`<span class="compose-sheet-check" aria-hidden="true">
-              ${renderComposePublishActionIcon(
-                COMPOSE_PUBLISH_ACTION_ICONS.check,
-                "compose-sheet-check-icon",
-              )}
-            </span>`
-          : nothing}
+        ${
+          selected
+            ? html`<span class="compose-sheet-check" aria-hidden="true">
+                ${renderComposePublishActionIcon(
+                  COMPOSE_PUBLISH_ACTION_ICONS.check,
+                  "compose-sheet-check-icon",
+                )}
+              </span>`
+            : nothing
+        }
       </button>
     `;
   }
@@ -5402,18 +5513,22 @@ export class JantComposeDialog extends LitElement {
       >
         <span class="compose-sheet-main">
           <span class="compose-sheet-title">${label}</span>
-          ${hint
-            ? html`<span class="compose-sheet-sub">${hint}</span>`
-            : nothing}
+          ${
+            hint
+              ? html`<span class="compose-sheet-sub">${hint}</span>`
+              : nothing
+          }
         </span>
-        ${selected
-          ? html`<span class="compose-sheet-check" aria-hidden="true">
-              ${renderComposePublishActionIcon(
-                COMPOSE_PUBLISH_ACTION_ICONS.check,
-                "compose-sheet-check-icon",
-              )}
-            </span>`
-          : nothing}
+        ${
+          selected
+            ? html`<span class="compose-sheet-check" aria-hidden="true">
+                ${renderComposePublishActionIcon(
+                  COMPOSE_PUBLISH_ACTION_ICONS.check,
+                  "compose-sheet-check-icon",
+                )}
+              </span>`
+            : nothing
+        }
       </button>
     `;
   }
@@ -5493,12 +5608,14 @@ export class JantComposeDialog extends LitElement {
           "compose-language-open": open,
         })}
       >
-        ${open
-          ? html`<div
-              class="compose-dropdown-backdrop"
-              @click=${() => this._closeLanguagePicker(true)}
-            ></div>`
-          : nothing}
+        ${
+          open
+            ? html`<div
+                class="compose-dropdown-backdrop"
+                @click=${() => this._closeLanguagePicker(true)}
+              ></div>`
+            : nothing
+        }
         <button
           type="button"
           class=${classMap({
@@ -5529,13 +5646,15 @@ export class JantComposeDialog extends LitElement {
           >
             ${unsafeSVG(COMPOSE_LANGUAGE_ICON)}
           </svg>
-          ${named
-            ? html`<span
-                class="compose-language-label"
-                lang=${ifDefined(effective ?? undefined)}
-                >${effectiveLabel}</span
-              >`
-            : nothing}
+          ${
+            named
+              ? html`<span
+                  class="compose-language-label"
+                  lang=${ifDefined(effective ?? undefined)}
+                  >${effectiveLabel}</span
+                >`
+              : nothing
+          }
         </button>
         ${open ? this._renderLanguagePicker() : nothing}
       </div>
@@ -5563,14 +5682,16 @@ export class JantComposeDialog extends LitElement {
         aria-label=${this.labels.languageLabel}
       >
         <p class="compose-sheet-label">${this.labels.languageLabel}</p>
-        ${this._translationOf
-          ? html`<p class="compose-sheet-note">
-              ${this.labels.translationOf.replace(
-                "{title}",
-                this._translationOf.title,
-              )}
-            </p>`
-          : nothing}
+        ${
+          this._translationOf
+            ? html`<p class="compose-sheet-note">
+                ${this.labels.translationOf.replace(
+                  "{title}",
+                  this._translationOf.title,
+                )}
+              </p>`
+            : nothing
+        }
         <div role="radiogroup" aria-label=${this.labels.languageLabel}>
           ${this._renderLanguageRow(null, this.labels.languageAuto, autoHint)}
           ${this.languages.map((language) =>
@@ -5673,17 +5794,19 @@ export class JantComposeDialog extends LitElement {
             )}
           </button>
         </div>
-        ${publishedAtError
-          ? html`<p
-              class="compose-publish-date-status compose-publish-date-status-error"
-            >
-              ${publishedAtError}
-            </p>`
-          : hasValue
-            ? nothing
-            : html`<p class="compose-sheet-hint">
-                ${this.labels.publishDateHint}
-              </p>`}
+        ${
+          publishedAtError
+            ? html`<p
+                class="compose-publish-date-status compose-publish-date-status-error"
+              >
+                ${publishedAtError}
+              </p>`
+            : hasValue
+              ? nothing
+              : html`<p class="compose-sheet-hint">
+                  ${this.labels.publishDateHint}
+                </p>`
+        }
       </div>
     `;
   }
@@ -5729,64 +5852,68 @@ export class JantComposeDialog extends LitElement {
             @input=${(e: Event) => this._onSlugInput(e, index)}
           />
         </div>
-        ${showSuggestion
-          ? html`
-              <button
-                type="button"
-                class="compose-slug-suggestion"
-                @click=${() => this._useSuggestedSlug()}
-              >
-                <span class="compose-slug-suggestion-label"
-                  >${this.labels.publishSlugSuggested}</span
+        ${
+          showSuggestion
+            ? html`
+                <button
+                  type="button"
+                  class="compose-slug-suggestion"
+                  @click=${() => this._useSuggestedSlug()}
                 >
-                <span class="compose-slug-suggestion-value"
-                  >/${this._suggestedSlug}</span
-                >
-                <span class="compose-slug-suggestion-icon" aria-hidden="true">
-                  <svg
-                    width="13"
-                    height="13"
-                    viewBox="0 0 14 14"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.4"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
+                  <span class="compose-slug-suggestion-label"
+                    >${this.labels.publishSlugSuggested}</span
                   >
-                    <path d="M3 7h8" />
-                    <path d="m8 3 4 4-4 4" />
-                  </svg>
-                </span>
-              </button>
-            `
-          : nothing}
-        ${slugStatus
-          ? html`<p
-              class=${classMap({
-                "compose-publish-slug-status": true,
-                "compose-publish-slug-status-error": Boolean(slugError),
-              })}
-              data-compose-slug-error=${slugError ? "true" : nothing}
-            >
-              ${slugStatus}
-            </p>`
-          : slugPreview
+                  <span class="compose-slug-suggestion-value"
+                    >/${this._suggestedSlug}</span
+                  >
+                  <span class="compose-slug-suggestion-icon" aria-hidden="true">
+                    <svg
+                      width="13"
+                      height="13"
+                      viewBox="0 0 14 14"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M3 7h8" />
+                      <path d="m8 3 4 4-4 4" />
+                    </svg>
+                  </span>
+                </button>
+              `
+            : nothing
+        }
+        ${
+          slugStatus
             ? html`<p
-                class="compose-publish-slug-preview"
-                data-compose-slug-preview
-                title=${slugPreview.full}
+                class=${classMap({
+                  "compose-publish-slug-status": true,
+                  "compose-publish-slug-status-error": Boolean(slugError),
+                })}
+                data-compose-slug-error=${slugError ? "true" : nothing}
               >
-                <span class="compose-publish-slug-preview-origin"
-                  >${slugPreview.origin}</span
-                ><span class="compose-publish-slug-preview-path"
-                  >${slugPreview.path}</span
-                >
+                ${slugStatus}
               </p>`
-            : this._hasPostManualSlug(index)
-              ? nothing
-              : html`<p class="compose-sheet-hint">
-                  ${this.labels.publishSlugHint}
-                </p>`}
+            : slugPreview
+              ? html`<p
+                  class="compose-publish-slug-preview"
+                  data-compose-slug-preview
+                  title=${slugPreview.full}
+                >
+                  <span class="compose-publish-slug-preview-origin"
+                    >${slugPreview.origin}</span
+                  ><span class="compose-publish-slug-preview-path"
+                    >${slugPreview.path}</span
+                  >
+                </p>`
+              : this._hasPostManualSlug(index)
+                ? nothing
+                : html`<p class="compose-sheet-hint">
+                    ${this.labels.publishSlugHint}
+                  </p>`
+        }
       </div>
     `;
   }
@@ -5986,12 +6113,14 @@ export class JantComposeDialog extends LitElement {
           "compose-post-meta-open": open,
         })}
       >
-        ${open
-          ? html`<div
-              class="compose-dropdown-backdrop"
-              @click=${() => this._closePostMeta()}
-            ></div>`
-          : nothing}
+        ${
+          open
+            ? html`<div
+                class="compose-dropdown-backdrop"
+                @click=${() => this._closePostMeta()}
+              ></div>`
+            : nothing
+        }
         <button
           type="button"
           class="compose-post-meta-pill"
@@ -6026,28 +6155,30 @@ export class JantComposeDialog extends LitElement {
             >${this._getPostSlugRowValue(index)}</span
           >
         </button>
-        ${open
-          ? html`<div
-              class="compose-post-meta-panel"
-              role="dialog"
-              aria-label=${this.labels.publishSettings}
-              tabindex="-1"
-              data-compose-post-meta-panel
-            >
-              ${this._renderPublishDateSection(index)}
-              ${this._renderPublishSlugSection(index)}
-              <div class="compose-post-meta-footer">
-                <button
-                  type="button"
-                  class="compose-publish-done"
-                  data-compose-post-meta-done
-                  @click=${() => this._closePostMeta()}
-                >
-                  ${this.labels.done}
-                </button>
-              </div>
-            </div>`
-          : nothing}
+        ${
+          open
+            ? html`<div
+                class="compose-post-meta-panel"
+                role="dialog"
+                aria-label=${this.labels.publishSettings}
+                tabindex="-1"
+                data-compose-post-meta-panel
+              >
+                ${this._renderPublishDateSection(index)}
+                ${this._renderPublishSlugSection(index)}
+                <div class="compose-post-meta-footer">
+                  <button
+                    type="button"
+                    class="compose-publish-done"
+                    data-compose-post-meta-done
+                    @click=${() => this._closePostMeta()}
+                  >
+                    ${this.labels.done}
+                  </button>
+                </div>
+              </div>`
+            : nothing
+        }
       </div>
     `;
   }
@@ -6224,40 +6355,46 @@ export class JantComposeDialog extends LitElement {
 
     return html`
       <div class="compose-sheet">
-        ${this._visibilityLocked
-          ? nothing
-          : html`
-              <p class="compose-sheet-label">
-                ${this.labels.publishVisibilityLabel}
-              </p>
-              <div
-                role="radiogroup"
-                aria-label=${this.labels.publishVisibilityLabel}
-              >
-                ${this._renderVisibilityRow(
-                  "public",
-                  this.labels.publishVisibilityPublic,
-                  this.labels.publishVisibilityPublicHint,
-                )}
-                ${this._renderVisibilityRow(
-                  "latest_hidden",
-                  this.labels.publishVisibilityHiddenFromLatest,
-                  this.labels.publishVisibilityHiddenFromLatestHint,
-                )}
-                ${this._renderVisibilityRow(
-                  "private",
-                  this.labels.publishVisibilityPrivate,
-                  this.labels.publishVisibilityPrivateHint,
-                )}
-              </div>
-            `}
-        ${this._replyToId
-          ? html`${this._visibilityLocked ? nothing : divider}
-            ${this._renderQuietReplySection()}`
-          : nothing}
-        ${hasSessionRows
-          ? html`${divider} ${saveDraftRow} ${draftsRow}`
-          : nothing}
+        ${
+          this._visibilityLocked
+            ? nothing
+            : html`
+                <p class="compose-sheet-label">
+                  ${this.labels.publishVisibilityLabel}
+                </p>
+                <div
+                  role="radiogroup"
+                  aria-label=${this.labels.publishVisibilityLabel}
+                >
+                  ${this._renderVisibilityRow(
+                    "public",
+                    this.labels.publishVisibilityPublic,
+                    this.labels.publishVisibilityPublicHint,
+                  )}
+                  ${this._renderVisibilityRow(
+                    "latest_hidden",
+                    this.labels.publishVisibilityHiddenFromLatest,
+                    this.labels.publishVisibilityHiddenFromLatestHint,
+                  )}
+                  ${this._renderVisibilityRow(
+                    "private",
+                    this.labels.publishVisibilityPrivate,
+                    this.labels.publishVisibilityPrivateHint,
+                  )}
+                </div>
+              `
+        }
+        ${
+          this._replyToId
+            ? html`${this._visibilityLocked ? nothing : divider}
+              ${this._renderQuietReplySection()}`
+            : nothing
+        }
+        ${
+          hasSessionRows
+            ? html`${divider} ${saveDraftRow} ${draftsRow}`
+            : nothing
+        }
       </div>
     `;
   }
@@ -6491,12 +6628,14 @@ export class JantComposeDialog extends LitElement {
             "compose-publish-group-open": this._showPublishPanel,
           })}
         >
-          ${this._showPublishPanel && !this._publishPanelFullscreen
-            ? html`<div
-                class="compose-dropdown-backdrop"
-                @click=${() => this._closePublishPanel(true)}
-              ></div>`
-            : nothing}
+          ${
+            this._showPublishPanel && !this._publishPanelFullscreen
+              ? html`<div
+                  class="compose-dropdown-backdrop"
+                  @click=${() => this._closePublishPanel(true)}
+                ></div>`
+              : nothing
+          }
           <div
             role="group"
             class=${classMap({
@@ -6519,35 +6658,37 @@ export class JantComposeDialog extends LitElement {
           <!-- Options sits past Publish as its own control rather than a
                chevron welded to it: a split button reads as one button, which
                is why nobody found the settings. -->
-          ${this._hasPublishPanelContent()
-            ? html`<button
-                type="button"
-                class=${classMap({
-                  "compose-options-trigger": true,
-                  "compose-options-trigger-open": this._showPublishPanel,
-                })}
-                ?disabled=${this._loading}
-                aria-haspopup="dialog"
-                aria-expanded=${this._showPublishPanel ? "true" : "false"}
-                aria-label=${this.labels.publishSettings}
-                title=${this.labels.publishSettings}
-                @click=${() => this._togglePublishPanel()}
-              >
-                <svg
-                  class="compose-options-trigger-icon"
-                  width="22"
-                  height="22"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
+          ${
+            this._hasPublishPanelContent()
+              ? html`<button
+                  type="button"
+                  class=${classMap({
+                    "compose-options-trigger": true,
+                    "compose-options-trigger-open": this._showPublishPanel,
+                  })}
+                  ?disabled=${this._loading}
+                  aria-haspopup="dialog"
+                  aria-expanded=${this._showPublishPanel ? "true" : "false"}
+                  aria-label=${this.labels.publishSettings}
+                  title=${this.labels.publishSettings}
+                  @click=${() => this._togglePublishPanel()}
                 >
-                  ${unsafeSVG(COMPOSE_PUBLISH_ACTION_ICONS.options)}
-                </svg>
-              </button>`
-            : nothing}
+                  <svg
+                    class="compose-options-trigger-icon"
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    ${unsafeSVG(COMPOSE_PUBLISH_ACTION_ICONS.options)}
+                  </svg>
+                </button>`
+              : nothing
+          }
           ${this._renderDesktopPublishPanel()}
         </div>
       </div>
@@ -6680,70 +6821,21 @@ export class JantComposeDialog extends LitElement {
         : this._format;
 
     if (this._threadItems.length === 0) {
-      // Entering thread mode: snapshot current single editor's state
-      const currentEditor = this._editor;
-      const editorState = currentEditor?.getEditorState() ?? null;
-      const editorData = currentEditor?.getData();
-      const bodyJson = currentEditor?.getNormalizedBodyJson() ?? null;
-
+      // Entering thread mode renders the post in a new editor element, so the
+      // single-post editor hands it everything once the swap has rendered.
+      // Reading the old element then, not now, picks up any upload that
+      // finished during the render.
+      const singleEditor = this._editor;
       this._threadItems = [
         { id: randomUUID(), format: this._format },
         { id: randomUUID(), format: lastFormat },
       ];
-
-      // Capture rating state before re-render (these can't change asynchronously)
-      const capturedRating = currentEditor?._rating ?? 0;
-      const capturedShowRating = currentEditor?._showRating ?? false;
-
-      // Restore first thread item's content from the snapshot
-      if (editorState || editorData) {
-        this.updateComplete.then(() => {
-          const editors = this.querySelectorAll<JantComposeEditor>(
-            "jant-compose-editor",
-          );
-          const firstEditor = editors[0];
-          if (!firstEditor) return;
-          if (editorState) {
-            firstEditor.setEditorState(
-              editorState.json,
-              editorState.title,
-              editorState.showTitle,
-              editorState.selection,
-            );
-          }
-          if (editorData) {
-            if (this._format === "link" && editorData.url) {
-              firstEditor._url = editorData.url;
-            } else if (this._format === "quote") {
-              if (editorData.quoteText)
-                firstEditor._quoteText = editorData.quoteText;
-              if (editorData.quoteAuthor)
-                firstEditor._quoteAuthor = editorData.quoteAuthor;
-            }
-            if (bodyJson) {
-              firstEditor._bodyJson = bodyJson;
-            }
-          }
-          // Read attachment state from the old editor NOW (after re-render) so
-          // we get the latest mediaId for any uploads that completed during the
-          // render cycle. The old editor element is still in memory even though
-          // it has been removed from the DOM.
-          const latestAttachments = currentEditor?._attachments ?? [];
-          const latestAttachmentOrder = currentEditor?._attachmentOrder ?? [];
-          const latestAttachedTexts = currentEditor?._attachedTexts ?? [];
-          if (latestAttachments.length > 0) {
-            firstEditor._attachments = [...latestAttachments];
-            firstEditor._attachmentOrder = [...latestAttachmentOrder];
-          }
-          if (latestAttachedTexts.length > 0) {
-            firstEditor._attachedTexts = [...latestAttachedTexts];
-          }
-          if (capturedRating > 0) {
-            firstEditor._rating = capturedRating;
-            firstEditor._showRating = capturedShowRating;
-          }
-        });
-      }
+      this.updateComplete.then(() => {
+        const rootEditor = this.querySelector<JantComposeEditor>(
+          "jant-compose-editor",
+        );
+        if (singleEditor && rootEditor) rootEditor.takeOver(singleEditor);
+      });
     } else {
       this._threadItems = [
         ...this._threadItems,
@@ -6768,67 +6860,32 @@ export class JantComposeDialog extends LitElement {
     if (this._threadItems.length <= 1) return;
     const newItems = this._threadItems.filter((_, i) => i !== index);
 
-    if (newItems.length === 1) {
-      // Exiting thread mode: capture remaining thread editor's state and restore
-      // it to the single-post editor after thread mode is cleared.
-      const editors = this.querySelectorAll<JantComposeEditor>(
-        "jant-compose-editor",
-      );
-      const remainingIndex = index === 0 ? 1 : 0;
-      const remainingEditor = editors[remainingIndex] ?? null;
-      const editorState = remainingEditor?.getEditorState() ?? null;
-      const editorData = remainingEditor?.getData();
-      const bodyJson = remainingEditor?.getNormalizedBodyJson() ?? null;
-      const remainingFormat = newItems[0].format;
-      // Capture rating state before re-render (can't change asynchronously)
-      const capturedRating = remainingEditor?._rating ?? 0;
-      const capturedShowRating = remainingEditor?._showRating ?? false;
+    // The root's permalink and date live on the dialog rather than on its
+    // thread item, so removing the root has to move the next post's own
+    // values up — otherwise the removed post's permalink and date stay behind
+    // on the post that replaces it, and that post's own are dropped.
+    if (index === 0) {
+      const promoted = newItems[0];
+      this._slug = promoted.slug ?? "";
+      this._slugTaken = promoted.slugTaken ?? false;
+      this._publishedAtInput = promoted.publishedAtInput ?? "";
+      this._publishedAtTimeMinutes = promoted.publishedAtTimeMinutes ?? null;
+    }
 
+    if (newItems.length === 1) {
+      // Leaving thread mode renders the last post in the single-post editor,
+      // which takes everything over from the thread editor it replaces.
+      const remainingEditor = this.querySelector<JantComposeEditor>(
+        `jant-compose-editor[data-thread-id="${newItems[0].id}"]`,
+      );
       this._threadItems = [];
       this._focusedThreadIndex = 0;
-      this._format = remainingFormat;
+      this._format = newItems[0].format;
 
       this.updateComplete.then(() => {
         const singleEditor = this._editor;
         if (!singleEditor) return;
-        singleEditor.format = remainingFormat;
-        if (editorState) {
-          singleEditor.setEditorState(
-            editorState.json,
-            editorState.title,
-            editorState.showTitle,
-            editorState.selection,
-          );
-        }
-        if (editorData) {
-          if (remainingFormat === "link" && editorData.url) {
-            singleEditor._url = editorData.url;
-          } else if (remainingFormat === "quote") {
-            if (editorData.quoteText)
-              singleEditor._quoteText = editorData.quoteText;
-            if (editorData.quoteAuthor)
-              singleEditor._quoteAuthor = editorData.quoteAuthor;
-          }
-          if (bodyJson) {
-            singleEditor._bodyJson = bodyJson;
-          }
-        }
-        // Read attachment state from the old editor NOW so we capture any
-        // mediaIds set by uploads that completed during the render cycle.
-        const latestAttachments = remainingEditor?._attachments ?? [];
-        const latestAttachmentOrder = remainingEditor?._attachmentOrder ?? [];
-        const latestAttachedTexts = remainingEditor?._attachedTexts ?? [];
-        if (latestAttachments.length > 0) {
-          singleEditor._attachments = [...latestAttachments];
-          singleEditor._attachmentOrder = [...latestAttachmentOrder];
-        }
-        if (latestAttachedTexts.length > 0) {
-          singleEditor._attachedTexts = [...latestAttachedTexts];
-        }
-        if (capturedRating > 0) {
-          singleEditor._rating = capturedRating;
-          singleEditor._showRating = capturedShowRating;
-        }
+        if (remainingEditor) singleEditor.takeOver(remainingEditor);
         singleEditor.focusInput();
       });
     } else {
@@ -6886,6 +6943,11 @@ export class JantComposeDialog extends LitElement {
         }}
         @jant:format-change=${(e: CustomEvent<{ format: ComposeFormat }>) => {
           e.stopPropagation();
+          this._convertForFormatSwitch(
+            e.target as JantComposeEditor,
+            item.format,
+            e.detail.format,
+          );
           this._threadItems = this._threadItems.map((it, i) =>
             i === index ? { ...it, format: e.detail.format } : it,
           );
@@ -6963,9 +7025,11 @@ export class JantComposeDialog extends LitElement {
         })}
         @jant:compose-content-changed=${() => this._scheduleDraftSave()}
       >
-        ${isReply
-          ? this._renderReplyContext()
-          : this._renderTranslationContext()}
+        ${
+          isReply
+            ? this._renderReplyContext()
+            : this._renderTranslationContext()
+        }
         <!-- Keyed by row id, not by position: an editor holds its own content,
              so an unkeyed list would reuse elements by position and drop the
              last one when a middle post is removed — taking that post's text
@@ -7066,41 +7130,46 @@ export class JantComposeDialog extends LitElement {
         ?inert=${this._addCollectionPanelOpen}
       >
         <div class="compose-scroll">
-          ${isOpeningEdit
-            ? this._renderEditLoadingState()
-            : isThreadMode
-              ? this._renderThreadComposeLayout()
-              : isReply
-                ? html`
-                    <div
-                      class="compose-thread-layout compose-reply-compose-layout"
-                    >
-                      ${this._renderReplyContext()}
-                      <div class="compose-editor-row is-current">
-                        <div class="compose-thread-dot"></div>
-                        ${editor}
+          ${
+            isOpeningEdit
+              ? this._renderEditLoadingState()
+              : isThreadMode
+                ? this._renderThreadComposeLayout()
+                : isReply
+                  ? html`
+                      <div
+                        class="compose-thread-layout compose-reply-compose-layout"
+                      >
+                        ${this._renderReplyContext()}
+                        <div class="compose-editor-row is-current">
+                          <div class="compose-thread-dot"></div>
+                          ${editor}
+                        </div>
+                        ${addThreadRow}
                       </div>
-                      ${addThreadRow}
-                    </div>
-                  `
-                : html`${this._renderTranslationContext()}${editor}${addThreadRow}`}
+                    `
+                  : html`${this._renderTranslationContext()}${editor}${addThreadRow}`
+          }
         </div>
-        ${isOpeningEdit
-          ? nothing
-          : html`<div
-                class=${classMap({
-                  "compose-action-row": true,
-                  "compose-action-row-without-collection": !!this._replyToId,
-                  "compose-action-row-overlay-open":
-                    this._showPublishPanel ||
-                    this._showCollection ||
-                    this._showLanguagePicker,
-                })}
-              >
-                ${this._replyToId ? nothing : this._renderCollectionSelector()}
-                ${this._renderLanguageControl()} ${this._renderPublishButton()}
-              </div>
-              ${this._renderQuickActionsRow()}`}
+        ${
+          isOpeningEdit
+            ? nothing
+            : html`<div
+                  class=${classMap({
+                    "compose-action-row": true,
+                    "compose-action-row-without-collection": !!this._replyToId,
+                    "compose-action-row-overlay-open":
+                      this._showPublishPanel ||
+                      this._showCollection ||
+                      this._showLanguagePicker,
+                  })}
+                >
+                  ${this._replyToId ? nothing : this._renderCollectionSelector()}
+                  ${this._renderLanguageControl()}
+                  ${this._renderPublishButton()}
+                </div>
+                ${this._renderQuickActionsRow()}`
+        }
         ${this._renderMobilePublishPanel()} ${this._renderAttachedPanel()}
         ${this._renderAltPanel()} ${this._renderDraftsPanel()}
         ${this._renderConfirmPanel()}

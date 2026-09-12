@@ -250,6 +250,51 @@ describe("language views filter content", () => {
     expect(xml).toContain('xml:lang="zh-Hans"');
   });
 
+  // A directory holding one of a site's feeds has no other way to learn the
+  // site publishes a second language: the feed is already filtered to one.
+  it("links each language's copy of the feed from every feed", async () => {
+    const { app } = await seedTwoLanguages();
+
+    const xml = await (await app.request("/en/latest/feed")).text();
+
+    expect(xml).toContain(
+      '<link href="http://localhost:3000/latest/feed" rel="alternate" type="application/atom+xml" hreflang="zh-Hans"/>',
+    );
+    expect(xml).toContain(
+      '<link href="http://localhost:3000/en/latest/feed" rel="alternate" type="application/atom+xml" hreflang="en"/>',
+    );
+  });
+
+  // `x-default` is defined for web pages a search engine ranks. A feed reader
+  // has no use for it, and Atom has no notion of a default alternate.
+  it("omits x-default from feed alternates", async () => {
+    const { app } = await seedTwoLanguages();
+
+    const xml = await (await app.request("/en/latest/feed")).text();
+
+    expect(xml).not.toContain("x-default");
+  });
+
+  it("declares Discover in each language's feed, pointing at that language", async () => {
+    const { app, services } = await seedTwoLanguages();
+    // Discover is opt-in, so the declaration under test only exists once the
+    // site has actually asked to be listed.
+    await services.settings.set("DISCOVER", "latest");
+
+    const root = await (await app.request("/latest/feed")).text();
+    const english = await (await app.request("/en/latest/feed")).text();
+
+    // Under `latest` the declaration names the featured feed too, and that
+    // one belongs to the same language as the feed carrying it. The status
+    // endpoint lives outside language views, so the view travels as `lang`.
+    expect(root).toContain(
+      '<jant:discover feed="http://localhost:3000/latest/feed" featured="http://localhost:3000/featured/feed" status="http://localhost:3000/api/discover/posts?lang=zh-Hans">latest</jant:discover>',
+    );
+    expect(english).toContain(
+      '<jant:discover feed="http://localhost:3000/en/latest/feed" featured="http://localhost:3000/en/featured/feed" status="http://localhost:3000/api/discover/posts?lang=en">latest</jant:discover>',
+    );
+  });
+
   it("keeps in-view links inside the view", async () => {
     const { app } = await seedTwoLanguages();
 

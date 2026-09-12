@@ -4,6 +4,7 @@
  * Single Source of Truth for all configuration fields.
  */
 
+import type { DiscoverMode } from "../lib/discover.js";
 import {
   MAX_SITE_DESCRIPTION_LENGTH,
   MAX_SITE_FOOTER_LENGTH,
@@ -226,7 +227,7 @@ export const CONFIG_FIELDS = {
     envKeys: ["DEMO_MODE"],
   },
   PAGE_SIZE: {
-    defaultValue: "50",
+    defaultValue: "25",
     envOnly: false,
     envKeys: ["PAGE_SIZE"],
     editor: { type: "number", min: 1, max: 100, step: 1 },
@@ -465,6 +466,30 @@ export const CONFIG_FIELDS = {
     envOnly: false,
     envKeys: ["RSS_FEEDS_ENABLED"],
     editor: { type: "boolean" },
+  },
+  // No default value, and deliberately no `editor`. "Never chosen" has to stay
+  // tellable apart from an explicit choice — an unset site falls through to
+  // `noindex` and then to the deployment default, an explicit one does not —
+  // and Config Editor has no way to show a field whose default is "unset": it
+  // requires every editable field to resolve to a concrete valid value. The
+  // effective mode is derived in `lib/discover.ts`, and the checkbox in
+  // settings/general is where this is edited.
+  //
+  // The binding is read as this deployment's default rather than as the
+  // site's answer, which is how hosted Jant lists its fleet while a
+  // self-hosted site, with nothing set anywhere, stays out until asked.
+  DISCOVER: {
+    defaultValue: "",
+    envOnly: false,
+    envKeys: ["DISCOVER"],
+  },
+  // What the last announcement to the directory came to. State, not
+  // configuration — nobody edits this — so it is internal like
+  // `ONBOARDING_STATUS`. Shape and reasoning in `lib/discover-ping.ts`.
+  DISCOVER_ANNOUNCE_STATE: {
+    defaultValue: "",
+    envOnly: false,
+    internal: true,
   },
   DISCOVERY_COMPOSE_OPEN_SHORTCUT_AT: {
     defaultValue: "",
@@ -740,6 +765,12 @@ export interface AppConfig {
   siteFooter: string;
   showJantBrandingOnHome: boolean;
   noindex: boolean;
+  /**
+   * Effective Jant Discover mode this site's feeds declare. Derived from the
+   * `DISCOVER` setting plus the demo, `noindex`, and feeds-enabled rules in
+   * `lib/discover.ts` — never the stored value on its own.
+   */
+  discover: DiscoverMode;
   /** Whether published content can be read from JSON APIs without authentication. */
   publicApiEnabled: boolean;
   /** Whether the site publishes its Atom feed endpoints. */
@@ -799,8 +830,14 @@ export interface AppConfig {
   // Site appearance (DB internal)
   siteAvatar: string;
   showHeaderAvatar: boolean;
-  /** Derived: getMediaUrl(siteAvatar, publicUrl) */
+  /** Derived: getMediaUrl(siteAvatar, publicUrl) — full resolution, for the
+   *  social card, the settings editor, and anything that syncs the canonical
+   *  asset. */
   siteAvatarUrl: string;
+  /** Derived: `siteAvatarUrl` sized for the header and drawer marks, which
+   *  render it at 32px and 24px. Falls back to `siteAvatarUrl` when no image
+   *  transform is configured. */
+  siteAvatarThumbUrl: string;
   faviconVersion: string;
 
   // Rate limiting (ENV only)

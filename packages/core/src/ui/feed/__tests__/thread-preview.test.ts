@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
 import type { Context } from "hono";
 import { renderToString } from "hono/jsx/dom/server";
 import { describe, expect, it } from "vitest";
+import { readComponentCss } from "../../../__tests__/helpers/component-css.js";
 import { I18nProvider } from "../../../i18n/context.js";
 import { createI18n } from "../../../i18n/i18n.js";
 import type { PostView, TimelineItemView } from "../../../types.js";
@@ -36,8 +36,7 @@ function createPostView(overrides: Partial<PostView> = {}): PostView {
 
 function renderWithI18n(
   render: () =>
-    | ReturnType<typeof ThreadPreview>
-    | ReturnType<typeof CuratedThreadPreview>,
+    ReturnType<typeof ThreadPreview> | ReturnType<typeof CuratedThreadPreview>,
 ) {
   const i18n = createI18n("en");
   const c = {
@@ -157,10 +156,7 @@ describe("getThreadPreviewState", () => {
   });
 
   it("keeps thread preview items shrinkable within the grid track", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
 
     expect(css).toMatch(
       /\.thread-item\s*\{[\s\S]*min-width:\s*0;[\s\S]*max-width:\s*100%;/,
@@ -168,17 +164,14 @@ describe("getThreadPreviewState", () => {
   });
 
   it("adds extra mobile inset before the thread rail reaches the viewport edge", () => {
-    const css = readFileSync(
-      new URL("../../../styles/ui.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
 
     expect(css).toMatch(
-      /@media\s*\(max-width:\s*760px\)\s*\{[\s\S]*\.thread-group-preview,\s*\.thread-group-detail\s*\{[\s\S]*--site-thread-rail-indent:\s*8px;[\s\S]*--site-thread-rail-line-left:\s*-11px;/,
+      /@media\s*\(max-width:\s*699px\)\s*\{[\s\S]*\.thread-group-preview,\s*\.thread-group-detail\s*\{[\s\S]*--site-thread-rail-indent:\s*8px;[\s\S]*--site-thread-rail-line-left:\s*-11px;/,
     );
     // dot-left is no longer hardcoded — derived via calc() from line-left
     expect(css).not.toMatch(
-      /@media\s*\(max-width:\s*760px\)\s*\{[\s\S]*--site-thread-rail-dot-left:/,
+      /@media\s*\(max-width:\s*699px\)\s*\{[\s\S]*--site-thread-rail-dot-left:/,
     );
   });
 
@@ -400,7 +393,7 @@ describe("getThreadPreviewState", () => {
     expect(toggleTag(html)).not.toContain("hidden");
   });
 
-  it("points the hidden-posts gap link to the second reply so the detail page opens just above the hidden range", () => {
+  it("points the hidden-posts gap link at the first post it hides", () => {
     const html = renderWithI18n(() =>
       ThreadPreview({
         rootPost: createPostView({ bodyHtml: "<p>Root</p>" }),
@@ -427,16 +420,20 @@ describe("getThreadPreviewState", () => {
           bodyHtml: "<p>Latest</p>",
           isLastInThread: true,
         }),
+        gapHref: "/post-3",
         totalReplyCount: 4,
       }),
     );
 
     expect(html).toMatch(
-      /<a[^>]*\bhref="\/post-2"[^>]*\bclass="thread-gap-link"|<a[^>]*\bclass="thread-gap-link"[^>]*\bhref="\/post-2"/,
+      /<a[^>]*\bhref="\/post-3"[^>]*\bclass="thread-gap-link"|<a[^>]*\bclass="thread-gap-link"[^>]*\bhref="\/post-3"/,
     );
   });
 
-  it("falls back to the latest reply for the gap link when there is no second reply", () => {
+  // The gap target comes from the service, one rank past the leading window.
+  // It can be missing where the count and the fetch disagree — a reply
+  // unpublished between them — and the link still has to go somewhere.
+  it("falls back to the latest reply when no gap target arrives", () => {
     const html = renderWithI18n(() =>
       ThreadPreview({
         rootPost: createPostView({ bodyHtml: "<p>Root</p>" }),

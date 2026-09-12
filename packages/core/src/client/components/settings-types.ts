@@ -25,7 +25,7 @@ export interface SettingsLabels {
   editAboutPage: string;
   timeSection: string;
   home: string;
-  search: string;
+  siteVisibility: string;
   siteName: string;
   aboutBlog: string;
   aboutBlogHelp: string;
@@ -37,6 +37,7 @@ export interface SettingsLabels {
   mainRssFeedWarning: string;
   availableFeedUrls: string;
   availableFeedUrlsHelp: string;
+  feedsDocs: string;
   mainFeedUrl: string;
   latestFeedUrl: string;
   featuredFeedUrl: string;
@@ -53,6 +54,15 @@ export interface SettingsLabels {
   // Search
   allowIndexing: string;
   demoSeoLocked: string;
+  discoverName: string;
+  discoverRules: string;
+  discoverEnabled: string;
+  discoverIntro: string;
+  discoverDemoLocked: string;
+  discoverFeedsOffLocked: string;
+  discoverSearchOff: string;
+  discoverAnnounce: string;
+  discoverAnnounceManual: string;
 
   // Actions
   save: string;
@@ -76,6 +86,8 @@ export interface SettingsInitialData {
   siteFooter: string;
   showJantBrandingOnHome: boolean;
   noindex: boolean;
+  /** Stored Discover choice; "" when the owner has never used the control. */
+  discover: string;
 }
 
 export type SettingsAboutPageStatus =

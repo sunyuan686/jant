@@ -40,7 +40,7 @@ const labels: SettingsLabels = {
   editAboutPage: "Edit About page",
   timeSection: "Time",
   home: "Home",
-  search: "Search",
+  siteVisibility: "Site visibility",
   siteName: "Site Name",
   aboutBlog: "About this blog",
   aboutBlogHelp: "Displayed above your blog posts.",
@@ -69,11 +69,24 @@ const labels: SettingsLabels = {
     'Show "Build with Jant" at the bottom of the home page',
   allowIndexing: "Allow search engines to index my site",
   demoSeoLocked: "Demo sites always stay hidden from search engines.",
+  discoverName: "Jant Discover",
+  discoverRules: "Discover community rules",
+  discoverEnabled: "Allow Jant Discover to list my site",
+  discoverIntro:
+    "Jant Discover is a directory of Jant blogs, curated by hand by the Jant community to help people find new Jant blogs and posts. A post you mark Featured appears on the Discover home page 24 hours later, and link and quote posts appear on the Links and Quotes lists 24 hours after they are published. You can keep editing them in the meantime. See the Discover community rules.",
+  discoverDemoLocked: "Demo sites are never listed in Discover.",
+  discoverFeedsOffLocked:
+    "Discover reads your Atom feed, so it needs feeds turned on.",
+  discoverSearchOff:
+    "Search engine indexing is off, so this site is not listed by default. Ticking the box above lists it anyway.",
+  discoverAnnounce: "Announce my site",
+  discoverAnnounceManual: "Or submit your address by hand",
   save: "Save",
   cancel: "Cancel",
   copy: "Copy",
   copyFailed: "Could not copy. Try again.",
   feedUrlCopied: "Feed URL copied.",
+  feedsDocs: "All feed addresses",
 };
 
 async function createElement(

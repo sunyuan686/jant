@@ -8,6 +8,7 @@ import type {
   SettingsAboutPageStatus,
 } from "../settings-types.js";
 import { MAX_SITE_NAME_LENGTH } from "../../../types.js";
+import type { DiscoverPageUrls } from "../../../lib/discover.js";
 import "../jant-settings-general.js";
 import type { JantSettingsGeneral } from "../jant-settings-general.js";
 
@@ -41,13 +42,18 @@ function findRadioByValue(
   );
 }
 
+/**
+ * Matched exactly: "Site" is a prefix of "Site visibility", so a substring
+ * match would find whichever of the two comes first on the page.
+ */
 function findSectionByHeading(
   el: HTMLElement,
   headingText: string,
 ): HTMLElement | null {
   return (
-    Array.from(el.querySelectorAll<HTMLElement>("section")).find((section) =>
-      section.querySelector("h3")?.textContent?.includes(headingText),
+    Array.from(el.querySelectorAll<HTMLElement>("section")).find(
+      (section) =>
+        section.querySelector("h3")?.textContent?.trim() === headingText,
     ) ?? null
   );
 }
@@ -83,7 +89,7 @@ const labels: SettingsLabels = {
   editAboutPage: "Edit About page",
   timeSection: "Time",
   home: "Home",
-  search: "Search",
+  siteVisibility: "Site visibility",
   siteName: "Site Name",
   aboutBlog: "About this blog",
   aboutBlogHelp: "Displayed above your blog posts.",
@@ -112,11 +118,24 @@ const labels: SettingsLabels = {
   markdownSupported: "Markdown supported",
   allowIndexing: "Allow search engines to index my site",
   demoSeoLocked: "Demo sites always stay hidden from search engines.",
+  discoverName: "Jant Discover",
+  discoverRules: "Discover community rules",
+  discoverEnabled: "Allow Jant Discover to list my site",
+  discoverIntro:
+    "Jant Discover is a directory of Jant blogs, curated by hand by the Jant community to help people find new Jant blogs and posts. A post you mark Featured appears on the Discover home page 24 hours later, and link and quote posts appear on the Links and Quotes lists 24 hours after they are published. You can keep editing them in the meantime. See the Discover community rules.",
+  discoverDemoLocked: "Demo sites are never listed in Discover.",
+  discoverFeedsOffLocked:
+    "Discover reads your Atom feed, so it needs feeds turned on.",
+  discoverSearchOff:
+    "Search engine indexing is off, so this site is not listed by default. Ticking the box above lists it anyway.",
+  discoverAnnounce: "Announce my site",
+  discoverAnnounceManual: "Or submit your address by hand",
   save: "Save",
   cancel: "Cancel",
   copy: "Copy",
   copyFailed: "Could not copy. Try again.",
   feedUrlCopied: "Feed URL copied.",
+  feedsDocs: "All feed addresses",
 };
 
 const timezones: SettingsTimezone[] = [
@@ -132,6 +151,14 @@ const initialData = {
   siteFooter: "Footer text",
   showJantBrandingOnHome: false,
   noindex: false,
+  discover: "",
+};
+
+const discoverPages: DiscoverPageUrls = {
+  home: "https://jant.me/discover",
+  links: "https://jant.me/links",
+  quotes: "https://jant.me/quotes",
+  rules: "https://jant.me/discover/about",
 };
 
 function findCheckboxByLabel(
@@ -145,10 +172,27 @@ function findCheckboxByLabel(
   );
 }
 
+/**
+ * The Discover help line, found by its text: it is one of several muted
+ * paragraphs in the section, and only this one carries the directory's links.
+ */
+function findIntroParagraph(el: HTMLElement): HTMLElement | null {
+  return (
+    Array.from(el.querySelectorAll<HTMLElement>("p")).find(
+      (paragraph) => paragraph.textContent?.trim() === labels.discoverIntro,
+    ) ?? null
+  );
+}
+
 async function createElement(
   opts: {
     demoMode?: boolean;
+    feedsEnabled?: boolean;
     aboutPage?: SettingsAboutPageStatus;
+    /** The deployment's own answer: "" when it has none. */
+    discoverDefault?: string;
+    /** Serialized status view, as the server hands it to the component. */
+    discoverStatus?: string;
   } = {},
 ): Promise<JantSettingsGeneral> {
   const el = document.createElement(
@@ -171,6 +215,10 @@ async function createElement(
   el.aboutEditUrl = "/about?edit=1";
   el.aboutCreateUrl = "/settings/general/about-page";
   el.demoMode = opts.demoMode ?? false;
+  el.discoverPages = discoverPages;
+  el.discoverDefault = opts.discoverDefault ?? "";
+  el.discoverStatus = opts.discoverStatus ?? "";
+  el.feedsEnabled = opts.feedsEnabled ?? true;
   document.body.appendChild(el);
   await el.updateComplete;
   el.initData(initialData);
@@ -192,10 +240,10 @@ describe("JantSettingsGeneral", () => {
     expect(el.querySelector("h2")?.textContent).toBe("General");
     expect(groupTitles).toEqual([
       labels.site,
-      labels.timeSection,
+      labels.siteVisibility,
       labels.feeds,
+      labels.timeSection,
       labels.home,
-      labels.search,
     ]);
 
     const siteSection = requireElement(
@@ -308,26 +356,37 @@ describe("JantSettingsGeneral", () => {
     ]);
   });
 
-  it("copies a feed URL from the info block", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(globalThis.navigator, "clipboard", {
-      value: { writeText },
-      configurable: true,
-    });
-
+  it("marks up each feed URL for the copy-field enhancer", async () => {
     const el = await createElement();
     const feedSection = requireElement(
       findSectionByHeading(el, labels.feeds),
       "expected feeds section",
     );
-    const copyButtons = feedSection.querySelectorAll<HTMLButtonElement>(
-      "button[data-copy-feed-url]",
+    const fields = feedSection.querySelectorAll("[data-copy-field-root]");
+
+    expect(fields).toHaveLength(4);
+
+    const firstField = requireElement(
+      fields[0],
+      "expected the main feed field",
+    );
+    const input = requireElement(
+      firstField.querySelector<HTMLInputElement>(
+        "input[data-copy-field-value]",
+      ),
+      "expected the address input",
+    );
+    const button = requireElement(
+      firstField.querySelector<HTMLButtonElement>("button[data-copy-field]"),
+      "expected the copy button",
     );
 
-    copyButtons[0]?.click();
-    await Promise.resolve();
-
-    expect(writeText).toHaveBeenCalledWith("/feed");
+    expect(input.value).toBe("/feed");
+    expect(button.getAttribute("data-copy-field")).toBe(labels.feedUrlCopied);
+    expect(button.getAttribute("data-copy-field-failed")).toBe(
+      labels.copyFailed,
+    );
+    expect(button.textContent).toContain(labels.copy);
   });
 
   it("tracks site group dirty state on input", async () => {
@@ -405,7 +464,35 @@ describe("JantSettingsGeneral", () => {
     );
   });
 
-  it("includes mainRssFeed in feed section save", async () => {
+  it("auto-saves the main RSS feed choice without a save button", async () => {
+    const el = await createElement();
+    const latestRadio = requireElement(
+      findRadioByValue(el, "main-rss-feed", "latest"),
+      "expected latest radio option",
+    );
+
+    expect(findSaveButtonByHeading(el, labels.feeds)).toBeNull();
+
+    let detail: SettingsSaveDetail | null = null;
+    el.addEventListener("jant:settings-save", (event) => {
+      detail = (event as CustomEvent<SettingsSaveDetail>).detail;
+    });
+
+    latestRadio.click();
+    await el.updateComplete;
+
+    expect(detail).not.toBeNull();
+    expect((detail as unknown as SettingsSaveDetail).endpoint).toBe(
+      "/settings/general/feeds",
+    );
+    expect((detail as unknown as SettingsSaveDetail).section).toBe("feeds");
+    expect((detail as unknown as SettingsSaveDetail).data.mainRssFeed).toBe(
+      "latest",
+    );
+    expect(latestRadio.checked).toBe(true);
+  });
+
+  it("sectionError for the feed choice restores the saved value", async () => {
     const el = await createElement();
     const latestRadio = requireElement(
       findRadioByValue(el, "main-rss-feed", "latest"),
@@ -414,23 +501,18 @@ describe("JantSettingsGeneral", () => {
 
     latestRadio.click();
     await el.updateComplete;
+    expect(latestRadio.checked).toBe(true);
 
-    let detail: SettingsSaveDetail | null = null;
-    el.addEventListener("jant:settings-save", (event) => {
-      detail = (event as CustomEvent<SettingsSaveDetail>).detail;
-    });
-
-    const saveBtn = findSaveButtonByHeading(el, labels.feeds);
-    saveBtn?.click();
+    el.sectionError("feeds");
     await el.updateComplete;
 
-    expect(detail).not.toBeNull();
-    expect((detail as unknown as SettingsSaveDetail).endpoint).toBe(
-      "/settings/general/feeds",
-    );
-    expect((detail as unknown as SettingsSaveDetail).data.mainRssFeed).toBe(
-      "latest",
-    );
+    expect(latestRadio.checked).toBe(false);
+    expect(
+      requireElement(
+        findRadioByValue(el, "main-rss-feed", "featured"),
+        "expected featured radio option",
+      ).checked,
+    ).toBe(true);
   });
 
   it("sectionSaved resets site dirty state and updates originals", async () => {
@@ -589,5 +671,437 @@ describe("JantSettingsGeneral", () => {
     expect(saveBtn?.disabled).toBe(true);
     const spinner = saveBtn?.querySelector("svg.animate-spin");
     expect(spinner).not.toBeNull();
+  });
+
+  /**
+   * Every control here saves on change, like the indexing checkbox beside it:
+   * ticking the box stores the default mode, and a mode is stored the moment
+   * it is picked. Ticking the box is also how a self-hosted site opts in, and
+   * that first save is what announces it to the directory.
+   */
+  describe("Discover", () => {
+    it("renders the section under Site visibility", async () => {
+      const el = await createElement();
+
+      expect(findSectionByHeading(el, labels.siteVisibility)).not.toBeNull();
+      expect(el.textContent).toContain(labels.discoverEnabled);
+      expect(el.textContent).toContain(labels.discoverIntro);
+    });
+
+    // Opt-in: a self-hosted site nobody configured shows the box unticked.
+    it("starts off for a site with no deployment default", async () => {
+      const el = await createElement();
+      const toggle = requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      );
+
+      expect(toggle.checked).toBe(false);
+
+      toggle.click();
+      await el.updateComplete;
+
+      expect(toggle.checked).toBe(true);
+    });
+
+    // Hosted Jant sets `DISCOVER=latest`, and an owner who has never opened
+    // this page must not be shown "off" while their feeds say otherwise.
+    it("starts on when the deployment lists its blogs", async () => {
+      const el = await createElement({ discoverDefault: "latest" });
+
+      expect(
+        requireElement(
+          findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+          "expected the Discover checkbox",
+        ).checked,
+      ).toBe(true);
+    });
+
+    // The section carries no Save button of its own: the only button it can
+    // render is the announcement retry, which needs a failed announcement.
+    it("offers no Save button", async () => {
+      const el = await createElement();
+      const section = requireElement(
+        findSectionByHeading(el, labels.siteVisibility),
+        "expected the Site visibility section",
+      );
+
+      expect(section.querySelectorAll("button").length).toBe(0);
+    });
+
+    it("sends latest when the box is ticked", async () => {
+      const el = await createElement();
+      let detail: SettingsSaveDetail | null = null;
+      el.addEventListener("jant:settings-save", (event) => {
+        detail = (event as CustomEvent<SettingsSaveDetail>).detail;
+      });
+
+      requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      ).click();
+      await el.updateComplete;
+
+      const d = detail as unknown as SettingsSaveDetail;
+      expect(d.endpoint).toBe("/settings/general/discover");
+      expect(d.section).toBe("discover");
+      expect(d.data.discover).toBe("latest");
+    });
+
+    it("sends off when the box is unticked", async () => {
+      const el = await createElement({ discoverDefault: "latest" });
+      let detail: SettingsSaveDetail | null = null;
+      el.addEventListener("jant:settings-save", (event) => {
+        detail = (event as CustomEvent<SettingsSaveDetail>).detail;
+      });
+
+      requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      ).click();
+      await el.updateComplete;
+
+      expect((detail as unknown as SettingsSaveDetail).data.discover).toBe(
+        "off",
+      );
+    });
+
+    // A site that chose the old featured-only mode reads as on, and the box
+    // widens it only when the owner ticks it again — never on its own.
+    it("keeps a stored featured choice ticked, and writes latest on re-tick", async () => {
+      const el = await createElement();
+      el.initData({ ...initialData, discover: "featured" });
+      await el.updateComplete;
+      const details: SettingsSaveDetail[] = [];
+      el.addEventListener("jant:settings-save", (event) => {
+        details.push((event as CustomEvent<SettingsSaveDetail>).detail);
+      });
+
+      const toggle = requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      );
+      expect(toggle.checked).toBe(true);
+      expect(details).toHaveLength(0);
+
+      toggle.click();
+      await el.updateComplete;
+      expect(details[0]?.data.discover).toBe("off");
+
+      el.sectionSaved("discover");
+      await el.updateComplete;
+      requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      ).click();
+      await el.updateComplete;
+      expect(details[1]?.data.discover).toBe("latest");
+    });
+
+    // The controls stay disabled until the save answers, so a second click
+    // cannot race the first.
+    it("disables the controls while a save is in flight", async () => {
+      const el = await createElement({ discoverDefault: "latest" });
+      const toggle = requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      );
+
+      toggle.click();
+      await el.updateComplete;
+
+      expect(toggle.disabled).toBe(true);
+
+      el.sectionSaved("discover");
+      await el.updateComplete;
+
+      expect(
+        requireElement(
+          findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+          "expected the Discover checkbox",
+        ).disabled,
+      ).toBe(false);
+    });
+
+    // A failed save leaves the page describing the site as it still is.
+    it("restores the stored choice when the save fails", async () => {
+      const el = await createElement({ discoverDefault: "latest" });
+      const toggle = requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      );
+
+      toggle.click();
+      await el.updateComplete;
+      el.sectionError("discover");
+      await el.updateComplete;
+
+      expect(
+        requireElement(
+          findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+          "expected the Discover checkbox",
+        ).checked,
+      ).toBe(true);
+    });
+
+    it("locks the control off for a demo site", async () => {
+      const el = await createElement({ demoMode: true });
+      const toggle = requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      );
+
+      expect(toggle.disabled).toBe(true);
+      expect(toggle.checked).toBe(false);
+      expect(el.textContent).toContain(labels.discoverDemoLocked);
+    });
+
+    // Discover reads the Atom feed, so with feeds off there is nothing to read.
+    it("locks the control off when the site publishes no feeds", async () => {
+      const el = await createElement({ feedsEnabled: false });
+      const toggle = requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      );
+
+      expect(toggle.disabled).toBe(true);
+      expect(el.textContent).toContain(labels.discoverFeedsOffLocked);
+    });
+
+    // What Discover is, is best answered by the list itself, so the sentence
+    // explaining the list is the way into it: the name goes to the home, the
+    // list names to the lists, and the rules to the page of rules.
+    it("links each page the help line names to that page", async () => {
+      const el = await createElement();
+      const intro = requireElement(
+        findIntroParagraph(el),
+        "expected the Discover help line",
+      );
+      const links = Array.from(intro.querySelectorAll<HTMLAnchorElement>("a"));
+
+      expect(
+        links.map((link) => [link.textContent, link.getAttribute("href")]),
+      ).toEqual([
+        [labels.discoverName, discoverPages.home],
+        ["Links", discoverPages.links],
+        ["Quotes", discoverPages.quotes],
+        [labels.discoverRules, discoverPages.rules],
+      ]);
+      for (const link of links) {
+        expect(link.getAttribute("target")).toBe("_blank");
+        expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+        expect(link.className).toContain("underline");
+      }
+      // The whole line still reads as one sentence.
+      expect(intro.textContent?.trim()).toBe(labels.discoverIntro);
+    });
+
+    // A `<label>` forwards a click on any descendant to its control, so a link
+    // inside it would open the directory and flip the setting on the way out.
+    it("keeps the directory link out of the checkbox label", async () => {
+      const el = await createElement();
+      const label = requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled)?.closest("label"),
+        "expected the Discover checkbox label",
+      );
+
+      expect(label.querySelector("a")).toBeNull();
+      expect(label.textContent).toContain(labels.discoverEnabled);
+    });
+
+    // A directory this deployment does not announce to has no address to
+    // link, and a sentence with a dead link in it is worse than a plain one.
+    it("renders the help line as plain text with no directory configured", async () => {
+      const el = await createElement();
+      el.discoverPages = null;
+      await el.updateComplete;
+
+      const intro = requireElement(
+        findIntroParagraph(el),
+        "expected the Discover help line",
+      );
+
+      expect(intro.querySelector("a")).toBeNull();
+      expect(intro.textContent?.trim()).toBe(labels.discoverIntro);
+    });
+
+    // The two checkboxes are one rule read twice. Search indexing gates the
+    // deployment default, so a page that answers the second from a value the
+    // server resolved at load time goes on claiming a listing the feed has
+    // already stopped declaring — right until the owner reloads and finds out.
+    it("unticks Discover when search indexing is turned off", async () => {
+      const el = await createElement({ discoverDefault: "latest" });
+      const discover = requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      );
+      const indexing = requireElement(
+        findCheckboxByLabel(el, labels.allowIndexing) ?? null,
+        "expected the indexing checkbox",
+      );
+      expect(discover.checked).toBe(true);
+
+      indexing.click();
+      await el.updateComplete;
+
+      expect(discover.checked).toBe(false);
+    });
+
+    // A control that moves on its own has to say why it moved.
+    it("says why the box unticked itself", async () => {
+      const el = await createElement({ discoverDefault: "latest" });
+      expect(el.textContent).not.toContain(labels.discoverSearchOff);
+
+      requireElement(
+        findCheckboxByLabel(el, labels.allowIndexing) ?? null,
+        "expected the indexing checkbox",
+      ).click();
+      await el.updateComplete;
+
+      expect(el.textContent).toContain(labels.discoverSearchOff);
+    });
+
+    // Nothing was holding this site back: the deployment lists nothing by
+    // default, so an unticked box is the opt-in it has always been.
+    it("says nothing about search on a site no default would list", async () => {
+      const el = await createElement();
+
+      requireElement(
+        findCheckboxByLabel(el, labels.allowIndexing) ?? null,
+        "expected the indexing checkbox",
+      ).click();
+      await el.updateComplete;
+
+      expect(el.textContent).not.toContain(labels.discoverSearchOff);
+    });
+
+    // An owner who answered Discover is not being held back by anything: the
+    // stored choice is read first, whichever way it went.
+    it("says nothing about search once the owner has answered", async () => {
+      const el = await createElement({ discoverDefault: "latest" });
+      const discover = requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      );
+
+      discover.click();
+      await el.updateComplete;
+      el.sectionSaved("discover");
+      await el.updateComplete;
+
+      requireElement(
+        findCheckboxByLabel(el, labels.allowIndexing) ?? null,
+        "expected the indexing checkbox",
+      ).click();
+      await el.updateComplete;
+
+      expect(discover.checked).toBe(false);
+      expect(el.textContent).not.toContain(labels.discoverSearchOff);
+    });
+
+    it("ticks Discover again when search indexing comes back", async () => {
+      const el = await createElement({ discoverDefault: "latest" });
+      const indexing = requireElement(
+        findCheckboxByLabel(el, labels.allowIndexing) ?? null,
+        "expected the indexing checkbox",
+      );
+
+      indexing.click();
+      await el.updateComplete;
+      el.sectionSaved("search");
+      await el.updateComplete;
+      indexing.click();
+      await el.updateComplete;
+      el.sectionSaved("search");
+      await el.updateComplete;
+
+      expect(
+        requireElement(
+          findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+          "expected the Discover checkbox",
+        ).checked,
+      ).toBe(true);
+    });
+
+    // An owner who ticked the box meant it, and turning off search indexing
+    // does not quietly undo it — the server reads it the same way.
+    it("leaves a stored choice alone when search indexing is turned off", async () => {
+      const el = await createElement({ discoverDefault: "latest" });
+      const discover = requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      );
+
+      discover.click();
+      await el.updateComplete;
+      el.sectionSaved("discover");
+      await el.updateComplete;
+      discover.click();
+      await el.updateComplete;
+      el.sectionSaved("discover");
+      await el.updateComplete;
+      expect(discover.checked).toBe(true);
+
+      requireElement(
+        findCheckboxByLabel(el, labels.allowIndexing) ?? null,
+        "expected the indexing checkbox",
+      ).click();
+      await el.updateComplete;
+
+      expect(discover.checked).toBe(true);
+    });
+
+    // The status is what the server sent with the page, and it sends a line
+    // only when there is something to say. A site whose setting is doing what
+    // it says is handed nothing, and no heading is left behind to announce an
+    // empty block. Ticking the box does not conjure one either: the lines are
+    // recomputed on the next page load.
+    it("drops the status block when the server sends no lines", async () => {
+      const el = await createElement({
+        discoverStatus: JSON.stringify({
+          lines: [],
+          showAnnounce: false,
+          submitUrl: null,
+        }),
+      });
+
+      expect(el.querySelector(".border-t.pt-3")).toBeNull();
+
+      requireElement(
+        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
+        "expected the Discover checkbox",
+      ).click();
+      await el.updateComplete;
+
+      expect(el.querySelector(".border-t.pt-3")).toBeNull();
+    });
+
+    it("shows the status the server sent for a listed site", async () => {
+      const el = await createElement({
+        discoverDefault: "latest",
+        discoverStatus: JSON.stringify({
+          lines: ["Not announced yet."],
+          showAnnounce: false,
+          submitUrl: null,
+        }),
+      });
+
+      expect(el.textContent).toContain("Not announced yet.");
+    });
+
+    // The lines and the button are separate halves of the same block, so the
+    // block cannot key its existence on the lines alone.
+    it("keeps the block for an announce button with no lines", async () => {
+      const el = await createElement({
+        discoverDefault: "latest",
+        discoverStatus: JSON.stringify({
+          lines: [],
+          showAnnounce: true,
+          submitUrl: null,
+        }),
+      });
+
+      expect(el.textContent).toContain(labels.discoverAnnounce);
+    });
   });
 });

@@ -14,6 +14,7 @@ import { raw } from "hono/utils/html";
 import { escapeHtml } from "../../lib/html.js";
 import { msg } from "@lingui/core/macro";
 import {
+  getPreconnectHints,
   getPublicAssetBasePath,
   toAssetPath,
   toPublicAssetPath,
@@ -26,6 +27,8 @@ import type { LanguageAlternate } from "../../lib/view-language.js";
 import { toLanguagePrefix } from "../../i18n/locales.js";
 import {
   CLIENT_AUTH_JS_FILE,
+  CLIENT_AUTHOR_CSS_FILE,
+  CLIENT_COMPOSE_PRELOAD,
   CLIENT_CJK_CSS_FILE,
   CLIENT_CJK_JP_CSS_FILE,
   CLIENT_CJK_KR_CSS_FILE,
@@ -198,6 +201,13 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
       appConfig?.s3PublicUrl,
       appConfig?.localPublicUrl,
     ) ?? "";
+  // Empty unless assets or media live on their own host; the two collapse to
+  // one set of hints when they share a host.
+  const preconnectHints = getPreconnectHints({
+    assetBasePath,
+    mediaBaseUrl: mediaBase,
+    siteUrl: appConfig?.siteUrl,
+  });
   const currentUrl = c ? c.get("publicRequestUrl") : undefined;
   const rawPath = c?.req?.path ?? "/";
   const manifestStartPath = sitePathPrefix
@@ -264,6 +274,16 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
               ? assetPath("/src/style-cjk-kr.css")
               : toPublicAssetPath(CLIENT_CJK_KR_CSS_FILE, assetBasePath)
             : null;
+  // The composer, the editor chrome, the settings pages and the draft preview
+  // bar are the bulk of the hand-written component CSS, and none of it renders
+  // for a signed-out visitor. Linking it only here keeps it off the critical
+  // path of every public page.
+  const authorStylesheetPath =
+    resolvedClientBundle === "full"
+      ? IS_VITE_DEV
+        ? assetPath("/src/style-author.css")
+        : toPublicAssetPath(CLIENT_AUTHOR_CSS_FILE, assetBasePath)
+      : null;
   const clientScriptPath = IS_VITE_DEV
     ? resolvedClientBundle === "full"
       ? assetPath("/src/client-auth.ts")
@@ -275,6 +295,15 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
         resolvedClientBundle === "full" ? CLIENT_AUTH_JS_FILE : CLIENT_JS_FILE,
         assetBasePath,
       );
+  // The composer loads on first use; fetching its files now means the first
+  // open costs no round trip. Dev serves modules straight from source, so
+  // there is nothing to preload there.
+  const composePreloadPaths =
+    !IS_VITE_DEV && resolvedClientBundle === "full"
+      ? CLIENT_COMPOSE_PRELOAD.map((file) =>
+          toPublicAssetPath(file, assetBasePath),
+        )
+      : [];
   const faviconAssetVersion = resolvedFaviconVersion || CORE_VERSION;
   const resolvedFaviconHref =
     faviconHref ??
@@ -376,6 +405,13 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
             name="viewport"
             content="width=device-width, initial-scale=1.0"
           />
+          {preconnectHints.map((hint) => (
+            <link
+              rel="preconnect"
+              href={hint.href}
+              {...(hint.crossorigin ? { crossorigin: "anonymous" } : {})}
+            />
+          ))}
           {themeMode === "dark" ? (
             <meta name="theme-color" content={browserThemeColors.dark} />
           ) : themeMode === "light" ? (
@@ -536,6 +572,9 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
           {cjkStylesheetPath && (
             <link rel="stylesheet" href={cjkStylesheetPath} />
           )}
+          {authorStylesheetPath && (
+            <link rel="stylesheet" href={authorStylesheetPath} />
+          )}
           {/* Critical inline style: prevent mobile nav jitter by applying
               responsive header layout before external CSS/JS loads */}
           <style
@@ -556,6 +595,9 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
           )}
           {customHeadHtml && raw(customHeadHtml)}
           <script type="module" src={clientScriptPath} />
+          {composePreloadPaths.map((href) => (
+            <link rel="modulepreload" href={href} />
+          ))}
         </head>
         <body
           class="bg-background text-foreground antialiased"

@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
 import type { Context } from "hono";
 import { renderToString } from "hono/jsx/dom/server";
 import { describe, expect, it } from "vitest";
+import { readComponentCss } from "../../../../__tests__/helpers/component-css.js";
 import { I18nProvider } from "../../../../i18n/context.js";
 import { createI18n } from "../../../../i18n/i18n.js";
 import { NavigationContent } from "../NavigationContent.js";
@@ -38,20 +38,24 @@ function renderNavigationContent(
 }
 
 describe("NavigationContent", () => {
-  it("interpolates the latest feed label in the RSS system link description", () => {
-    const html = renderNavigationContent({ mainRssFeed: "latest" });
-
-    expect(html).toContain(
-      "Header RSS points to your Latest feed (/feed). Change what /feed returns in General.",
+  it("names which end the RSS entry currently points at", () => {
+    expect(renderNavigationContent({ mainRssFeed: "latest" })).toContain(
+      "currently your Latest feed",
+    );
+    expect(renderNavigationContent({ mainRssFeed: "featured" })).toContain(
+      "currently your Featured feed",
     );
   });
 
-  it("interpolates the featured feed label in the RSS system link description", () => {
-    const html = renderNavigationContent({ mainRssFeed: "featured" });
+  // RSS and Subscribe are the only pair an author has to choose between, and
+  // they are adjacent switches. Each has to say who it is for, or the choice is
+  // two near-identical toggles.
+  it("offers RSS and Subscribe as a legible choice", () => {
+    const html = renderNavigationContent({ mainRssFeed: "latest" });
 
-    expect(html).toContain(
-      "Header RSS points to your Featured feed (/feed). Change what /feed returns in General.",
-    );
+    expect(html).toContain("already use a feed reader");
+    expect(html).toContain("a page listing your feeds with copy buttons");
+    expect(html).toContain("don&#39;t already use one");
   });
 
   it("renders the built-in links heading", () => {
@@ -101,10 +105,7 @@ describe("NavigationContent", () => {
   });
 
   it("leaves the preview frame unclipped so the More menu can escape it", () => {
-    const css = readFileSync(
-      new URL("../../../../styles/components.css", import.meta.url),
-      "utf8",
-    );
+    const css = readComponentCss();
     const frame = css.match(/\.nav-preview \{[^}]*\}/)?.[0] ?? "";
 
     // The menu opens below the frame's own bottom edge. Clipping here cuts it
