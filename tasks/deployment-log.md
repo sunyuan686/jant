@@ -201,7 +201,7 @@ DNS 自动写入，证书自动签发，约几分钟内生效。
 - [ ] Settings → General 填写站点名称和描述
 - [ ] Settings → GitHub Sync 配置文章备份仓库
 - [ ] Settings → Telegram 配置 Bot 随手记笔记
-- [ ] R2 绑定自定义媒体域名（`media.xixihaha.tech`），启用 `R2_PUBLIC_URL`
+- [x] R2 绑定自定义媒体域名（`jant-media.xixihaha.tech`），启用 `R2_PUBLIC_URL`
 
 ---
 

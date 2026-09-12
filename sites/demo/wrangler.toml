@@ -43,7 +43,7 @@ SITE_ORIGIN = "https://jant.xixihaha.tech" # @create-jant: @remove
 # Optional: R2 Storage (for media uploads)
 # https://jant.me/docs/configuration#r2-default
 # R2_PUBLIC_URL = "https://cdn.example.com"
-# R2_PUBLIC_URL = "https://media.xixihaha.tech"  # 绑定 R2 自定义域名后取消注释
+R2_PUBLIC_URL = "https://jant-media.xixihaha.tech"
 
 # Optional: Cloudflare Image Transformations
 # For automatic thumbnail generation and image optimization
