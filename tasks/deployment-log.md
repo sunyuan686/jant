@@ -73,15 +73,15 @@ npx wrangler r2 bucket create jant-media
 
 修改 `sites/demo/wrangler.toml`，替换 demo 专用配置为个人配置：
 
-| 字段 | 修改内容 |
-|------|---------|
-| `name` | `jant-demo` → `jant` |
-| `account_id` | 替换为个人 Account ID |
-| `SITE_ORIGIN` | `https://demo.jant.me` → `https://jant.xixihaha.tech` |
-| `database_name` | `jant-demo-db` → `jant-db` |
-| `database_id` | 替换为新创建的 D1 ID |
-| `bucket_name` | `jant-demo-media` → `jant-media` |
-| 删除 | `DEMO_EMAIL`、`DEMO_PASSWORD`、`DEMO_MODE`、`remote = true` |
+| 字段            | 修改内容                                                    |
+| --------------- | ----------------------------------------------------------- |
+| `name`          | `jant-demo` → `jant`                                        |
+| `account_id`    | 替换为个人 Account ID                                       |
+| `SITE_ORIGIN`   | `https://demo.jant.me` → `https://jant.xixihaha.tech`       |
+| `database_name` | `jant-demo-db` → `jant-db`                                  |
+| `database_id`   | 替换为新创建的 D1 ID                                        |
+| `bucket_name`   | `jant-demo-media` → `jant-media`                            |
+| 删除            | `DEMO_EMAIL`、`DEMO_PASSWORD`、`DEMO_MODE`、`remote = true` |
 
 ### 设置 AUTH_SECRET
 
@@ -138,13 +138,13 @@ push 后 GitHub Actions 的 **Run migrations** 步骤失败，exit code 1。
 
 重新创建自定义 API Token，手动添加以下权限：
 
-| 类型 | 权限 | 级别 |
-|------|------|------|
-| 帐户 | Workers 脚本 | 编辑 |
-| 帐户 | Workers KV 存储 | 编辑 |
-| 帐户 | Workers R2 存储 | 编辑 |
-| 帐户 | **D1** | **编辑** |
-| 区域 | Workers 路由 | 编辑 |
+| 类型 | 权限            | 级别     |
+| ---- | --------------- | -------- |
+| 帐户 | Workers 脚本    | 编辑     |
+| 帐户 | Workers KV 存储 | 编辑     |
+| 帐户 | Workers R2 存储 | 编辑     |
+| 帐户 | **D1**          | **编辑** |
+| 区域 | Workers 路由    | 编辑     |
 
 更新 GitHub Secret `CF_API_TOKEN` 后重新触发部署，全部步骤通过。
 
@@ -171,27 +171,27 @@ DNS 自动写入，证书自动签发，约几分钟内生效。
 
 ## 七、最终状态
 
-| 项目 | 状态 |
-|------|------|
-| Worker 名称 | `jant` |
-| 访问地址 | `https://jant.xixihaha.tech` |
-| 备用地址 | `https://jant.sunyuan608.workers.dev` |
-| D1 数据库 | `jant-db` |
-| R2 存储桶 | `jant-media` |
-| 自动部署 | push 到 `main` 分支自动触发 |
+| 项目        | 状态                                  |
+| ----------- | ------------------------------------- |
+| Worker 名称 | `jant`                                |
+| 访问地址    | `https://jant.xixihaha.tech`          |
+| 备用地址    | `https://jant.sunyuan608.workers.dev` |
+| D1 数据库   | `jant-db`                             |
+| R2 存储桶   | `jant-media`                          |
+| 自动部署    | push 到 `main` 分支自动触发           |
 
 ---
 
 ## 八、关键管理地址
 
-| 地址 | 用途 |
-|------|------|
-| `/setup` | 首次设置，创建管理员账号 |
-| `/signin` | 登录 |
-| `/new` | 写新文章 |
+| 地址        | 用途                                           |
+| ----------- | ---------------------------------------------- |
+| `/setup`    | 首次设置，创建管理员账号                       |
+| `/signin`   | 登录                                           |
+| `/new`      | 写新文章                                       |
 | `/settings` | 站点设置（主题、GitHub Sync、Telegram Bot 等） |
-| `/search` | 搜索 |
-| `/archive` | 归档 |
+| `/search`   | 搜索                                           |
+| `/archive`  | 归档                                           |
 
 ---
 
