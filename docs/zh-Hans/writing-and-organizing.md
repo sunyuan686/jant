@@ -70,6 +70,16 @@ Thread 把多条帖子按时间顺序串在一起：先写一条根帖，之后�
 
 在列表页上，一个 Thread 占一张卡片，是折叠的：根帖、开头两条 Reply，然后是最后三条，最新的排在底部。六条以内的 Thread 放得下，会整个显示。更长的就把中间收成一个「3 more posts」链接，点它会打开被折叠的第一条。Feed 用同一套折法，所以一个 Thread 在阅读器里和在站点上读起来一样。Thread 自己的页面始终显示全部帖子。
 
+## 把帖子分享成图片
+
+在已发布、且不是 Private 的帖子上选 **… → Share as image**。Jant 会用站点的字体和配色把这条帖子画成一张图，附上站点名、站点地址和一个能打开这条帖子的二维码。在手机上长按图片保存；在电脑上用 **Download**，浏览器支持时也可以用 **Copy image** 和 **Share…**。
+
+读者在每条帖子上也有 **…**，里面是 **Copy link** 和 **Share as image**。你的菜单里同样有 **Copy link**，在 **Share as image** 上方。
+
+图片里的内容和时间线一致：同样的摘要，最多四张图片。文档、录音和文本附件按名称列出。超过一屏手机高度的帖子会在底部淡出截断。
+
+Thread 里的帖子会带上根帖和下一条，都淡化显示；日期旁标出它在 Thread 里的位置，比如 `6 / 7`。
+
 ## Collections
 
 Collection 是一组你自己策展的内容，地址是 `/{slug}`。同一个 Thread 可以同时属于多个 Collection，根帖和它的所有 Reply 始终属于同一批 Collection。
@@ -192,21 +202,29 @@ Jant 的核心设计之一是把「发布」和「广播」拆开。
 
 下表假设默认配置 `MAIN_RSS_FEED=featured`。
 
-| 帖子状态             | 直链可访问   | Latest | `/archive`   | 默认 `/feed` | Collection   |
-| -------------------- | ------------ | ------ | ------------ | ------------ | ------------ |
-| `Public` 且 Featured | 是           | 是     | 是           | 是           | 是           |
-| `Public`             | 是           | 是     | 是           | 否           | 是           |
-| `Hidden from Latest` | 是           | 否     | 是           | 否           | 是           |
-| `Private`            | 仅登录后可见 | 否     | 仅登录后可见 | 否           | 仅登录后可见 |
-| `Draft`              | 否           | 否     | 否           | 否           | 否           |
+| 帖子状态             | 直链可访问   | Latest | `/archive`   | `/search`    | 默认 `/feed` | Collection   |
+| -------------------- | ------------ | ------ | ------------ | ------------ | ------------ | ------------ |
+| `Public` 且 Featured | 是           | 是     | 是           | 是           | 是           | 是           |
+| `Public`             | 是           | 是     | 是           | 是           | 否           | 是           |
+| `Hidden from Latest` | 是           | 否     | 是           | 是           | 否           | 是           |
+| `Private`            | 仅登录后可见 | 否     | 仅登录后可见 | 仅登录后可见 | 否           | 仅登录后可见 |
+| `Draft`              | 否           | 否     | 否           | 否           | 否           | 否           |
 
 把 `MAIN_RSS_FEED` 改成 `latest` 后，默认 `/feed` 的内容跟着变，但 `Hidden from Latest` 的帖子仍然不会进入。
+
+### 仍然能访问到的部分
+
+`Private` 和 `Draft` 会让帖子从访客能打开的所有页面和 feed 里消失。有两处不一样：
+
+- **附件。** 上传的文件在 `/media/` 下有自己的地址，任何人拿到这个地址都能打开。地址很长且随机，猜不到；但帖子公开时分享出去的文件，改为私密后在原地址仍然能打开。删除附件会让这个地址失效；浏览器或 CDN 已经缓存的副本可能更久，最长一年。
+- **sitemap。** 搜索引擎读取 `/sitemap.xml`。帖子改为私密后，几分钟内会从中移除；帖子超过 500 篇的站点，较早的 sitemap 分页缓存更久，最长一天。
 
 ## URL 与浏览页面
 
 Jant 使用可读 URL：
 
 - 帖子：`/{slug}`
+- 帖子的文本附件，单独成页：`/{slug}/text/{附件 ID}`
 - Collection：`/{slug}`
 - 组合 Collection 视图：`/collections/{slug1}+{slug2}+{slug3}`
 - 搜索：`/search`
@@ -218,7 +236,7 @@ Feed：
 - `/feed` 使用你当前配置的主 feed
 - `/latest/feed` 返回出现在首页 Latest 的帖子（不含 `Hidden from Latest`）
 - `/featured/feed` 中，每个包含 Featured 帖子的 Thread 只返回一个条目
-- `/archive/feed` 返回全量公开帖子（包含 `Hidden from Latest`），支持 `?year=`、`?format=`、`?collection=`、`?media=` 等筛选参数
+- `/archive/feed` 返回全量公开帖子（包含 `Hidden from Latest`），接受全部[归档筛选参数](#归档筛选参数)
 - `/{slug}/feed` 返回单个 Collection 的 feed
 - `/collections/{slug1}+{slug2}/feed` 返回组合 Collection 的 feed
 
@@ -226,16 +244,51 @@ Feed：
 
 Jant 动态生成的 Atom feed 都有同一段发布缓冲：新帖子和 Reply 立即显示在网页上，默认五分钟后才进入 feed。这段时间可以用来检查刚发布的内容、改错，或者赶在 feed 阅读器抓取前撤回。详见[配置 § Feed 默认值](configuration.md#feed-默认值可选)。
 
+### 归档筛选参数
+
+`/archive` 和 `/archive/feed` 接受同样的查询参数，帖子要同时满足所有参数。归档页的筛选控件写出的就是这些参数，所以筛选后的地址可以直接收藏或订阅。
+
+| 参数         | 取值                                                                             | 选出                                                                                    |
+| ------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `collection` | 合集 slug，多个用逗号分隔                                                        | 属于其中任一合集的 Thread                                                               |
+| `format`     | `note`、`link`、`quote`                                                          | 该格式的帖子                                                                            |
+| `title`      | `any`、`none`                                                                    | 有标题或没标题的帖子                                                                    |
+| `year`       | 年份，例如 2024                                                                  | 该年发布的帖子；配合 `sort=updated` 时，是该年最后有活动的 Thread                       |
+| `media`      | `any`、`none`，或用逗号分隔的类型：`image`、`video`、`audio`、`text`、`document` | 带任意附件、不带附件，或带其中某类附件的帖子                                            |
+| `replies`    | `any`、`none`                                                                    | 有回复的 Thread，或没有回复的单帖                                                       |
+| `visibility` | `public`、`featured`、`hidden`、`private`                                        | 公开、精选或 `Hidden from Latest` 的帖子；`private` 只在你登录时可用                    |
+| `sort`       | `published`、`updated`                                                           | 排序和月份分组的依据：发布时间（默认），或活动时间，包括用 **Reply quietly** 发布的回复 |
+| `layout`     | `list`、`grid`                                                                   | 页面布局；feed 忽略它                                                                   |
+| `page`       | 页码                                                                             | 第几页；feed 忽略它                                                                     |
+
+旧写法的链接继续能用。归档页会跳转到当前写法，feed 直接按旧写法读取：
+
+- `hasTitle`、`hasMedia`、`hasReplies` 取 `1` 或 `0`，等同于 `title`、`media`、`replies` 取 `any` 或 `none`。
+- `visibility=latest_hidden` 等同于 `visibility=hidden`，`visibility=all` 等同于不筛选可见性。
+- `view` 等同于 `layout`。
+
+### 合集排序
+
+合集页、组合合集视图和智能合集页接受两个参数：
+
+| 参数   | 取值                         | 选出                                                                                         |
+| ------ | ---------------------------- | -------------------------------------------------------------------------------------------- |
+| `sort` | `newest`、`oldest`、`rating` | 排序方式，默认用合集自己的设置。`rating` 需要至少两个带评分的 Thread，不够时页面保持默认排序 |
+| `page` | 页码                         | 第几页                                                                                       |
+
+`sort=rating_desc` 仍按 `rating` 读取，`sort=updated` 按 `newest` 读取。
+
 ## 自定义 URL
 
-除了默认 slug，帖子、Collection、归档页都可以设置自定义路径，也可以配置跳转规则。这些都在 **设置 → 高级 → 自定义 URL** 里管理（路径 `/settings/custom-urls`）。
+除了默认 slug，帖子和 Collection 都可以设置自定义路径，也可以配置跳转规则。这些都在 **设置 → 高级 → 自定义 URL** 里管理（路径 `/settings/custom-urls`）。
 
-一共有四种类型：
+一共有三种类型：
 
 - **帖子**：给某篇帖子换一个新的主要路径，原 slug 自动 301 跳到新路径。
 - **合集**：给某个 Collection 换一个新的主要路径，原 slug 同样自动 301 跳过去。
-- **归档**：把一组归档筛选条件固定成一个路径，例如 `/quotes` 实际渲染 `/archive?format=quote&visibility=public&view=list`。
 - **重定向**：把任意路径跳到另一个路径或外部 URL。
+
+用已退役的**归档**类型建的路径继续能用，见[自定义归档视图（已退役）](#自定义归档视图已退役)。
 
 ### 给帖子或 Collection 设置自定义路径
 
@@ -247,13 +300,15 @@ Jant 动态生成的 Atom feed 都有同一段发布缓冲：新帖子和 Reply 
 
 保存后，新路径成为这条内容对外的主要 URL（permalink、feed、og:url 都用新路径），原 slug 自动 301 跳过去，已经传播出去的旧链接不会失效。
 
+帖子和 Collection 各只有一个地址：第一个自定义 URL，没有自定义 URL 时就是 slug。其他进来的路径都会 301 跳到这个地址，包括 slug、之后加的自定义 URL，以及大小写不同的同一地址。
+
 适合把从其他平台搬过来的内容挂回原来的链接。
 
 ### 自定义归档视图（已退役）
 
 自定义 URL 原来有一种「归档」类型：一个短路径，存着手打的归档查询串。[智能合集](#智能合集)取代了它——结果一样，但不用把 `format=note&title=none` 敲进输入框，还多了标题、描述和 feed。
 
-已有的归档地址继续能用，也没有让它们失效的打算。每条记录的菜单里多一项**转成智能合集**，点开的弹窗已经填好条件，你可以先起一个真正的名字再保存。查询串读不完整的记录——或者筛的是「私密」，那是智能合集永远做不到的事——照旧能用，只是不提供这一项。
+已有的归档地址继续能用，也没有让它们失效的打算。要换成智能合集，先记下这条记录上显示的查询串，例如 `/archive?format=note&title=none`，然后删除这个自定义 URL，再在同一路径用同样的条件新建智能合集。必须先删除，因为自定义 URL 存在期间一直占着这个地址，别的东西存不进去。筛选「私密」的路径没有对应的智能合集，因为智能合集总是公开的，这种路径保持原样即可。
 
 ### 跳转规则
 
@@ -272,9 +327,7 @@ Jant 动态生成的 Atom feed 都有同一段发布缓冲：新帖子和 Reply 
 
 ### 保留路径
 
-下列一级路径是 Jant 自身在用的入口，不能用作自定义 URL：
-
-`featured`、`latest`、`signin`、`signout`、`setup`、`settings`、`dash`、`api`、`feed`、`search`、`archive`、`media`、`pages`、`reset`、`collections`、`compose`、`preview`、`new`、`static`、`assets`、`_assets`、`healthz`、`readyz`
+Jant 自己用了一些一级路径，比如 `archive`、`feed`、`search`，地址不能以它们开头。完整列表见 [配置 § 保留路径](configuration.md#保留路径)。
 
 如果旧站点已经有帖子或自定义 URL 直接使用 `/preview`，原记录会保留，但旧链接会变成 404。`/preview` 前缀下已有的自定义 URL 也不再按旧记录解析，因为整个命名空间现在属于登录后的草稿预览。Jant 不会自动生成替代 slug 或跳转，需要新的公开地址就自己改掉冲突的帖子或自定义 URL。
 

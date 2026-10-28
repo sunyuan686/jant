@@ -1,10 +1,9 @@
-import { readFileSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
   pullSiteExportDirectory,
-  pullSiteExportZipBytes,
+  pullSiteExportZipFile,
 } from "../../lib/site-pull-media.js";
 
 function describeProgressUrl(value) {
@@ -57,8 +56,9 @@ export async function run(argv) {
     args: argv,
     options: {
       help: { type: "boolean", short: "h" },
+      // What `site export` writes when given no --output.
       path: { type: "string", default: "jant-site-export.zip" },
-      output: { type: "string" },
+      output: { type: "string", short: "o" },
     },
   });
 
@@ -72,7 +72,7 @@ export async function run(argv) {
       "  --path         Path to an export ZIP or directory (default: jant-site-export.zip)",
     );
     console.log(
-      "  --output       Output ZIP path when --path points to a ZIP (default: overwrite input)",
+      "  --output, -o   Output ZIP path when --path points to a ZIP (default: overwrite input)",
     );
     process.exit(0);
   }
@@ -102,13 +102,10 @@ export async function run(argv) {
   }
 
   const outputPath = resolve(process.cwd(), values.output || values.path);
-  const inputBytes = new Uint8Array(readFileSync(inputPath));
   console.log(`Pulling media in ${values.path}...`);
-  const { zipBytes, stats } = await pullSiteExportZipBytes(inputBytes, {
+  const stats = await pullSiteExportZipFile(inputPath, outputPath, {
     logger: logPullProgress,
   });
-  console.log(`Writing ${values.output || values.path}...`);
-  writeFileSync(outputPath, Buffer.from(zipBytes));
   console.log(
     `Pulled media in ${values.path} -> ${values.output || values.path}`,
   );

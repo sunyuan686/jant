@@ -22,7 +22,7 @@ All three paths run the same code. Going from hosted to self-hosted (or back) is
 
 ## Are comments supported?
 
-Not built-in. May come later. For now you can embed third-party systems like giscus or Disqus through [code injection](code-injection.md).
+Jant has no built-in comments. To take comments, embed a third-party system such as giscus or Disqus through [code injection](code-injection.md).
 
 ## Does Jant have standalone pages (like an About page)?
 
@@ -46,7 +46,7 @@ Three layers of control: built-in color themes, built-in type styles, and Custom
 - **Cloudflare**: `npm install @jant/core@latest && npm run deploy`. Migrations run automatically as part of deploy.
 - **Docker**: `docker compose pull && docker compose up -d`. The command runs database migrations first, then starts the app.
 
-Take a full backup before upgrading. See [Backups and recovery](backups.md).
+Back up first. [Upgrading](upgrading.md) has the steps for each deployment and what a site on 0.x has to change.
 
 ## Is the Cloudflare free tier really enough?
 
@@ -107,6 +107,7 @@ Yes. Set `SITE_PATH_PREFIX=/blog`. On Cloudflare you also need to point Workers 
 
 - [GitHub Issues](https://github.com/jant-me/jant/issues) — bugs and feature requests
 - Email `support#jant.me` (replace `#` with `@`) — hosted account questions
+- Jant author group on WeChat — members discuss Jant, writing, reading, and more, in Chinese. The QR code is on the [contact page](https://jant.me/contact)
 
 ## Can AI agents publish posts?
 
@@ -115,7 +116,7 @@ Yes. Two entry points, pick by use case:
 - **HTTP JSON API**: the default — `POST /api/posts` with a Bearer token. Used by external scripts, scheduled jobs, and third-party integrations.
 - **MCP interface** (`/api/mcp`): when the caller is itself an MCP client.
 
-Projects scaffolded with `create-jant` ship `AGENTS.md`, `.claude/skills/`, and `examples/agent-content-automation/` with copy-pasteable curl examples. See [Automation and API](automation-and-api.md).
+Projects scaffolded with `create-jant` ship `AGENTS.md`, which points agents at the site's `/skill.md`, and `examples/agent-content-automation/` with copy-pasteable curl examples. See [Automation and API](automation-and-api.md).
 
 With [GitHub sync](github-sync.md) enabled, agents can also read and write Markdown directly through the Git repo — for many coding agents this feels more natural than the API.
 
@@ -141,13 +142,28 @@ No. The GitHub → Jant direction only supports updating existing posts, matched
 
 Every active session is invalidated immediately and everyone has to sign in again. **Don't rotate this casually** in production unless you suspect a leak. Generate a new value with `openssl rand -base64 32`.
 
-## Pre-1.0 — will there be a lot of breaking changes?
+## I forgot my password. How do I get back in?
 
-Possibly, but only when warranted. Every breaking change is documented in the commit and changelog. Skim the changelog before upgrading and keep a recent backup.
+On a self-hosted site, run `jant reset-password` against the site's database. It prints a path such as `/reset?token=…`; open it on your site within 15 minutes and choose a new password.
+
+- Cloudflare, in your project: `npx jant reset-password --remote`. Without `--remote` it resets the local development database.
+- Docker, next to your `compose.yml`: `docker compose exec jant jant reset-password`
+
+See [Command line](cli.md) for the options.
+
+## Will upgrading within 1.x break anything?
+
+What [Compatibility](compatibility.md) promises keeps working in every 1.x release. A change to its second level waits for 2.0, whose upgrade notes say what to do. [Upgrading](upgrading.md) has the steps for each kind of site.
 
 ## How do I move my old blog into Jant (WordPress, Tumblr, etc.)?
 
-There's no fixed importer — every platform exports differently. The easiest path is to hand your site's `/skill.md` URL (for example, `https://example.com/skill.md`) to an AI assistant. This site-bound Jant guide includes a dedicated import workflow covering the data model, source-format mapping, resumable writes, and verification. Give the assistant your export file and a site API token, and let it run the migration. See [Export and import](export-and-import.md#coming-from-another-blog-or-cms).
+There's no fixed importer, because every platform exports differently. Once your Jant site exists, send this line to an AI assistant that can run commands, such as Claude Code or Codex, with your site's address in place of `example.com`:
+
+```text
+Read https://example.com/skill.md and help me move my old blog here.
+```
+
+The assistant walks you through the rest, including the export and an API token. See [Export and import](export-and-import.md#coming-from-another-blog-or-cms).
 
 ## Can I migrate back to WordPress / Ghost?
 

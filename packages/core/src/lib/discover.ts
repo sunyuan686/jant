@@ -8,10 +8,6 @@
  * effective-mode rules and the identifiers the feed declaration is built
  * from. The declaration is specified in `docs/feeds.md`; how a directory
  * behaves is that directory's own business, documented where it lives.
- *
- * `featured` survives as a stored value: older releases offered it as a
- * choice, and a site that made it still declares it, which a directory reads
- * as "only this feed". Nothing writes it any more.
  */
 
 /**
@@ -25,7 +21,7 @@
 export const DISCOVER_NAMESPACE_URI = "https://jant.me/ns";
 
 /** Stored value of the `DISCOVER` site setting. */
-export type DiscoverSetting = "latest" | "featured" | "off";
+export type DiscoverSetting = "latest" | "off";
 
 /**
  * Effective Discover mode, as declared in the feed.
@@ -34,13 +30,9 @@ export type DiscoverSetting = "latest" | "featured" | "off";
  * element's absence already means "this site predates Discover" — the two
  * states are different and must stay tellable apart.
  */
-export type DiscoverMode = "latest" | "featured" | "none";
+export type DiscoverMode = "latest" | "none";
 
-const DISCOVER_SETTINGS: readonly DiscoverSetting[] = [
-  "latest",
-  "featured",
-  "off",
-];
+const DISCOVER_SETTINGS: readonly DiscoverSetting[] = ["latest", "off"];
 
 /**
  * Parse a stored or environment-supplied Discover setting.
@@ -49,7 +41,7 @@ const DISCOVER_SETTINGS: readonly DiscoverSetting[] = [
  * @returns The setting, or `null` when absent or unrecognized
  * @example
  * ```ts
- * parseDiscoverSetting("featured"); // "featured"
+ * parseDiscoverSetting("latest"); // "latest"
  * parseDiscoverSetting("yes"); // null
  * ```
  */
@@ -134,26 +126,18 @@ export function resolveDiscoverMode(input: {
  * Site-relative path of the feed a Discover crawler should poll.
  *
  * The declaration names the feed to poll rather than leaving a crawler to
- * guess, so a site that lists only its featured posts is polled at
- * `/featured/feed` and never at `/latest/feed`.
+ * guess.
  *
  * @param mode - Effective Discover mode
  * @returns Site-relative feed path, or `null` when the site is not listed
  * @example
  * ```ts
- * getDiscoverFeedPath("featured"); // "/featured/feed"
+ * getDiscoverFeedPath("latest"); // "/latest/feed"
  * getDiscoverFeedPath("none"); // null
  * ```
  */
 export function getDiscoverFeedPath(mode: DiscoverMode): string | null {
-  switch (mode) {
-    case "latest":
-      return "/latest/feed";
-    case "featured":
-      return "/featured/feed";
-    case "none":
-      return null;
-  }
+  return mode === "latest" ? "/latest/feed" : null;
 }
 
 /**
@@ -199,6 +183,40 @@ export const DISCOVER_FIRST_READ_MAX_HOURS = 6;
  * A tuning value on the directory's side; this moves with it.
  */
 export const DISCOVER_PUBLIC_DELAY_HOURS = 24;
+
+/**
+ * Languages the jant.me directory lists, as primary language subtags.
+ *
+ * The directory's rule — its `accepted_languages` — stated here for the same
+ * reason as `DISCOVER_MIN_PUBLIC_POSTS`, and read by setup alone: the Discover
+ * question is asked there only when the answer can lead somewhere. An author
+ * writing in a language the directory does not list would be handed a promise
+ * nobody keeps, ticked in advance on hosted Jant.
+ *
+ * Nothing else reads it. The settings checkbox records consent rather than
+ * applying for a listing, and a site can take on a listed language later
+ * through multilingual content, so it stays for everyone.
+ *
+ * Simplified and Traditional Chinese are one list there, which is why the
+ * match is on the primary subtag rather than on the script.
+ */
+export const DISCOVER_LANGUAGES: readonly string[] = ["zh"];
+
+/**
+ * Whether the jant.me directory lists posts written in a language.
+ *
+ * @param tag - A BCP 47 language tag, as the content language is stored
+ * @returns True when the tag's primary subtag is in `DISCOVER_LANGUAGES`
+ * @example
+ * ```ts
+ * isDiscoverLanguage("zh-Hant"); // true
+ * isDiscoverLanguage("en"); // false
+ * ```
+ */
+export function isDiscoverLanguage(tag: string): boolean {
+  const primary = tag.split("-")[0]?.toLowerCase() ?? "";
+  return DISCOVER_LANGUAGES.includes(primary);
+}
 
 /**
  * The directory's names for its two format lists.
@@ -322,6 +340,37 @@ export function getDiscoverSubmitUrl(
   }
 }
 
+/**
+ * Where the Jant author group's WeChat QR code is, derived from the
+ * directory's base address.
+ *
+ * The group is a Chinese-language WeChat group for people who write on Jant,
+ * and its QR code lives on the contact page of the same control plane that
+ * runs the directory — so, like the submission form, it is found from the one
+ * address this deployment already has. The path is the Chinese page at its
+ * WeChat section, because only Chinese screens link to it.
+ *
+ * @param directoryBaseUrl - The directory this deployment belongs to, from
+ *   `getDiscoverDirectoryBaseUrl`
+ * @returns Absolute URL of the group's section, or `null` when there is no
+ *   directory
+ * @example
+ * ```ts
+ * getAuthorGroupUrl("https://jant.me/");
+ * // "https://jant.me/zh-hans/contact#wechat"
+ * ```
+ */
+export function getAuthorGroupUrl(
+  directoryBaseUrl: string | undefined | null,
+): string | null {
+  if (!directoryBaseUrl) return null;
+  try {
+    return new URL("/zh-hans/contact#wechat", directoryBaseUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
 /** One run of a sentence, and where it links when it is a link. */
 export interface TextRun {
   text: string;
@@ -400,7 +449,9 @@ export function linkTerms(
  * than on the checkbox label. The settings page and the setup screen both
  * render their line through here, so the two can never link different words;
  * setup's line is the settings line's opening sentence, so only the name is
- * there to find.
+ * there to find. The notice that replaces the settings line while the box is
+ * locked in demo mode goes through here too, and it also names only the
+ * directory.
  *
  * @param intro - The translated help line
  * @param terms - The translated directory and rules-page names, as `intro`

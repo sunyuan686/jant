@@ -4,6 +4,7 @@
  * Exports:
  * - pkg: package.json data (version, dependencies)
  * - buildVersion: cache-busting version token for deployed assets
+ * - unbuiltClientAssetDefine: client asset globals for servers with no client build
  * - CLIENT_TARGET: browser target for client asset compilation
  * - clientBuildOptions: rollup input/output for public/auth JS and CSS assets
  * - swcPlugin: SWC with Hono JSX + Lingui macro transforms
@@ -17,6 +18,7 @@ import swc from "unplugin-swc";
 import { resolve } from "path";
 import { readFileSync } from "fs";
 import { execSync } from "child_process";
+import { createRequire } from "module";
 import { gzipSync } from "zlib";
 import {
   ASSET_BASE_SEGMENT,
@@ -50,6 +52,28 @@ export const buildVersion = safeBuildId
   ? `${pkg.version}-${safeBuildId}`
   : pkg.version;
 
+/**
+ * Client asset globals for a server that has no client build to point at.
+ *
+ * `lib/version.ts` reads these at module scope, so anything that evaluates it
+ * needs a value even when no page ever links one: the Node dev server
+ * (`IS_VITE_DEV` serves assets from source instead) and the dev-script runner
+ * (renders no pages). The library build reads the content-hashed paths from the
+ * client manifest instead.
+ */
+export const unbuiltClientAssetDefine = {
+  __CLIENT_JS_FILE__: JSON.stringify("/_assets/client.js"),
+  __CLIENT_AUTH_JS_FILE__: JSON.stringify("/_assets/client-auth.js"),
+  __CLIENT_COMPOSE_PRELOAD__: JSON.stringify([]),
+  __CLIENT_CSS_FILE__: JSON.stringify("/_assets/client.css"),
+  __CLIENT_AUTHOR_CSS_FILE__: JSON.stringify("/_assets/client-author.css"),
+  __CLIENT_SHARE_CSS_FILE__: JSON.stringify("/_assets/client-share.css"),
+  __CLIENT_CJK_CSS_FILE__: JSON.stringify("/_assets/client-cjk.css"),
+  __CLIENT_CJK_TC_CSS_FILE__: JSON.stringify("/_assets/client-cjk-tc.css"),
+  __CLIENT_CJK_JP_CSS_FILE__: JSON.stringify("/_assets/client-cjk-jp.css"),
+  __CLIENT_CJK_KR_CSS_FILE__: JSON.stringify("/_assets/client-cjk-kr.css"),
+};
+
 /** Browser target for client assets. */
 export const CLIENT_TARGET = "es2022" as const;
 
@@ -59,9 +83,12 @@ export const CLIENT_TARGET = "es2022" as const;
  * Produces:
  * - `client.js` for public-page interactions
  * - `client-auth.js`, the shell for authenticated pages
- * - `client-compose.js`, `client-settings.js`, `client-manage.js`, loaded by
- *   the shell on demand (see `src/client/lazy-entries.ts`)
+ * - `client-compose.js`, `client-settings.js`, `client-manage.js`,
+ *   `client-share.js`, loaded by the shell on demand (see
+ *   `src/client/lazy-entries.ts`)
  * - `client.css` for the shared site styles
+ * - `client-share.css`, the "Share as image" dialog and card, linked by
+ *   `share-launch.ts` when a post menu that offers sharing opens
  * - `client-author.css`, the composer/settings/editor styles, linked only on
  *   authenticated pages
  * - `client-cjk.css` for optional Simplified Chinese font assets
@@ -79,8 +106,10 @@ export const clientBuildOptions = {
       "client-compose": resolve(dir, "src/client-compose.ts"),
       "client-settings": resolve(dir, "src/client-settings.ts"),
       "client-manage": resolve(dir, "src/client-manage.ts"),
+      "client-share": resolve(dir, "src/client-share.ts"),
       style: resolve(dir, "src/style.css"),
       "style-author": resolve(dir, "src/style-author.css"),
+      "style-share": resolve(dir, "src/style-share.css"),
       "style-cjk": resolve(dir, "src/style-cjk.css"),
       "style-cjk-tc": resolve(dir, "src/style-cjk-tc.css"),
       "style-cjk-jp": resolve(dir, "src/style-cjk-jp.css"),
@@ -111,6 +140,8 @@ export const clientBuildOptions = {
             return `${ASSET_BASE_SEGMENT}/client-[hash].css`;
           case "style-author.css":
             return `${ASSET_BASE_SEGMENT}/client-author-[hash].css`;
+          case "style-share.css":
+            return `${ASSET_BASE_SEGMENT}/client-share-[hash].css`;
           case "style-cjk.css":
             return `${ASSET_BASE_SEGMENT}/client-cjk-[hash].css`;
           case "style-cjk-tc.css":
@@ -140,6 +171,18 @@ export const workerBuildOptions = {
 };
 
 /**
+ * The Lingui macro plugin's `.wasm`, resolved from this package.
+ *
+ * SWC resolves a plugin given by package name against `process.cwd()`, not
+ * against the config that names it. Every Vite command happens to run from
+ * `packages/core`, so the name worked — until a dev script ran from the repo
+ * root and every transform failed with "failed to resolve plugin path".
+ */
+const LINGUI_SWC_PLUGIN = createRequire(import.meta.url).resolve(
+  "@lingui/swc-plugin",
+);
+
+/**
  * SWC plugin for Hono JSX transforms and Lingui macro rewrites.
  *
  * Every bundle needs it, browser bundles included: `lib/` modules are shared
@@ -166,7 +209,7 @@ export const swcPlugin = () =>
       experimental: {
         plugins: [
           [
-            "@lingui/swc-plugin",
+            LINGUI_SWC_PLUGIN,
             {
               runtimeModules: {
                 useLingui: ["@jant/core/i18n", "useLingui"],
@@ -269,8 +312,9 @@ const LAZY_ONLY_PACKAGES = [
   "pinyin-pro",
   "speakingurl",
   "hepburn",
-  // The full Lucide index is for server rendering (`lib/icons.ts`); client
-  // components inline the few icons they draw (`client/icons.ts`).
+  // One namespace import pulls in all 1,700 icons. Server rendering imports
+  // its icons by name (`lib/icons.ts`); client components inline the few
+  // they draw (`client/icons.ts`).
   "lucide-static",
   // Upload-time media processing (`client/mediabunny.ts`, `compose-bridge.ts`).
   "mediabunny",
@@ -278,6 +322,8 @@ const LAZY_ONLY_PACKAGES = [
   // Emoji picker, opened from the editor toolbar.
   "emoji-mart",
   "@emoji-mart/data",
+  // "Share as image" (`client-share.ts`), opened from the post menu.
+  "@zumer/snapdom",
 ];
 
 /**
@@ -302,6 +348,9 @@ const ENTRY_BUDGETS_GZIP: Record<string, number> = {
   "client-settings": 250 * 1024,
   // Measured 2026-09: 251 KB, mostly the shared editor chunk plus Sortable.
   "client-manage": 290 * 1024,
+  // Measured 2026-10: 103 KB, nearly all of it snapdom 3.4.0. Loaded only
+  // when a post menu that offers "Share as image" opens.
+  "client-share": 118 * 1024,
 };
 
 /**

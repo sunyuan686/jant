@@ -1,9 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { strToU8, zipSync } from "fflate";
 import sharp from "sharp";
-import { encodeIco, FAVICON_SIZES } from "../../src/lib/favicon.ts";
+import { encodeIco, FAVICON_SIZES } from "../../src/lib/favicon.js";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(scriptDir, "../..");
@@ -52,11 +53,6 @@ interface BrandAssetBundle {
   faviconIco: ArrayBuffer;
   appleTouchPng: ArrayBuffer;
   socialImagePng: ArrayBuffer;
-}
-
-interface CliOptions {
-  exportDir: string | null;
-  exportOnly: boolean;
 }
 
 function fail(message: string): never {
@@ -142,10 +138,9 @@ async function rasterizeSvg(svg: string, size: number): Promise<ArrayBuffer> {
     .png()
     .toBuffer();
 
-  return rendered.buffer.slice(
-    rendered.byteOffset,
-    rendered.byteOffset + rendered.byteLength,
-  );
+  // Copied into an ArrayBuffer of its own: a Buffer can be a view into a larger
+  // pooled store.
+  return new Uint8Array(rendered).buffer;
 }
 
 function toBase64(buffer: ArrayBuffer): string {
@@ -193,7 +188,7 @@ function buildBrandPackReadme(): string {
 }
 
 function printHelp(): void {
-  console.log(`Usage: tsx dev/scripts/generate-brand-assets.ts [options]
+  console.log(`Usage: node dev/run-script.mjs dev/scripts/generate-brand-assets.ts [options]
 
 Options:
   --export-dir <path>  Write generated logo/icon assets to a local directory
@@ -201,50 +196,8 @@ Options:
   --help               Show this help message
 
 Examples:
-  tsx dev/scripts/generate-brand-assets.ts
-  tsx dev/scripts/generate-brand-assets.ts --export-dir ${DEFAULT_EXPORT_DIR} --export-only`);
-}
-
-function parseArgs(argv: string[]): CliOptions {
-  let exportDir: string | null = null;
-  let exportOnly = false;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-
-    if (arg === "--help" || arg === "-h") {
-      printHelp();
-      process.exit(0);
-    }
-
-    if (arg === "--export-only") {
-      exportOnly = true;
-      continue;
-    }
-
-    if (arg === "--export-dir") {
-      const value = argv[index + 1];
-      if (!value) {
-        fail("Missing value for --export-dir");
-      }
-      exportDir = value;
-      index += 1;
-      continue;
-    }
-
-    if (arg.startsWith("--export-dir=")) {
-      const value = arg.slice("--export-dir=".length);
-      if (!value) {
-        fail("Missing value for --export-dir");
-      }
-      exportDir = value;
-      continue;
-    }
-
-    fail(`Unknown argument: ${arg}`);
-  }
-
-  return { exportDir, exportOnly };
+  node dev/run-script.mjs dev/scripts/generate-brand-assets.ts
+  node dev/run-script.mjs dev/scripts/generate-brand-assets.ts --export-dir ${DEFAULT_EXPORT_DIR} --export-only`);
 }
 
 async function buildAssetBundle({
@@ -451,8 +404,26 @@ ${formatStringExport("JANT_LOGO_VIEW_BOX", viewBox)}${formatStringExport(
   console.log(`Generated ${outputPath}`);
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
+export default async function main(args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      "export-dir": { type: "string" },
+      "export-only": { type: "boolean", default: false },
+      help: { type: "boolean", short: "h" },
+    },
+  });
+
+  if (values.help) {
+    printHelp();
+    return;
+  }
+
+  const exportDir = values["export-dir"];
+  if (exportDir === "") {
+    fail("Missing value for --export-dir");
+  }
+
   const sourceSvg = normalizeSvg(await readFile(sourceSvgPath, "utf8"));
   const viewBox = extractSvgAttribute(sourceSvg, "viewBox");
   const pathData = extractPathData(sourceSvg);
@@ -462,13 +433,11 @@ async function main(): Promise<void> {
     positiveFill: extractFill(sourceSvg),
   });
 
-  if (options.exportDir) {
-    await exportBrandAssets(options.exportDir, defaultBundle);
+  if (exportDir) {
+    await exportBrandAssets(exportDir, defaultBundle);
   }
 
-  if (!options.exportOnly) {
+  if (!values["export-only"]) {
     await writeGeneratedModule({ viewBox, pathData, defaultBundle });
   }
 }
-
-await main();

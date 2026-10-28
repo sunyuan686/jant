@@ -2,8 +2,11 @@
 # Tools
 # =============================================================================
 [tools]
-node = "lts"
-pnpm = "10.28.2"
+# The major the Dockerfile, the deploy workflow, and `engines` build and run on.
+# "lts" would move to the next major on its own when that one becomes LTS.
+node = "24"
+# Same as `packageManager` in package.json, which CI and the Docker build use.
+pnpm = "10.33.0"
 hugo-extended = "0.160.1"
 
 # =============================================================================
@@ -50,7 +53,7 @@ run = 'node dev/scripts/setup-dev-auth.mjs "$usage_password"'
 description = "Update the local Node admin password to match DEMO_PASSWORD in .env.node (or arg)"
 usage = 'arg "[password]"'
 dir = "packages/core"
-run = 'pnpm exec tsx dev/scripts/sync-dev-password.ts "$usage_password"'
+run = 'node dev/run-script.mjs dev/scripts/sync-dev-password.ts "$usage_password"'
 
 [tasks.serve-node]
 description = "Serve the production Node runtime locally (reads packages/core/.env.node)"
@@ -97,7 +100,7 @@ run = "node --env-file packages/core/.env.node packages/core/bin/jant.js assets 
 [tasks.brand-export]
 description = "Export the default Jant brand assets to a local directory"
 usage = 'arg "[path]" default="packages/core/src/assets/branding/generated"'
-run = 'pnpm exec tsx packages/core/dev/scripts/generate-brand-assets.ts --export-dir "$usage_path" --export-only'
+run = 'node packages/core/dev/run-script.mjs packages/core/dev/scripts/generate-brand-assets.ts --export-dir "$usage_path" --export-only'
 
 [tasks.jant]
 description = "Run the local Jant CLI from packages/core/bin/jant.js"
@@ -126,6 +129,7 @@ mise run check-lint
 # CLI snapshot tests import dist/node.js via loadNodeRuntime().
 pnpm --filter @jant/core build:lib
 pnpm --filter @jant/core test
+pnpm --filter create-jant test
 """
 
 [tasks.check-tests-watch]
@@ -143,15 +147,42 @@ pnpm --filter @jant/core build:lib
 node ./packages/core/dev/scripts/pg-smoke.mjs
 """
 
+[tasks.check-s3-smoke]
+description = "Run the S3 driver and the media trash against the server at S3_SMOKE_ENDPOINT"
+run = """
+: "${S3_SMOKE_ENDPOINT:?Set S3_SMOKE_ENDPOINT, S3_SMOKE_ACCESS_KEY_ID and S3_SMOKE_SECRET_ACCESS_KEY}"
+pnpm --filter @jant/core exec vitest run src/lib/__tests__/storage-s3.test.ts
+"""
+
+[tasks.check-pg-rehearsal]
+description = "Upgrade a seeded Postgres database from its baseline migration (PG_REHEARSAL_*_DATABASE_URL)"
+run = """
+pnpm --filter @jant/core build:lib
+node ./packages/core/dev/scripts/node-rehearsal.mjs --fixture packages/core/src/db/rehearsal-fixtures/pg-v0.3.39.json
+"""
+
+[tasks.check-sqlite-rehearsal]
+description = "Upgrade a seeded SQLite database on the Node runtime from its baseline migration"
+run = """
+pnpm --filter @jant/core build:lib
+node ./packages/core/dev/scripts/node-rehearsal.mjs --fixture packages/core/src/db/rehearsal-fixtures/v0.3.39.json
+"""
+
 [tasks.check-types]
 description = "Run TypeScript type checking (all packages)"
 run = "pnpm -r typecheck"
 
+[tasks.check-docker-smoke]
+description = "Build the Docker image and run the documented Compose quick start against it"
+run = """
+docker build -t jant:smoke .
+bash scripts/docker-smoke.sh jant:smoke
+"""
+
 [tasks.check-template]
-description = "Integration test: scaffold a project with create-jant, then build + typecheck it"
+description = "Integration test: scaffold projects with create-jant through pnpm, npm, Yarn 1, and Yarn 2+, install the pnpm and Yarn 2+ ones, and check the results"
 run = """
 pnpm --filter @jant/core build:lib
-pnpm --filter create-jant prepublishOnly
 pnpm --filter create-jant test-template
 """
 
@@ -191,6 +222,16 @@ run = "npx prettier --check ."
 description = "Check user-facing copy against the writing style rules"
 run = "node scripts/check-copy.mjs"
 
+[tasks.check-site-tables]
+description = "Check the repo's site content table lists against the schema"
+# Three hand-written lists enumerate a site's content tables. The commit that
+# added `smart_collection` updated the two beside the code it was editing and
+# missed the snapshot registry, which then dropped smart collections on export
+# and could not delete them on `--replace` — silently, for weeks. A vitest guard
+# anchors the registry to the schema; this anchors the repo-level lists to the
+# registry, so a new content table is registered once and reaches all three.
+run = "node scripts/check-site-tables.mjs"
+
 [tasks.check-site-bundle]
 description = "Check the exported theme's site bundle is in sync with its sources"
 # The bundle is a committed build output, so nothing fails when it goes stale —
@@ -218,14 +259,19 @@ run = """
 # result, which lands unformatted code without failing the commit.
 mise run check-format
 mise run check-lint
+mise run check-site-tables
 
 # Phase 2: Core checks
 mise run check-tests
 mise run check-copy
 mise run i18n-check
 mise run check-site-bundle
+mise run check-sqlite-rehearsal
 if [[ -n "${PG_SMOKE_DATABASE_URL:-}" ]]; then
   mise run check-pg-smoke
+fi
+if [[ -n "${PG_REHEARSAL_DATABASE_URL:-}" ]]; then
+  mise run check-pg-rehearsal
 fi
 
 # Phase 3: Template integration
@@ -249,7 +295,10 @@ run = "pnpm --filter @jant/core db:generate:pg"
 [tasks.db-wrangler-migrate]
 description = "Run migrations for the local Wrangler/D1 development database"
 dir = "packages/core"
-run = "node ./bin/jant.js migrate"
+# `--local` is required: without a runtime flag, `jant migrate` loads
+# packages/core/.env.node and targets the Node database whenever that file sets
+# DATABASE_URL or DATA_DIR.
+run = "node ./bin/jant.js migrate --local"
 
 [tasks.db-wrangler-clean]
 alias = "clean"
@@ -284,45 +333,43 @@ echo "Done! Local database is ready."
 [tasks.db-wrangler-rehearse]
 description = "Rebuild a local Wrangler/D1 from the frozen migration rehearsal fixture"
 dir = "packages/core"
-run = "node ./bin/jant.js db rehearse --local --fixture src/db/rehearsal-fixtures/demo-current.json --persist-to .wrangler/rehearsal"
+run = "node ./bin/jant.js db rehearse --local --fixture src/db/rehearsal-fixtures/v0.3.39.json --persist-to .wrangler/rehearsal"
 
 # =============================================================================
-# DB — Local Node (SQLite via packages/core/.env.node)
+# DB — Local Node (SQLite or Postgres via packages/core/.env.node)
 # =============================================================================
+# The scripts resolve the database, media, and dev credentials the way
+# `dev-node` does (packages/core/dev/node-dev-site.ts). `[password]` has no
+# default here, so an omitted argument falls through to $DEMO_PASSWORD, then
+# DEMO_PASSWORD in .env.node, then the scripts' built-in default.
 [tasks.db-node-migrate]
 description = "Run migrations for the local Node runtime database (reads .env.node)"
 dir = "packages/core"
 run = "node ./bin/jant.js migrate --node"
 
 [tasks.db-node-clean]
-description = "Delete the local Node runtime database and media storage"
-run = """
-echo "Removing local Node SQLite database and media..."
-rm -rf packages/core/.data packages/core/.media
-"""
+description = "Delete the local Node SQLite database and media storage (reads .env.node)"
+dir = "packages/core"
+run = "node dev/run-script.mjs dev/scripts/clean-node-dev.ts"
 
 [tasks.db-node-bootstrap-shell]
-description = "Ensure the local Node runtime shell (admin, onboarding, default nav, debug creds)"
-usage = 'arg "[password]" default="jant-dev-debug-login"'
-run = """
-echo "Running Node migrations..."
-mise run db-node-migrate
-echo "Bootstrapping local Node auth helpers..."
-mise run dev-auth-bootstrap "$usage_password"
-"""
+description = "Migrate and set up the local Node database (dev account, onboarding, default nav) and write dev credentials to .env.node"
+usage = 'arg "[password]"'
+dir = "packages/core"
+run = 'node dev/run-script.mjs dev/scripts/bootstrap-node-dev.ts "$usage_password"'
 
 [tasks.db-node-load-demo]
-description = "Bootstrap the local Node runtime and import sites/demo-source/canonical/site-export into an empty local database"
-usage = 'arg "[password]" default="jant-dev-debug-login"'
+description = "Set up the local Node runtime and import sites/demo-source/canonical/site-export into an empty local database through `jant site import`"
+usage = 'arg "[password]"'
 dir = "packages/core"
-run = 'pnpm exec tsx dev/scripts/import-node-demo-site-export.ts "$usage_password"'
+run = 'node dev/run-script.mjs dev/scripts/import-node-demo-site-export.ts "$usage_password"'
 
 [tasks.db-node-rebuild-demo]
 alias = "local-reset"
 description = "Recreate the local Node SQLite database and media storage, bootstrap the local shell, and load the canonical demo snapshot"
-usage = 'arg "[password]" default="jant-dev-debug-login"'
+usage = 'arg "[password]"'
 dir = "packages/core"
-run = 'pnpm exec tsx dev/scripts/reset-node-dev.ts "$usage_password"'
+run = 'node dev/run-script.mjs dev/scripts/reset-node-dev.ts "$usage_password"'
 
 # =============================================================================
 # DB — Remote (Cloudflare D1)
@@ -691,13 +738,6 @@ description = "Generate jant-starter template using create-jant CLI (for testing
 run = "bash scripts/starter/generate.sh"
 
 # =============================================================================
-# Code generation
-# =============================================================================
-[tasks.codegen-icons]
-description = "Generate ALL_ICON_NAMES in icon-catalog.ts from lucide-static"
-run = "npx tsx scripts/generate-icon-catalog.ts"
-
-# =============================================================================
 # Release & Publishing (Changesets)
 # =============================================================================
 [tasks.changeset]
@@ -712,13 +752,34 @@ arg "<summary>"
 """
 run = 'node scripts/release/changeset-add.mjs "$usage_bump" "$usage_summary"'
 
+[tasks.release-freeze-fixtures]
+description = "Freeze the snapshot, site export, and public surface of a published release as test fixtures"
+usage = """
+arg "<version>"
+"""
+run = 'node scripts/release/freeze-fixtures.mjs "$usage_version"'
+
+[tasks.update-public-surface]
+description = "Rewrite the public surface manifest (fixtures/public-surface.json) from the code"
+run = "UPDATE_PUBLIC_SURFACE=1 pnpm --filter @jant/core exec vitest run src/__tests__/public-surface.test.ts"
+
 [tasks.changeset-status]
 description = "Show pending changesets and version bumps"
 run = "pnpm changeset status"
 
 [tasks.release-version]
 description = "Apply changesets and bump versions (generates CHANGELOG)"
-run = "pnpm changeset version"
+# changesets/action checks out the release branch and resets it to main before
+# running this, which rewrites package.json files without changing them. pnpm
+# 10's pre-run dependency check then reports the lockfile's overrides as
+# outdated until an install records its state again, and the Release PR stops
+# updating. The lockfile is main's, so the install changes nothing. Then it
+# steps past a version npm already holds: 1.0.0 was published by accident.
+run = """
+pnpm install --frozen-lockfile --prefer-offline
+pnpm changeset version
+node scripts/release/skip-taken-version.mjs
+"""
 
 [tasks.release-publish]
 description = "Build and publish all packages to npm (CI only, requires provenance)"

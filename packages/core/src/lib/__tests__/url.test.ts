@@ -1,16 +1,20 @@
 import { describe, it, expect } from "vitest";
 import {
-  extractDomain,
   extractDisplayDomain,
+  extractDomain,
   isFullUrl,
   isSafeAbsoluteUrl,
   looksLikeAddress,
   normalizePath,
+  normalizeRedirectTarget,
+  redirectTargetHref,
+  redirectTargetPath,
   sanitizeRichTextHref,
   sanitizeUrl,
   stripSitePathPrefix,
   toInternalPath,
   toSameSitePath,
+  withRequestQuery,
 } from "../url.js";
 
 describe("extractDomain", () => {
@@ -327,5 +331,60 @@ describe("toInternalPath", () => {
     expect(toInternalPath("/about/", SITE)).toBe("/about");
     expect(toInternalPath("/collections/../about", SITE)).toBe("/about");
     expect(toInternalPath("/", SITE)).toBe("/");
+  });
+});
+
+describe("redirect targets", () => {
+  it("stores an address off the site as given, and a path in registry form", () => {
+    expect(normalizeRedirectTarget(" https://Example.com/Page?q=A ")).toBe(
+      "https://example.com/Page?q=A",
+    );
+    expect(normalizeRedirectTarget("/Archive//2024/?format=Note#top")).toBe(
+      "archive/2024?format=Note#top",
+    );
+    expect(normalizeRedirectTarget("new-path")).toBe("new-path");
+  });
+
+  it("gives back an address and the registry path a target names", () => {
+    expect(redirectTargetHref("archive?format=note")).toBe(
+      "/archive?format=note",
+    );
+    expect(redirectTargetHref("https://example.com/")).toBe(
+      "https://example.com/",
+    );
+    expect(redirectTargetPath("archive?format=note")).toBe("archive");
+    expect(redirectTargetPath("https://example.com/")).toBeNull();
+  });
+});
+
+describe("withRequestQuery", () => {
+  it("carries the request's query string to a path on the site", () => {
+    expect(
+      withRequestQuery("/notes", "https://blog.example/More-Notes?sort=oldest"),
+    ).toBe("/notes?sort=oldest");
+  });
+
+  it("leaves a target alone when the request has no query string", () => {
+    expect(withRequestQuery("/notes", "https://blog.example/more-notes")).toBe(
+      "/notes",
+    );
+  });
+
+  it("keeps a target's own query string and fragment", () => {
+    expect(
+      withRequestQuery("/archive?format=note", "https://blog.example/a?page=2"),
+    ).toBe("/archive?format=note");
+    expect(
+      withRequestQuery("/post#reply", "https://blog.example/a?page=2"),
+    ).toBe("/post#reply");
+  });
+
+  it("leaves a target off the site as given", () => {
+    expect(
+      withRequestQuery(
+        "https://example.com/page",
+        "https://blog.example/a?x=1",
+      ),
+    ).toBe("https://example.com/page");
   });
 });

@@ -385,7 +385,6 @@ msgstr "頭像"
 #. @context: Toast after saving avatar display preference
 #. @context: Toast after saving avatar display preference
 #: src/routes/dash/settings.tsx
-#: src/routes/dash/settings.tsx
 msgid "Avatar display updated."
 msgstr "頭像顯示已更新。"
 
@@ -460,7 +459,6 @@ msgstr "平靜自然，看著舒服。"
 #. @context: Dialog cancel button
 #. @context: GitHub sync picker — cancel action
 #: src/routes/dash/custom-urls.tsx
-#: src/routes/dash/custom-urls.tsx
 #: src/routes/dash/settings.tsx
 #: src/ui/dash/ActionButtons.tsx
 #: src/ui/dash/appearance/NavigationContent.tsx
@@ -473,13 +471,11 @@ msgstr "平靜自然，看著舒服。"
 #: src/ui/dash/settings/LanguageContent.tsx
 #: src/ui/dash/settings/SessionsContent.tsx
 #: src/ui/dash/settings/TelegramContent.tsx
-#: src/ui/dash/settings/TelegramContent.tsx
 msgid "Cancel"
 msgstr "取消"
 
 #. @context: Button to change password
 #. @context: Settings section heading
-#: src/ui/dash/settings/AccountContent.tsx
 #: src/ui/dash/settings/AccountContent.tsx
 msgid "Change Password"
 msgstr "變更密碼"
@@ -556,6 +552,11 @@ msgstr "乾淨、高對比，接近純白。"
 msgid "Code Injection"
 msgstr "程式碼注入"
 
+#. @context: Error shown when saving code injection is blocked in demo mode
+#: src/routes/dash/settings.tsx
+msgid "Code injection is off in demo mode. Every visitor shares the demo site."
+msgstr "示範模式下已關閉程式碼注入。示範網站由所有訪客共用。"
+
 #. @context: Toast after saving Code Injection settings
 #: src/routes/dash/settings.tsx
 msgid "Code injection updated."
@@ -569,7 +570,6 @@ msgstr "選集"
 #. @context: Custom URL target type badge for a collection
 #. @context: Custom URL type option
 #. @context: Suggested navigation link target type
-#: src/routes/dash/custom-urls.tsx
 #: src/routes/dash/custom-urls.tsx
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Collection"
@@ -613,7 +613,6 @@ msgstr "設定編輯器"
 
 #. @context: Config Editor linked setting status
 #. @context: Config Editor linked setting status
-#: src/ui/dash/settings/ConfigEditorContent.tsx
 #: src/ui/dash/settings/ConfigEditorContent.tsx
 msgid "Configured"
 msgstr "已設定"
@@ -699,7 +698,6 @@ msgstr "連線中…"
 #. @context: Setup form field - site content language
 #. @context: Setup form field - site content language
 #: src/routes/auth/setup.tsx
-#: src/routes/auth/setup.tsx
 #: src/ui/dash/settings/LanguageContent.tsx
 msgid "Content language"
 msgstr "內容語言"
@@ -737,14 +735,11 @@ msgstr "已複製"
 #. @context: Button to copy the Telegram binding code
 #: src/ui/dash/settings/GeneralContent.tsx
 #: src/ui/dash/settings/TelegramContent.tsx
-#: src/ui/dash/settings/TelegramContent.tsx
-#: src/ui/dash/settings/TelegramContent.tsx
 msgid "Copy"
 msgstr "複製"
 
 #. @context: Button to copy API token to clipboard
 #. @context: Button to copy API token to clipboard
-#: src/ui/dash/settings/ApiTokensContent.tsx
 #: src/ui/dash/settings/ApiTokensContent.tsx
 msgid "Copy Token"
 msgstr "複製權杖"
@@ -915,6 +910,11 @@ msgstr "目前的密碼不符。請再試一次。"
 msgid "Custom CSS"
 msgstr "自訂 CSS"
 
+#. @context: Error shown when saving custom CSS is blocked in demo mode
+#: src/routes/dash/settings.tsx
+msgid "Custom CSS is off in demo mode. Every visitor shares the demo site."
+msgstr "示範模式下已關閉自訂 CSS。示範網站由所有訪客共用。"
+
 #. @context: Toast after saving custom CSS
 #: src/routes/dash/settings.tsx
 msgid "Custom CSS updated."
@@ -1012,10 +1012,10 @@ msgstr "示範模式會隱藏會話、密碼更改與帳號刪除。匯出功能
 msgid "Demo sites always stay hidden from search engines."
 msgstr "示範網站會始終對搜尋引擎保持隱藏。"
 
-#. @context: Help text explaining that Discover is locked off in demo mode
+#. @context: Help text under the Jant Discover checkbox explaining that Discover is locked off in demo mode, shown in place of the usual help line. {name} is the directory's name and is rendered as the link to it, so keep it as one run of text.
 #: src/ui/dash/settings/GeneralContent.tsx
-msgid "Demo sites are never listed in Discover."
-msgstr "示範網站不會出現在 Discover 中。"
+msgid "Demo sites are never listed in {name}."
+msgstr "示範網站不會出現在 {name} 中。"
 
 #. @context: Color theme preview collection label
 #: src/ui/dash/appearance/ColorThemeContent.tsx
@@ -1030,7 +1030,6 @@ msgstr "目標網址"
 #. @context: Button to disconnect GitHub repository on GitHub Sync settings
 #. @context: Button to disconnect Telegram
 #. @context: Section heading for disconnect action on GitHub Sync settings
-#: src/ui/dash/settings/GitHubSyncContent.tsx
 #: src/ui/dash/settings/GitHubSyncContent.tsx
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Disconnect"
@@ -1683,6 +1682,11 @@ msgstr "低飽和的紅棕底，溫暖、有泥土感。"
 msgid "My Collection"
 msgstr "我的選集"
 
+#. @context: GitHub sync picker — hint under the create-on-github entry. Placeholder {name} is the suggested repo name.
+#: src/routes/dash/settings.tsx
+msgid "Name prefilled as {name}. The list refreshes when you return."
+msgstr "名稱預填為 {name}。返回後清單會重新整理。"
+
 #. @context: Settings item description for general
 #: src/ui/dash/settings/SettingsRootContent.tsx
 msgid "Name, visibility, feeds, and time zone"
@@ -1743,8 +1747,6 @@ msgstr "中性灰"
 #. @context: Button to create new custom URL
 #. @context: Button to create new custom URL
 #. @context: Page heading
-#: src/routes/dash/custom-urls.tsx
-#: src/routes/dash/custom-urls.tsx
 #: src/routes/dash/custom-urls.tsx
 msgid "New Custom URL"
 msgstr "新增自訂 URL"
@@ -1814,7 +1816,6 @@ msgstr "尚未提交。還沒有目錄知道這個網站存在。"
 #. @context: Config Editor linked setting status
 #. @context: Config Editor linked setting status
 #: src/ui/dash/settings/ConfigEditorContent.tsx
-#: src/ui/dash/settings/ConfigEditorContent.tsx
 msgid "Not configured"
 msgstr "未設定"
 
@@ -1867,7 +1868,6 @@ msgstr "啟用 {linkOpen}@{botUsername}{linkClose} 並傳送："
 
 #. @context: Config Editor link to a dedicated settings page
 #. @context: Config Editor link to a dedicated settings page
-#: src/ui/dash/settings/ConfigEditorContent.tsx
 #: src/ui/dash/settings/ConfigEditorContent.tsx
 msgid "Open setting"
 msgstr "啟用設定"
@@ -2019,7 +2019,6 @@ msgstr "已釘選"
 #. @context: Custom URL target type badge for a post
 #. @context: Custom URL type option
 #: src/routes/dash/custom-urls.tsx
-#: src/routes/dash/custom-urls.tsx
 msgid "Post"
 msgstr "貼文"
 
@@ -2101,7 +2100,6 @@ msgstr "最近更新"
 #. @context: Custom URL target type badge for a redirect
 #. @context: Custom URL type option
 #: src/routes/dash/custom-urls.tsx
-#: src/routes/dash/custom-urls.tsx
 msgid "Redirect"
 msgstr "重新導向"
 
@@ -2171,7 +2169,6 @@ msgstr "從導覽中移除此頁面？頁面本身不會被刪除。"
 #. @context: Label for GitHub repository input on GitHub Sync settings
 #. @context: Label for connected repository on GitHub Sync status
 #: src/routes/dash/settings.tsx
-#: src/ui/dash/settings/GitHubSyncContent.tsx
 #: src/ui/dash/settings/GitHubSyncContent.tsx
 msgid "Repository"
 msgstr "儲存庫"
@@ -2281,13 +2278,11 @@ msgstr "搜尋執行階段設定並啟用進階設定"
 #. @context: Config Editor search input placeholder
 #. @context: Config Editor search input placeholder
 #: src/ui/dash/settings/ConfigEditorContent.tsx
-#: src/ui/dash/settings/ConfigEditorContent.tsx
 msgid "Search settings"
 msgstr "搜尋設定"
 
 #. @context: Toast after saving search settings
 #. @context: Toast after saving search settings
-#: src/routes/dash/settings.tsx
 #: src/routes/dash/settings.tsx
 msgid "Search settings updated."
 msgstr "搜尋設定已更新。"
@@ -2469,7 +2464,6 @@ msgstr "網站可見性"
 #. @context: Toast after saving the site visibility settings
 #. @context: Toast after saving the site visibility settings
 #: src/routes/dash/settings.tsx
-#: src/routes/dash/settings.tsx
 msgid "Site visibility updated."
 msgstr "網站可見性已更新。"
 
@@ -2549,7 +2543,6 @@ msgstr "目標 slug"
 #. @context: Settings section heading for Telegram setup
 #: src/routes/dash/settings.tsx
 #: src/ui/dash/settings/SettingsRootContent.tsx
-#: src/ui/dash/settings/TelegramContent.tsx
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Telegram"
 msgstr "Telegram"
@@ -2749,11 +2742,6 @@ msgstr "此設定未儲存。請檢查設定值並再試一次。"
 msgid "This site has no directory to announce to."
 msgstr "這個站點沒有可提交的目錄。"
 
-#. @context: Discover status line for a site that chose the old featured-only mode and has no featured posts. Says how to move to the current setting, which reads every public post.
-#: src/ui/dash/settings/GeneralContent.tsx
-msgid "This site still limits Discover to featured posts, and no post is marked Featured, so your feed carries nothing to show. Untick and tick the box to let Discover read every public post."
-msgstr "目前仍只向 Discover 提供精選貼文，但沒有任何貼文標為 Featured，訂閱源裡沒有可顯示的內容。取消勾選再重新勾選，即可讓 Discover 讀取全部公開貼文。"
-
 #. @context: Warning text on account deletion page
 #: src/ui/dash/settings/DeleteAccountContent.tsx
 msgid "This will permanently delete all your data — posts, media, collections, settings, and your account. Your blog will be reset to its initial setup state. This cannot be undone."
@@ -2782,7 +2770,6 @@ msgstr "時區已更新。"
 #. @context: Collection title field in Navigation settings
 #. @context: Title field label in quick page creation
 #: src/ui/dash/appearance/NavigationContent.tsx
-#: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Title"
 msgstr "標題"
 
@@ -2801,6 +2788,11 @@ msgstr "權杖名稱 (API 權杖名稱欄位。)"
 msgid "Tokens let you access the API from scripts, shortcuts, and other tools without signing in."
 msgstr "權杖讓你從腳本，捷徑和其他工具存取 API 無需登入"
 
+#. @context: Error toast when setup attempts hit the rate limit
+#: src/routes/auth/setup.tsx
+msgid "Too many setup attempts. Wait a few minutes and try again."
+msgstr "設定嘗試次數過多。請等幾分鐘再試。"
+
 #. @context: GitHub sync picker — retry button
 #: src/routes/dash/settings.tsx
 msgid "Try again"
@@ -2818,7 +2810,6 @@ msgstr "關閉"
 
 #. @context: Title of the dialog confirming removal of the last additional language
 #. @context: Title of the disable-multilingual dialog
-#: src/ui/dash/settings/LanguageContent.tsx
 #: src/ui/dash/settings/LanguageContent.tsx
 msgid "Turn off multilingual content?"
 msgstr "關閉多語言？"
@@ -3012,11 +3003,6 @@ msgstr "暖陶土色"
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Warm-neutral and easy for long reading."
 msgstr "暖中性，適合長讀。"
-
-#. @context: GitHub sync picker — hint under the create-on-github entry. Placeholder {name} is the suggested repo name.
-#: src/routes/dash/settings.tsx
-msgid "We'll prefill the name {name}. The list refreshes on return."
-msgstr "我們會預先填入名稱 {name}。返回時清單會重新整理。"
 
 #. @context: Setup page welcome heading
 #: src/routes/auth/setup.tsx

@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { loadNodeRuntime } from "../lib/load-node-runtime.js";
+import { autoloadNodeEnv } from "../lib/node-env.js";
 
 export async function run(argv) {
   const { values } = parseArgs({
@@ -13,6 +14,10 @@ export async function run(argv) {
     console.log("Usage: jant start");
     console.log("");
     console.log("Start the Node.js server using environment variables.");
+    console.log(
+      "Reads `.env` in the current directory, or the file JANT_ENV_FILE",
+    );
+    console.log("names. Variables already set in the environment win.");
     console.log("");
     console.log("Required:");
     console.log("  AUTH_SECRET=your-secret");
@@ -40,7 +45,73 @@ export async function run(argv) {
     process.exit(0);
   }
 
+  autoloadNodeEnv();
   const { start } = await loadNodeRuntime();
-  const handle = await start();
+  let handle;
+  try {
+    handle = await start();
+  } catch (error) {
+    exitOnRefusal(error);
+    throw error;
+  }
+  closeOnSignal(handle);
   console.log(`Jant listening on ${handle.url}`);
+}
+
+/**
+ * Exit with the message alone when the runtime refused an unmigrated database.
+ *
+ * The refusal tells the operator what to run, and it is what `docker compose
+ * logs` shows; a stack trace and the full list of migrations would bury it.
+ * Any other error is left to the caller.
+ *
+ * @param {unknown} error - What `start()` threw
+ * @param {Pick<NodeJS.Process, "exit">} [target] - The process to exit
+ * @returns {void}
+ * @example
+ * exitOnRefusal(error);
+ */
+export function exitOnRefusal(error, target = process) {
+  if (error?.code !== "JANT_PENDING_MIGRATIONS") {
+    return;
+  }
+  console.error(`Error: ${error.message}`);
+  target.exit(1);
+}
+
+/**
+ * Close the server and the database when the process is asked to stop.
+ *
+ * Docker stops a container with SIGTERM, and node runs as PID 1 there, which
+ * ignores a signal it has no handler for: without this, the container is
+ * killed ten seconds later and SQLite's last writes stay in `jant.sqlite-wal`
+ * rather than in `jant.sqlite`, the file a backup copies. Closing the database
+ * writes them back. A second signal stops without waiting.
+ *
+ * @param {{ close(): Promise<void> }} handle - The running server
+ * @param {Pick<NodeJS.Process, "on" | "exit">} [target] - The process to watch
+ * @returns {void}
+ * @example
+ * closeOnSignal(await start());
+ */
+export function closeOnSignal(handle, target = process) {
+  let closing = false;
+  /** @param {NodeJS.Signals} signal */
+  const onSignal = (signal) => {
+    if (closing) {
+      target.exit(1);
+      return;
+    }
+    closing = true;
+    console.log(`Received ${signal}, closing...`);
+    handle.close().then(
+      () => target.exit(0),
+      (error) => {
+        console.error("Failed to close cleanly:", error);
+        target.exit(1);
+      },
+    );
+  };
+  target.on("SIGTERM", onSignal);
+  target.on("SIGINT", onSignal);
 }

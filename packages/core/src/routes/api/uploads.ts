@@ -3,10 +3,13 @@ import { z } from "zod";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { requireAuthApi } from "../../middleware/auth.js";
-import { parseIdParam, ValidationError } from "../../lib/errors.js";
+import { validate } from "../../middleware/validate.js";
+import { parseIdParam } from "../../lib/errors.js";
+import { requireStorage } from "../../lib/storage.js";
 import { ID_PREFIX } from "../../lib/ids.js";
-import { parseValidated } from "../../lib/schemas.js";
 import { getMediaUrl, getPublicUrlForProvider } from "../../lib/image.js";
+import { toApiMedia } from "../../lib/api-media.js";
+import { toPublicPath } from "../../lib/url.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
@@ -35,6 +38,22 @@ const CompleteUploadSchema = z.object({
     .optional(),
 });
 
+const PART_NUMBER_REQUIRED = "partNumber query parameter is required";
+const PART_NUMBER_INVALID = "partNumber must be a positive integer";
+
+const UploadPartQuerySchema = z.object({
+  partNumber: z
+    .string({ error: PART_NUMBER_REQUIRED })
+    .min(1, PART_NUMBER_REQUIRED)
+    .transform((raw) => Number.parseInt(raw, 10))
+    .pipe(
+      z
+        .number({ error: PART_NUMBER_INVALID })
+        .int(PART_NUMBER_INVALID)
+        .min(1, PART_NUMBER_INVALID),
+    ),
+});
+
 const SideloadSchema = z.object({
   url: z.string().url(),
   alt: z.string().max(2000).optional(),
@@ -50,46 +69,44 @@ uploadsApiRoutes.use("*", requireAuthApi());
  * bytes (bypassing browser CORS) and stores them. Returns the new media's
  * public URL so the editor can swap the node's `src`.
  */
-uploadsApiRoutes.post("/sideload", async (c) => {
-  const storage = c.var.storage;
-  if (!storage) {
-    return c.json(
-      { error: "File storage isn't set up. Check your server config." },
-      500,
+uploadsApiRoutes.post(
+  "/sideload",
+  validate("json", SideloadSchema),
+  async (c) => {
+    const storage = requireStorage(c.var.storage);
+
+    const { url, alt } = c.req.valid("json");
+
+    const media = await c.var.services.media.ingestFromUrl(
+      { url, alt },
+      {
+        storage,
+        storageDriver: c.var.appConfig.storageDriver,
+        maxFileSizeMB: c.var.appConfig.uploadMaxFileSize,
+      },
     );
-  }
 
-  const { url, alt } = parseValidated(SideloadSchema, await c.req.json());
+    const mediaPublicUrl = getPublicUrlForProvider(
+      c.var.appConfig.storageDriver,
+      c.var.appConfig.r2PublicUrl,
+      c.var.appConfig.s3PublicUrl,
+      c.var.appConfig.localPublicUrl,
+    );
 
-  const media = await c.var.services.media.ingestFromUrl(
-    { url, alt },
-    {
-      storage,
-      storageDriver: c.var.appConfig.storageDriver,
-      maxFileSizeMB: c.var.appConfig.uploadMaxFileSize,
-    },
-  );
-
-  const mediaPublicUrl = getPublicUrlForProvider(
-    c.var.appConfig.storageDriver,
-    c.var.appConfig.r2PublicUrl,
-    c.var.appConfig.s3PublicUrl,
-    c.var.appConfig.localPublicUrl,
-  );
-
-  return c.json({
-    id: media.id,
-    url: getMediaUrl(
-      media.storageKey,
-      mediaPublicUrl,
-      c.var.appConfig.sitePathPrefix,
-    ),
-    width: media.width,
-    height: media.height,
-    mimeType: media.mimeType,
-    size: media.size,
-  });
-});
+    return c.json({
+      id: media.id,
+      url: getMediaUrl(
+        media.storageKey,
+        mediaPublicUrl,
+        c.var.appConfig.sitePathPrefix,
+      ),
+      width: media.width,
+      height: media.height,
+      mimeType: media.mimeType,
+      size: media.size,
+    });
+  },
+);
 
 function scheduleExpiredUploadCleanup(
   c: {
@@ -133,67 +150,66 @@ function scheduleExpiredUploadCleanup(
   }
 }
 
-uploadsApiRoutes.post("/init", async (c) => {
-  const storage = c.var.storage;
-  if (!storage) {
-    return c.json(
-      { error: "File storage isn't set up. Check your server config." },
-      500,
+uploadsApiRoutes.post(
+  "/init",
+  validate("json", InitiateUploadSchema),
+  async (c) => {
+    const storage = requireStorage(c.var.storage);
+
+    scheduleExpiredUploadCleanup(c);
+
+    const data = c.req.valid("json");
+    const result = await c.var.services.uploads.initiate(
+      {
+        originalName: data.filename,
+        contentType: data.contentType,
+        size: data.size,
+        checksumSha256: data.checksumSha256,
+      },
+      {
+        storage,
+        storageDriver: c.var.appConfig.storageDriver,
+        maxFileSizeMB: c.var.appConfig.uploadMaxFileSize,
+      },
     );
-  }
 
-  scheduleExpiredUploadCleanup(c);
+    if (result.transport.kind === "put") {
+      return c.json(result);
+    }
 
-  const body = await c.req.json();
-  const data = parseValidated(InitiateUploadSchema, body);
-  const result = await c.var.services.uploads.initiate(
-    {
-      originalName: data.filename,
-      contentType: data.contentType,
-      size: data.size,
-      checksumSha256: data.checksumSha256,
-    },
-    {
-      storage,
-      storageDriver: c.var.appConfig.storageDriver,
-      maxFileSizeMB: c.var.appConfig.uploadMaxFileSize,
-    },
-  );
+    if (result.transport.kind === "multipartRelay") {
+      return c.json({
+        id: result.id,
+        transport: {
+          kind: "multipartRelay",
+          method: "PUT",
+          // A site under a path prefix answers there; the client sends to
+          // this URL as given.
+          url: toPublicPath(
+            `/api/uploads/${result.id}/part`,
+            c.var.appConfig.sitePathPrefix,
+          ),
+          partSize: result.transport.partSize,
+        },
+      });
+    }
 
-  if (result.transport.kind === "put") {
-    return c.json(result);
-  }
-
-  if (result.transport.kind === "multipartRelay") {
     return c.json({
       id: result.id,
       transport: {
-        kind: "multipartRelay",
+        kind: "relay",
         method: "PUT",
-        url: `/api/uploads/${result.id}/part`,
-        partSize: result.transport.partSize,
+        url: toPublicPath(
+          `/api/uploads/${result.id}/body`,
+          c.var.appConfig.sitePathPrefix,
+        ),
       },
     });
-  }
-
-  return c.json({
-    id: result.id,
-    transport: {
-      kind: "relay",
-      method: "PUT",
-      url: `/api/uploads/${result.id}/body`,
-    },
-  });
-});
+  },
+);
 
 uploadsApiRoutes.put("/:id/body", async (c) => {
-  const storage = c.var.storage;
-  if (!storage) {
-    return c.json(
-      { error: "File storage isn't set up. Check your server config." },
-      500,
-    );
-  }
+  const storage = requireStorage(c.var.storage);
 
   const id = parseIdParam(c.req.param("id"), ID_PREFIX.uploadSession);
   const bytes = new Uint8Array(await c.req.arrayBuffer());
@@ -201,42 +217,27 @@ uploadsApiRoutes.put("/:id/body", async (c) => {
   return c.body(null, 204);
 });
 
-uploadsApiRoutes.put("/:id/part", async (c) => {
-  const storage = c.var.storage;
-  if (!storage) {
-    return c.json(
-      { error: "File storage isn't set up. Check your server config." },
-      500,
+uploadsApiRoutes.put(
+  "/:id/part",
+  validate("query", UploadPartQuerySchema),
+  async (c) => {
+    const storage = requireStorage(c.var.storage);
+
+    const id = parseIdParam(c.req.param("id"), ID_PREFIX.uploadSession);
+    const { partNumber } = c.req.valid("query");
+
+    const part = await c.var.services.uploads.uploadRelayPart(
+      id,
+      partNumber,
+      await c.req.arrayBuffer(),
+      { storage },
     );
-  }
-
-  const id = parseIdParam(c.req.param("id"), ID_PREFIX.uploadSession);
-  const partNumberRaw = c.req.query("partNumber");
-  if (!partNumberRaw) {
-    throw new ValidationError("partNumber query parameter is required");
-  }
-  const partNumber = Number.parseInt(partNumberRaw, 10);
-  if (!Number.isInteger(partNumber) || partNumber < 1) {
-    throw new ValidationError("partNumber must be a positive integer");
-  }
-
-  const part = await c.var.services.uploads.uploadRelayPart(
-    id,
-    partNumber,
-    await c.req.arrayBuffer(),
-    { storage },
-  );
-  return c.json(part);
-});
+    return c.json(part);
+  },
+);
 
 uploadsApiRoutes.put("/:id/poster", async (c) => {
-  const storage = c.var.storage;
-  if (!storage) {
-    return c.json(
-      { error: "File storage isn't set up. Check your server config." },
-      500,
-    );
-  }
+  const storage = requireStorage(c.var.storage);
 
   const id = parseIdParam(c.req.param("id"), ID_PREFIX.uploadSession);
   await c.var.services.uploads.uploadPoster(
@@ -247,51 +248,26 @@ uploadsApiRoutes.put("/:id/poster", async (c) => {
   return c.body(null, 204);
 });
 
-uploadsApiRoutes.post("/:id/complete", async (c) => {
-  const storage = c.var.storage;
-  if (!storage) {
-    return c.json(
-      { error: "File storage isn't set up. Check your server config." },
-      500,
-    );
-  }
+uploadsApiRoutes.post(
+  "/:id/complete",
+  validate("json", CompleteUploadSchema),
+  async (c) => {
+    const storage = requireStorage(c.var.storage);
 
-  const id = parseIdParam(c.req.param("id"), ID_PREFIX.uploadSession);
-  const body = await c.req.json();
-  const data = parseValidated(CompleteUploadSchema, body);
-  const result = await c.var.services.uploads.complete(id, data, {
-    storage,
-    storageDriver: c.var.appConfig.storageDriver,
-  });
+    const id = parseIdParam(c.req.param("id"), ID_PREFIX.uploadSession);
+    const data = c.req.valid("json");
+    const result = await c.var.services.uploads.complete(id, data, {
+      storage,
+      storageDriver: c.var.appConfig.storageDriver,
+    });
 
-  const mediaPublicUrl = getPublicUrlForProvider(
-    c.var.appConfig.storageDriver,
-    c.var.appConfig.r2PublicUrl,
-    c.var.appConfig.s3PublicUrl,
-    c.var.appConfig.localPublicUrl,
-  );
-
-  return c.json({
-    id: result.id,
-    filename: result.filename,
-    url: getMediaUrl(
-      result.storageKey,
-      mediaPublicUrl,
-      c.var.appConfig.sitePathPrefix,
-    ),
-    mimeType: result.mimeType,
-    size: result.size,
-  });
-});
+    // The same shape `GET /api/media/:id` returns, as for every other create.
+    return c.json(toApiMedia(result, c.var.appConfig), 201);
+  },
+);
 
 uploadsApiRoutes.post("/:id/abort", async (c) => {
-  const storage = c.var.storage;
-  if (!storage) {
-    return c.json(
-      { error: "File storage isn't set up. Check your server config." },
-      500,
-    );
-  }
+  const storage = requireStorage(c.var.storage);
 
   const id = parseIdParam(c.req.param("id"), ID_PREFIX.uploadSession);
   await c.var.services.uploads.abort(id, { storage });

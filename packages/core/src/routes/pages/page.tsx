@@ -24,10 +24,14 @@ import {
 } from "../../lib/post-display.js";
 import { buildArticleJsonLd } from "../../lib/structured-data.js";
 import {
+  getPostPath,
+  isFullUrl,
+  normalizePath,
+  redirectTargetHref,
   toAbsoluteAssetUrl,
   toAbsoluteSiteUrl,
-  toPublicHref,
   toPublicPath,
+  withRequestQuery,
 } from "../../lib/url.js";
 import {
   buildLanguageSwitcher,
@@ -38,7 +42,7 @@ import {
 } from "../../lib/view-language.js";
 import { getOrBuildEntry } from "../../i18n/supported-locales.js";
 import { ABOUT_PAGE_SLUG } from "../../services/about-page.js";
-import { isTextAttachment } from "../../services/media.js";
+import type { ResolvedPath } from "../../services/path.js";
 import type { Post } from "../../types.js";
 import { renderArchivePage } from "./archive.js";
 import { renderCollectionFeed, renderCollectionPage } from "./collection.js";
@@ -68,10 +72,10 @@ interface TextPreviewAutoOpen {
  * content at every reply URL. Point the canonical to the thread root so
  * crawlers consolidate ranking on one URL.
  *
- * The root post is always at index 0 of `threadPostViews` (getThread orders
- * by createdAt ASC, and the DB check constraint guarantees root has the
- * smallest createdAt in its thread). When `threadPostViews` is undefined the
- * post is not part of a multi-post thread, so the post itself is the root.
+ * The root post is always at index 0 of `threadPostViews`: Thread order puts
+ * the root first even when a reply is older than it. When `threadPostViews` is
+ * undefined the post is not part of a multi-post thread, so the post itself is
+ * the root.
  */
 function buildPostCanonicalHref(
   postView: { permalink: string },
@@ -150,6 +154,7 @@ async function renderPostWithTextPreview(
     .replace(/>/g, "\\u003e");
 
   return renderPublicPage(c, {
+    page: "post",
     title: buildPageTitle(pageTitle, navData.siteName),
     description: meta.description,
     canonicalHref,
@@ -241,6 +246,7 @@ function canRenderDraftAboutEditor(
 async function buildTranslationLinks(
   c: Context<Env>,
   post: Post,
+  canonicalAlias?: string | null,
 ): Promise<{
   alternates: LanguageAlternate[];
   pathByLanguage: Map<string, string>;
@@ -249,28 +255,34 @@ async function buildTranslationLinks(
   const pathByLanguage = new Map<string, string>();
   if (!post.language) return { alternates: [], pathByLanguage };
 
-  const translations = post.translationGroupId
-    ? await c.var.services.posts.listTranslations(post.threadId)
-    : [];
   // Only the versions a reader can actually open. A draft or private
   // translation answers the same URL with a 404, and an `hreflang` pointing
   // at a 404 is worse than no `hreflang` at all — the switcher then falls
   // back to that language's home, which is always somewhere real (§5).
+  const translations = post.translationGroupId
+    ? await c.var.services.posts.listTranslations(post.threadId, {
+        status: "published",
+        excludePrivate: true,
+      })
+    : [];
   const siblings = translations.filter(
-    (other): other is Post & { language: string } =>
-      Boolean(other.language) &&
-      other.status === "published" &&
-      other.visibility !== "private",
+    (other): other is Post & { language: string } => Boolean(other.language),
   );
 
   // Prefer each post's custom URL when it has one, the same way permalinks do,
-  // so a link never points at a URL that immediately redirects.
-  const aliasesMap = await c.var.services.paths.getPostAliases([
-    post.id,
+  // so a link never points at a URL that immediately redirects. The post's
+  // own is known when the caller loaded it with the post.
+  const aliasIds = [
+    ...(canonicalAlias === undefined ? [post.id] : []),
     ...siblings.map((other) => other.id),
-  ]);
+  ];
+  const aliasesMap =
+    aliasIds.length > 0
+      ? await c.var.services.paths.getPostAliases(aliasIds)
+      : new Map<string, string[]>();
+  if (canonicalAlias) aliasesMap.set(post.id, [canonicalAlias]);
   const pathFor = (target: Post) =>
-    `/${aliasesMap.get(target.id)?.[0] ?? target.slug}`;
+    getPostPath(target.slug, aliasesMap.get(target.id)?.[0]);
 
   const group = [post as Post & { language: string }, ...siblings];
   for (const target of group) {
@@ -291,18 +303,28 @@ async function buildTranslationLinks(
 async function renderPost(
   c: Context<Env>,
   post: Post,
-  options: { allowDraft?: boolean; isPreview?: boolean } = {},
+  options: {
+    allowDraft?: boolean;
+    isPreview?: boolean;
+    /** The post's canonical alias, when the caller loaded it with the post. */
+    canonicalAlias?: string | null;
+  } = {},
 ) {
-  // Start navData fetch immediately — it's independent of thread/media queries.
-  // The chrome is scoped to the post's language: a Japanese post's logo and
-  // nav lead into /ja, since the post URL itself carries no language.
+  // The chrome, the thread, and the translation links each need only the
+  // post, so they load together. The chrome is scoped to the post's
+  // language: a Japanese post's logo and nav lead into /ja, since the post
+  // URL itself carries no language.
   const navDataPromise = getNavigationData(c, { languageScope: post.language });
-  const display = await assemblePostPageDisplay(c, post, {
-    // Private-post access is validated before renderPost() is called.
-    isAuthenticated: true,
-    allowDraft: options.allowDraft,
-    includeDraftThread: options.isPreview,
-  });
+  navDataPromise.catch(() => {});
+  const [display, { alternates, pathByLanguage }] = await Promise.all([
+    assemblePostPageDisplay(c, post, {
+      // Private-post access is validated before renderPost() is called.
+      isAuthenticated: true,
+      allowDraft: options.allowDraft,
+      includeDraftThread: options.isPreview,
+    }),
+    buildTranslationLinks(c, post, options.canonicalAlias),
+  ]);
   if (!display) {
     return c.notFound();
   }
@@ -315,7 +337,6 @@ async function renderPost(
   // profile (Simplified, Traditional, Japanese and Korean share code points
   // but not glyphs).
   if (post.language) c.set("lang", post.language);
-  const { alternates, pathByLanguage } = await buildTranslationLinks(c, post);
   // The reader-facing half of the same data: a line under the post, so someone
   // who cannot read this language does not have to find the switcher.
   const translationLinks = [...pathByLanguage]
@@ -367,6 +388,7 @@ async function renderPost(
   )}?edit=1`;
 
   return renderPublicPage(c, {
+    page: "post",
     title: previewTitle
       ? buildPageTitle(previewTitle, meta.title, navData.siteName)
       : buildPageTitle(meta.title, navData.siteName),
@@ -433,6 +455,29 @@ pageRoutes.get("/preview/:slug", requireAuth(), async (c) => {
 });
 
 /**
+ * Resolve a stored path, reusing the lookup the stored-redirect middleware
+ * already made for this request's own address.
+ *
+ * Only that one address is reusable: a `/feed` suffix or a text deep link asks
+ * about a different path, and a language view strips its prefix before asking,
+ * so the stored form is compared rather than assumed.
+ *
+ * @param c - Hono context
+ * @param storedPath - Registry path form, without a leading slash
+ * @returns The resolved record, or null when nothing is registered there
+ */
+async function resolveStoredPath(
+  c: Context<Env>,
+  storedPath: string,
+): Promise<ResolvedPath | null> {
+  const lookup = c.var.pathLookup;
+  if (lookup && lookup.path === normalizePath(storedPath)) {
+    return lookup.record;
+  }
+  return c.var.services.paths.resolve(storedPath);
+}
+
+/**
  * Resolve a path through the path registry: posts, collections, their aliases,
  * archive URLs, stored redirects, and text-attachment deep links.
  *
@@ -459,15 +504,16 @@ export async function renderRegisteredPath(c: Context<Env>): Promise<Response> {
 
   // Stored redirects outrank the normal post/collection/deep-link resolvers,
   // but can never shadow an explicit or reserved application route.
-  const resolved = await c.var.services.paths.resolve(fullPath);
+  const resolved = await resolveStoredPath(c, fullPath);
   if (resolved?.kind === "redirect" && resolved.redirectToPath) {
-    const target = `/${resolved.redirectToPath}`;
-    // Follow the stored redirect within the current view; the hop that lands
-    // on a post then applies the canonical-address rule below.
+    const target = redirectTargetHref(resolved.redirectToPath);
+    // Follow a redirect on the site within the current view; the hop that
+    // lands on a post then applies the canonical-address rule below. One off
+    // the site goes where it says.
     return c.redirect(
-      toPublicHref(target) === target
-        ? toViewPath(c, target)
-        : toPublicHref(target, sitePathPrefix),
+      isFullUrl(target)
+        ? target
+        : withRequestQuery(toViewPath(c, target), c.req.url),
       resolved.redirectType ?? 301,
     );
   }
@@ -501,7 +547,10 @@ export async function renderRegisteredPath(c: Context<Env>): Promise<Response> {
           collection.id,
         );
         if (alias) {
-          return c.redirect(toViewPath(c, `/${alias.path}/feed`), 301);
+          return c.redirect(
+            withRequestQuery(toViewPath(c, `/${alias.path}/feed`), c.req.url),
+            301,
+          );
         }
 
         const result = await renderCollectionFeed(c, collection.slug);
@@ -528,45 +577,47 @@ export async function renderRegisteredPath(c: Context<Env>): Promise<Response> {
     const resolvedPost = await c.var.services.paths.resolve(slugPart);
 
     if (resolvedPost?.postId) {
-      const post = await c.var.services.posts.getById(resolvedPost.postId);
+      const loaded = await c.var.services.posts.getWithCanonicalAlias(
+        resolvedPost.postId,
+      );
+      const post = loaded?.post;
       if (!post || post.status === "draft") return c.notFound();
 
-      if (post.visibility === "private") {
-        const navData = await getNavigationData(c);
-        if (!navData.isAuthenticated) return c.notFound();
+      if (post.visibility === "private" && !c.var.isAuthenticated) {
+        return c.notFound();
       }
 
       // Redirect slug → alias if one exists (same pattern as post pages)
-      if (resolvedPost.kind === "slug") {
-        const alias = await c.var.services.customUrls.getByTarget(
-          "post",
-          post.id,
+      if (resolvedPost.kind === "slug" && loaded.canonicalAlias) {
+        return c.redirect(
+          withRequestQuery(
+            toPublicPath(
+              `${loaded.canonicalAlias}/text/${mediaId}`,
+              sitePathPrefix,
+            ),
+            c.req.url,
+          ),
+          301,
         );
-        if (alias) {
-          return c.redirect(
-            toPublicPath(`/${alias.path}/text/${mediaId}`, sitePathPrefix),
-            301,
-          );
-        }
       }
 
       // A text attachment belongs to a post, so it inherits that post's single
       // canonical address rather than existing once per language view.
       if (inLanguageView) {
-        return c.redirect(toPublicPath(`/${fullPath}`, sitePathPrefix), 301);
+        return c.redirect(
+          withRequestQuery(
+            toPublicPath(`/${fullPath}`, sitePathPrefix),
+            c.req.url,
+          ),
+          301,
+        );
       }
 
-      // Verify the media belongs to this post and is a Jant-composed text
-      // attachment. Plain text-file uploads (.md, .txt, .csv) also carry
-      // mediaKind === "text" but lack the split HTML/JSON sibling layout
-      // that this page route expects — `isTextAttachment` excludes them.
-      const media = await c.var.services.media.getById(mediaId);
-      if (!media || media.postId !== post.id || !isTextAttachment(media)) {
-        return c.notFound();
-      }
-
-      const attachment = await c.var.services.media.getTextAttachmentHtml(
-        media.id,
+      // The file must belong to this post; the service applies the rest of
+      // the rule the preview dialog's `/_/text/{id}` shares.
+      const attachment = await c.var.services.textAttachments.readForViewer(
+        mediaId,
+        { isAuthenticated: c.var.isAuthenticated, postId: post.id },
         c.var.storage ?? null,
       );
       if (!attachment) return c.notFound();
@@ -581,8 +632,8 @@ export async function renderRegisteredPath(c: Context<Env>): Promise<Response> {
         html: attachment.html,
         shareHref: c.req.path,
         postHref: postPermalink,
-        attachmentTitle: attachment.summary ?? "",
-        mediaId: media.id,
+        attachmentTitle: attachment.media.summary ?? "",
+        mediaId: attachment.media.id,
       });
     }
   }
@@ -597,33 +648,38 @@ export async function renderRegisteredPath(c: Context<Env>): Promise<Response> {
   }
 
   if (resolved.postId) {
-    const post = await c.var.services.posts.getById(resolved.postId);
+    const loaded = await c.var.services.posts.getWithCanonicalAlias(
+      resolved.postId,
+    );
+    const post = loaded?.post;
     if (!post) return c.notFound();
 
     const allowDraft = canRenderDraftAboutEditor(c, fullPath, post);
     if (post.status === "draft" && !allowDraft) return c.notFound();
 
-    if (post.visibility === "private") {
-      const navData = await getNavigationData(c);
-      if (!navData.isAuthenticated) return c.notFound();
+    if (post.visibility === "private" && !c.var.isAuthenticated) {
+      return c.notFound();
     }
 
-    // If accessed via slug but an alias exists, the alias is canonical.
-    let canonicalPath = `/${fullPath}`;
-    if (resolved.kind === "slug") {
-      const alias = await c.var.services.customUrls.getByTarget(
-        "post",
-        post.id,
-      );
-      if (alias) canonicalPath = `/${alias.path}`;
-    }
-
-    // One address per post: a language-prefixed URL is only ever a way in.
+    // One address per post: its first custom URL, or its slug. Anything
+    // else that reached it — the slug when there is a custom URL, a later
+    // custom URL, a different letter case, a language prefix — is only a way
+    // in and redirects there.
+    const canonicalPath = getPostPath(post.slug, loaded.canonicalAlias);
     if (inLanguageView || canonicalPath !== `/${fullPath}`) {
-      return c.redirect(toPublicPath(canonicalPath, sitePathPrefix), 301);
+      return c.redirect(
+        withRequestQuery(
+          toPublicPath(canonicalPath, sitePathPrefix),
+          c.req.url,
+        ),
+        301,
+      );
     }
 
-    return renderPost(c, post, { allowDraft });
+    return renderPost(c, post, {
+      allowDraft,
+      canonicalAlias: loaded.canonicalAlias,
+    });
   }
 
   if (resolved.smartCollectionId) {
@@ -631,39 +687,45 @@ export async function renderRegisteredPath(c: Context<Env>): Promise<Response> {
       resolved.smartCollectionId,
     );
     if (!smartCollection) return c.notFound();
+    if (fullPath !== smartCollection.slug) {
+      return c.redirect(
+        withRequestQuery(toViewPath(c, `/${smartCollection.slug}`), c.req.url),
+        301,
+      );
+    }
 
     const result = await renderSmartCollectionPage(c, smartCollection.slug);
     return result ?? c.notFound();
   }
 
   if (resolved.collectionId) {
-    const collection = await c.var.services.collections.getById(
+    const loaded = await c.var.services.collections.getWithCanonicalAlias(
       resolved.collectionId,
     );
-    if (!collection) return c.notFound();
+    if (!loaded) return c.notFound();
+    const { collection, canonicalAlias } = loaded;
 
-    if (resolved.kind === "slug") {
-      const alias = await c.var.services.customUrls.getByTarget(
-        "collection",
-        collection.id,
+    // One address per collection, as for a post: its first custom URL, or
+    // its slug. Any other way in redirects there, within the language view.
+    const canonicalPath = canonicalAlias ?? collection.slug;
+    if (fullPath !== canonicalPath) {
+      return c.redirect(
+        withRequestQuery(toViewPath(c, `/${canonicalPath}`), c.req.url),
+        301,
       );
-      if (alias) {
-        return c.redirect(toViewPath(c, `/${alias.path}`), 301);
-      }
-
-      const result = await renderCollectionPage(c, collection.slug);
-      return result ?? c.notFound();
     }
 
-    if (resolved.kind === "alias") {
-      const aliasPagePath = `/${resolved.path}`;
-      const result = await renderCollectionPage(
-        c,
-        collection.slug,
-        aliasPagePath,
-      );
-      return result ?? c.notFound();
-    }
+    // Loaded and checked here, so the page does not look the slug up again.
+    const result = await renderCollectionPage(
+      c,
+      {
+        collections: [collection],
+        slugs: [collection.slug],
+        slugExpression: collection.slug,
+      },
+      canonicalAlias ? `/${canonicalAlias}` : undefined,
+    );
+    return result ?? c.notFound();
   }
 
   return c.notFound();

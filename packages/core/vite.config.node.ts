@@ -8,17 +8,46 @@
 import { getRequestListener } from "@hono/node-server";
 import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "node:path";
-import { defineConfig, loadEnv, type Plugin } from "vite";
-import {
-  applyNodeRuntimeEnvDefaults,
-  createNodeRequestHandler,
-  migrate,
-  resolveHost,
-  resolvePort,
-} from "./src/node/request-handler.js";
+import { defineConfig, loadEnv, runnerImport, type Plugin } from "vite";
 import type { Bindings } from "./src/types/bindings.js";
-import { buildVersion, swcPlugin } from "./vite.shared";
+import {
+  buildVersion,
+  swcPlugin,
+  unbuiltClientAssetDefine,
+} from "./vite.shared";
 import { linguiAutoExtract, ssrReload } from "./vite.dev-plugins";
+
+type NodeRuntime = typeof import("./src/node/request-handler.js");
+
+const REQUEST_HANDLER = "/src/node/request-handler.ts";
+
+/**
+ * Load the Node runtime through Vite, the way every other `src/` module runs.
+ *
+ * Vite bundles this config with plain esbuild, so a static import of `src/`
+ * here would skip the SWC Lingui transform and the `define` globals. The
+ * request handler reaches `lib/filter-dimensions.ts` through its settings
+ * validation, and that module calls `msg` at the top level: under Lingui 6 the
+ * untransformed macro fails to load at all, and the server never started.
+ */
+async function importNodeRuntime(): Promise<NodeRuntime> {
+  // `runnerImport` never reads a config file, so the transform and globals
+  // `vite.config.script.ts` would supply are passed here.
+  const { module } = await runnerImport<NodeRuntime>(
+    resolve(import.meta.dirname, `.${REQUEST_HANDLER}`),
+    {
+      root: import.meta.dirname,
+      logLevel: "warn",
+      oxc: false,
+      define: {
+        __JANT_VERSION__: JSON.stringify(buildVersion),
+        ...unbuiltClientAssetDefine,
+      },
+      plugins: [swcPlugin()],
+    },
+  );
+  return module;
+}
 
 function nodeMiddleware(): Plugin {
   return {
@@ -26,6 +55,10 @@ function nodeMiddleware(): Plugin {
     apply: "serve",
     async configureServer(server) {
       const env = process.env as unknown as Bindings;
+      // The dev server's own graph, so the handler and the app it loads share
+      // one copy of every module.
+      const { createNodeRequestHandler, resolveHost } =
+        (await server.ssrLoadModule(REQUEST_HANDLER)) as NodeRuntime;
       const handler = await createNodeRequestHandler({
         env,
         assetRoot: null,
@@ -77,6 +110,8 @@ export default defineConfig(async ({ command, mode }) => {
   process.env.NODE_ENV ||= "development";
 
   const bindings = process.env as unknown as Bindings;
+  const { applyNodeRuntimeEnvDefaults, migrate, resolveHost, resolvePort } =
+    await importNodeRuntime();
   applyNodeRuntimeEnvDefaults(bindings, {
     defaultDataDir: resolve(import.meta.dirname, "data"),
   });
@@ -104,17 +139,7 @@ export default defineConfig(async ({ command, mode }) => {
     define: {
       __JANT_DEV__: "true",
       __JANT_VERSION__: JSON.stringify(buildVersion),
-      // Not used in dev (IS_VITE_DEV=true skips these paths), but required for
-      // the TypeScript declarations in version.ts to compile.
-      __CLIENT_JS_FILE__: JSON.stringify("/_assets/client.js"),
-      __CLIENT_AUTH_JS_FILE__: JSON.stringify("/_assets/client-auth.js"),
-      __CLIENT_COMPOSE_PRELOAD__: JSON.stringify([]),
-      __CLIENT_CSS_FILE__: JSON.stringify("/_assets/client.css"),
-      __CLIENT_AUTHOR_CSS_FILE__: JSON.stringify("/_assets/client-author.css"),
-      __CLIENT_CJK_CSS_FILE__: JSON.stringify("/_assets/client-cjk.css"),
-      __CLIENT_CJK_TC_CSS_FILE__: JSON.stringify("/_assets/client-cjk-tc.css"),
-      __CLIENT_CJK_JP_CSS_FILE__: JSON.stringify("/_assets/client-cjk-jp.css"),
-      __CLIENT_CJK_KR_CSS_FILE__: JSON.stringify("/_assets/client-cjk-kr.css"),
+      ...unbuiltClientAssetDefine,
     },
 
     plugins: [

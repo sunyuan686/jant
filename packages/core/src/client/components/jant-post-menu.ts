@@ -22,6 +22,13 @@ import { readErrorMessage } from "../json.js";
 import { publicPath } from "../runtime-paths.js";
 import { looksLikeAddress } from "../../lib/url.js";
 import { pickPost } from "../post-picker.js";
+import { openShareImage, warmShareImage } from "../share-launch.js";
+import {
+  copyPostLink,
+  iconImage,
+  iconLink,
+  menuOpensAbove,
+} from "../post-menu-shared.js";
 import {
   ensureComposeDialog,
   readComposeDialogLabels,
@@ -45,6 +52,8 @@ interface PostMenuData {
   isDraft: boolean;
   /** Content language of the Thread, when the site publishes more than one. */
   language: string | null;
+  /** Where the post's date links to, for Copy link. */
+  permalink: string | null;
 }
 
 /** One language the site publishes. */
@@ -115,19 +124,7 @@ type PostMenuView =
 const LANGUAGE_PANEL_FOCUS =
   "[data-post-menu-translation] a, [data-post-menu-translation-first], [data-post-menu-open-language-switch]";
 
-interface MenuTriggerRect {
-  top: number;
-  bottom: number;
-}
-
 const ESTIMATED_MENU_HEIGHT = 360;
-const MENU_VIEWPORT_MARGIN = 12;
-
-function getMenuPlacement(rect: MenuTriggerRect) {
-  const spaceBelow = window.innerHeight - rect.bottom - MENU_VIEWPORT_MARGIN;
-  const spaceAbove = rect.top - MENU_VIEWPORT_MARGIN;
-  return spaceBelow < ESTIMATED_MENU_HEIGHT && spaceAbove > spaceBelow;
-}
 
 export function removeLeadingFeedDivider(
   feedContainer: HTMLElement | null | undefined,
@@ -141,6 +138,14 @@ export function removeLeadingFeedDivider(
       child instanceof HTMLElement && child.classList.contains("feed-divider"),
   );
   firstDivider?.remove();
+}
+
+/**
+ * The image carries a QR code to the post, which a reader can open only once
+ * it is published and not Private.
+ */
+function canShareAsImage(data: PostMenuData): boolean {
+  return !data.isDraft && data.visibility !== "private";
 }
 
 function findThreadRootArticle(threadId: string): HTMLElement | null {
@@ -171,6 +176,7 @@ function readPostMenuData(article: HTMLElement): PostMenuData | null {
     isDraft: article.hasAttribute("data-post-draft"),
     // Carried on the Thread root, so a reply reads it from there.
     language: threadRootArticle.dataset.postLanguage ?? null,
+    permalink: article.dataset.postPermalink ?? null,
   };
 }
 
@@ -264,7 +270,7 @@ export class JantPostMenu extends LitElement {
     }
 
     const rect = trigger.getBoundingClientRect();
-    this._openAbove = getMenuPlacement(rect);
+    this._openAbove = menuOpensAbove(rect, ESTIMATED_MENU_HEIGHT);
     this._x = window.scrollX + rect.right;
     this._y =
       window.scrollY + (this._openAbove ? rect.top - 6 : rect.bottom + 6);
@@ -379,6 +385,7 @@ export class JantPostMenu extends LitElement {
       this._view = "menu";
       this._open = true;
       this.#focusAfterUpdate("[data-post-menu-item-primary]");
+      if (canShareAsImage(menuData)) warmShareImage();
       return;
     }
 
@@ -1020,6 +1027,20 @@ export class JantPostMenu extends LitElement {
     if (composeEl) {
       await composeEl.openEdit(postId);
     }
+  }
+
+  #copyLink() {
+    const permalink = this._data?.permalink;
+    this.#close();
+    if (permalink) void copyPostLink(permalink);
+  }
+
+  #shareImage() {
+    if (!this._data) return;
+    const postId = this._data.id;
+    const trigger = this._triggerEl;
+    this.#close({ restoreFocus: false });
+    void openShareImage(postId, trigger);
   }
 
   async #publish() {
@@ -2283,6 +2304,9 @@ export class JantPostMenu extends LitElement {
       "[data-collection-id]",
     )?.dataset.collectionId;
     const isFeatured = this._data.featured;
+    // A draft has no address to pass on yet.
+    const canCopyLink = !this._data.isDraft && !!this._data.permalink;
+    const canShare = canShareAsImage(this._data);
 
     return html`
       <div class="post-menu-view post-menu-main">
@@ -2458,6 +2482,49 @@ export class JantPostMenu extends LitElement {
                 : nothing
             }
           </div>
+
+          ${
+            canCopyLink || canShare
+              ? html`
+                  <div class="post-menu-section">
+                    ${
+                      canCopyLink
+                        ? html`<button
+                            type="button"
+                            role="menuitem"
+                            class="post-menu-item"
+                            data-post-menu-copy-link
+                            @click=${() => this.#copyLink()}
+                          >
+                            <span class="post-menu-item-label">Copy link</span>
+                            <span class="post-menu-item-trailing"
+                              >${iconLink()}</span
+                            >
+                          </button>`
+                        : nothing
+                    }
+                    ${
+                      canShare
+                        ? html`<button
+                            type="button"
+                            role="menuitem"
+                            class="post-menu-item"
+                            data-post-menu-share-image
+                            @click=${() => this.#shareImage()}
+                          >
+                            <span class="post-menu-item-label"
+                              >Share as image</span
+                            >
+                            <span class="post-menu-item-trailing"
+                              >${iconImage()}</span
+                            >
+                          </button>`
+                        : nothing
+                    }
+                  </div>
+                `
+              : nothing
+          }
 
           <div class="post-menu-section post-menu-section-danger">
             <button

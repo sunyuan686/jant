@@ -153,6 +153,14 @@
 - Editor-specific Tab handlers must consume the event whenever the selection
   is in their context, even when the structural command cannot apply. Returning
   `false` at a boundary lets browser focus navigation unexpectedly take over.
+- Compose boundary keys follow the Notion / Google Docs model through Tiptap's
+  official keymaps. Override only where Tiptap diverges from that model or
+  Markdown cannot represent its result (a paragraph cannot own a nested list),
+  and keep the model written down in `structural-keymap.ts`. Backspace at a
+  line start removes one layer per press — the marker first, then the line
+  break — while Delete at a line end joins the next line's text, so the two
+  keys are not symmetric. A boundary key must never be consumed without
+  changing the document.
 - Treat editor marks and structural nodes as separate formatting concerns.
   “Clear formatting” should remove clearable marks generically; lists, quotes,
   headings, and other nodes should use explicit structural controls instead of
@@ -1221,3 +1229,43 @@ btn-outline"` compiles, passes every test, and only shows up as a button whose
   payload there passes every local check and fails only after push. To run it
   locally, start a throwaway `postgres:17` container and point
   `PG_SMOKE_ADMIN_DATABASE_URL` / `PG_SMOKE_DATABASE_URL` at it.
+- Scope a local "do we already have this?" check to the scope of the external
+  object it stands for. A GitHub App installs once per GitHub _account_, so
+  checking "does this site have an installation" dead-ends every site after the
+  first: GitHub answers a second install attempt with the existing
+  installation's Configure page and never calls the Setup URL back, leaving no
+  way in at all. The check belongs at the level the external system uses — here
+  the sites the signed-in author belongs to (`site_member`), which is also the
+  tenancy boundary. The same shape applies to any per-account external
+  resource: one webhook per repository, one bot per workspace, one domain per
+  zone.
+- A label the browser finishes must carry its placeholder as a value.
+  `i18n._(msg({ message: "Showing {shown} of {total}" }))` with no `values`
+  renders `Showing  of ` — Lingui substitutes a missing value with an empty
+  string, so a server-serialized label the client later fills with
+  `.replace("{shown}", …)` arrives with nothing left to replace. It compiles,
+  reads fine in the source, and only shows up on screen as a sentence with a
+  hole in it. Either interpolate server-side when the value is known there
+  (`{ name: suggestedRepoName }`), or pass the placeholder as its own value
+  (`keepForClient("shown", "total")` in `routes/dash/settings.tsx`) so the
+  token survives into the JSON.
+- `mise run check-tests` doesn't run `dev/scripts/pg-smoke.mjs`; only CI's
+  `pg-smoke` job does, and it gates the production deploy. A change to an API
+  response shape or to who may call an endpoint can pass every local check and
+  still stop the deploy. Before committing such a change, grep
+  `dev/scripts/pg-smoke.mjs` for the endpoint and run `mise run check-pg-smoke`
+  against a throwaway database.
+- After pushing to `main`, check every workflow the push starts, not only
+  CI: `gh run list --branch main`. Release runs from CI's `workflow_run`, so
+  its failures never show up where the push was made; it failed on every push
+  for a day and left the Release PR without a day of changesets.
+- Before committing part of the working tree, read `git diff --cached --stat`.
+  `git rm` stages at once, so a later `git add <files> && git commit` carries
+  those deletions along; one did, and `main` stopped building until the
+  files were restored.
+- When a merge brings `main`'s own fix for a bug this branch fixed too, take
+  `main`'s version and drop the branch's, even when the branch's design reads
+  better. Two fixes of one bug on two branches is divergence with no gain, and
+  every later merge argues it again; a better design goes to `main` as its own
+  change. Before deleting an existing export, trace why it exists
+  (`git log -S`) and who calls it, sibling repos included, and say so.

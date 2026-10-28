@@ -7,6 +7,12 @@ import type {
 } from "../../../lib/storage.js";
 import { uploadsApiRoutes } from "../uploads.js";
 
+// Sideloading resolves hosts before fetching; keep these tests off real DNS.
+vi.mock("node:dns/promises", () => {
+  const lookup = async () => [{ address: "93.184.215.14", family: 4 }];
+  return { lookup, default: { lookup } };
+});
+
 interface StoredFile extends StorageObjectOptions {
   body: Uint8Array;
 }
@@ -199,6 +205,33 @@ describe("POST /api/uploads/sideload", () => {
 });
 
 describe("Upload Session API Routes", () => {
+  it("names a relay transport at the site's path prefix", async () => {
+    const storage = createMockStorage();
+    const { app } = createTestApp({
+      authenticated: true,
+      storage,
+      sitePathPrefix: "/blog",
+    });
+    app.route("/api/uploads", uploadsApiRoutes);
+
+    const res = await app.request("/api/uploads/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: "photo.webp",
+        contentType: "image/webp",
+        size: 12,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      id: string;
+      transport: { url: string };
+    };
+    expect(body.transport.url).toBe(`/blog/api/uploads/${body.id}/body`);
+  });
+
   it("completes a relay image upload and stores inline media metadata", async () => {
     const storage = createMockStorage();
     const { app, services } = createTestApp({
@@ -248,7 +281,7 @@ describe("Upload Session API Routes", () => {
         }),
       },
     );
-    expect(completeRes.status).toBe(200);
+    expect(completeRes.status).toBe(201);
 
     const completeData = (await completeRes.json()) as {
       id: string;
@@ -370,7 +403,7 @@ describe("Upload Session API Routes", () => {
         body: JSON.stringify({}),
       },
     );
-    expect(completeRes.status).toBe(200);
+    expect(completeRes.status).toBe(201);
 
     const completeData = (await completeRes.json()) as {
       id: string;

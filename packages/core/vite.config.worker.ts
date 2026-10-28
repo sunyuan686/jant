@@ -3,16 +3,91 @@
  *
  * Run via: `vite build --config vite.config.worker.ts`
  *
- * External dependencies (hono, drizzle-orm, etc.) are preserved as imports.
- * Internal imports (including @jant/core/i18n from SWC Lingui rewrites) are
- * resolved via package.json exports and bundled inline.
+ * Packages in `dependencies` (drizzle-orm, better-auth, etc.) stay imports,
+ * which a site resolves from its own node_modules. Everything else, including
+ * devDependencies such as hono, is bundled inline, so a package only the build
+ * or the browser bundles in dist/client use belongs in devDependencies and a
+ * site never installs it. Internal imports (including @jant/core/i18n from SWC
+ * Lingui rewrites) are resolved via package.json exports and bundled inline.
  */
 
-import { defineConfig } from "vite";
+import ts from "typescript";
+import { defineConfig, type Plugin } from "vite";
 import { existsSync, readFileSync } from "fs";
 import { resolve } from "path";
 import { ASSET_BASE_PATH } from "./src/lib/asset-path.js";
 import { buildVersion, pkg, swcPlugin } from "./vite.shared";
+
+/**
+ * Write the package's published types, `dist/index.d.ts`, from `src/index.ts`.
+ *
+ * Declarations come from that one file, without type-checking the program
+ * behind it, so they can only describe what the file states outright: a
+ * reference to another module's type is an error here rather than a `.d.ts`
+ * that points into `src/`. The package used to publish `src/index.ts` itself
+ * as its types, which made a site's type check compile Jant's source and
+ * required `hono` to be installed to resolve `App`.
+ */
+function publicTypes(): Plugin {
+  return {
+    name: "jant-public-types",
+    apply: "build",
+    generateBundle() {
+      const fileName = resolve(dir, "src/index.ts");
+      const { outputText, diagnostics } = ts.transpileDeclaration(
+        readFileSync(fileName, "utf8"),
+        { fileName, compilerOptions: { declaration: true } },
+      );
+      if (diagnostics?.length) {
+        throw new Error(
+          `src/index.ts can't be declared on its own:\n${ts.formatDiagnostics(
+            diagnostics,
+            {
+              getCanonicalFileName: (name) => name,
+              getCurrentDirectory: () => dir,
+              getNewLine: () => "\n",
+            },
+          )}`,
+        );
+      }
+      this.emitFile({
+        type: "asset",
+        fileName: "index.d.ts",
+        source: outputText,
+      });
+    },
+  };
+}
+
+const JSX_IMPORT_SOURCE_PRAGMA =
+  /^[ \t]*\/\*\*?\s*@jsxImportSource\s[^*]*\*\/[ \t]*\r?\n?/gm;
+
+/**
+ * Remove `@jsxImportSource` pragma lines from bundled JavaScript.
+ *
+ * TipTap compiles some extensions from TSX and leaves the pragma behind in
+ * plain JS. A site bundles dist with wrangler's esbuild, which reads the
+ * comment in classic JSX mode and warns on every `dev` and `deploy`.
+ *
+ * @param code - A rendered chunk
+ * @returns The chunk without pragma lines
+ * @example
+ * stripJsxImportSourcePragmas(chunk); // chunk minus its pragma lines
+ */
+export function stripJsxImportSourcePragmas(code: string): string {
+  return code.replace(JSX_IMPORT_SOURCE_PRAGMA, "");
+}
+
+function jsxPragmaStripper(): Plugin {
+  return {
+    name: "jant-strip-jsx-pragmas",
+    apply: "build",
+    renderChunk(code) {
+      if (!code.includes("@jsxImportSource")) return null;
+      return { code: stripJsxImportSourcePragmas(code), map: null };
+    },
+  };
+}
 
 const dir = import.meta.dirname;
 
@@ -91,6 +166,11 @@ const clientAuthCssFile = readClientManifestFile(
   "client-author",
   ".css",
 );
+const clientShareCssFile = readClientManifestFile(
+  "src/style-share.css",
+  "client-share",
+  ".css",
+);
 const clientCjkCssFile = readClientManifestFile(
   "src/style-cjk.css",
   "client-cjk",
@@ -123,6 +203,7 @@ export default defineConfig({
     __CLIENT_COMPOSE_PRELOAD__: JSON.stringify(clientComposePreload),
     __CLIENT_CSS_FILE__: JSON.stringify(clientCssFile),
     __CLIENT_AUTHOR_CSS_FILE__: JSON.stringify(clientAuthCssFile),
+    __CLIENT_SHARE_CSS_FILE__: JSON.stringify(clientShareCssFile),
     __CLIENT_CJK_CSS_FILE__: JSON.stringify(clientCjkCssFile),
     __CLIENT_CJK_TC_CSS_FILE__: JSON.stringify(clientCjkTcCssFile),
     __CLIENT_CJK_JP_CSS_FILE__: JSON.stringify(clientCjkJpCssFile),
@@ -151,6 +232,10 @@ export default defineConfig({
         // the version we tested into dist keeps every self-hosted deploy on
         // it, whatever the consumer's package manager would resolve.
         if (id === "limax" || id.startsWith("limax/")) return false;
+        // Bundled, not external: the server converts Markdown with the same
+        // TipTap the editor in dist/client was built with, and only bundled
+        // code passes through jsxPragmaStripper on its way into dist.
+        if (id.startsWith("@tiptap/")) return false;
         return Object.keys(pkg.dependencies ?? {}).some(
           (dep: string) => id === dep || id.startsWith(dep + "/"),
         );
@@ -164,5 +249,5 @@ export default defineConfig({
     emptyOutDir: false,
   },
 
-  plugins: [swcPlugin()],
+  plugins: [swcPlugin(), publicTypes(), jsxPragmaStripper()],
 });

@@ -11,6 +11,16 @@
 - **认证**：`user` / `session` / `account` / `api_token` / `verification`
 - **二进制**：上传的媒体文件本身（本地目录或 S3 兼容 bucket）
 
+## 已删除媒体的回收期
+
+Jant 为媒体删除内置了一层保护。媒体被删除时，不管是用户删的、撰写页的孤立文件清理删的，还是随帖子一起删的，数据库记录都会移除，对象的**原始 key 立即释放**，原 URL 马上返回 404。这样 bug 或误操作造成的删除会立刻暴露，不会悄悄发生。
+
+在支持服务端复制的存储上（S3 兼容存储，包括通过 S3 API 访问的 Cloudflare R2），文件本身不会丢：它先被移到内部的 `trash/` key 并记录在 `storage_purge` 表里，**30 天保留期**过后才由上传清理任务（`jant uploads cleanup`）彻底删除。30 天内都可以从 trash key 恢复。对没有开启版本控制的对象存储（例如默认配置下的 Cloudflare R2）这一点尤其重要，因为它们自己没有撤销删除的功能。
+
+在**不**支持服务端复制的存储上（R2 Workers binding、本地磁盘），删除立即生效，没有回收期。
+
+这只是方便恢复的手段，**不能**代替下文的数据库加媒体备份：它只在有限时间内保住文件，存储后端本身丢失时帮不上忙，也不覆盖整站删除（整站删除会立即删除对象）。
+
 ## 选择合适的工具
 
 | 需求                     | 使用                                            |
@@ -57,37 +67,37 @@ npx jant site snapshot import --remote --config ./wrangler.toml --path ./backups
 - `data/jant.sqlite`
 - `data/media/`
 
-直接归档运行中的 SQLite 文件可能产生不一致快照。先停服务再打包：
+直接归档运行中的 SQLite 文件可能产生不一致快照。先停服务再打包。SQLite 先把写入记在 `jant.sqlite-wal` 里，Jant 关闭数据库时才并入 `jant.sqlite`，正常停止会做这一步；进程若是被强行杀掉，最近的写入还在 `jant.sqlite-wal` 里，所以归档要带上所有 `jant.sqlite*` 文件：
 
 ```bash
 docker compose down
 mkdir -p backups
-tar -czf ./backups/jant-full-$(date +%F).tar.gz data/jant.sqlite data/media
+tar -czf ./backups/jant-full-$(date +%F).tar.gz data/jant.sqlite* data/media
 docker compose up -d
 ```
 
-恢复时先清旧数据——`tar -xzf` 只覆盖同名文件，旧 `data/media/` 里多出来的对象会留下，造成脏数据：
+恢复时先清旧数据。`tar -xzf` 只覆盖同名文件：旧 `data/media/` 里多出来的对象会留下，造成脏数据；留下的旧 `jant.sqlite-wal` 会被叠到恢复的数据库上，把它损坏：
 
 ```bash
 docker compose down
-rm -rf data/jant.sqlite data/media
+rm -rf data/jant.sqlite* data/media
 tar -xzf ./backups/jant-full-2026-03-30.tar.gz
 docker compose up -d
 ```
 
 ### Bare Node + SQLite + 本地媒体
 
-默认布局下，SQLite 文件位于 `DATA_DIR`（默认 `./data`），媒体目录为 `LOCAL_STORAGE_PATH`（默认 `<DATA_DIR>/media`）。停止进程管理器后归档实际配置的路径：
+默认布局下，SQLite 文件位于 `DATA_DIR`（默认 `./data`），媒体目录为 `LOCAL_STORAGE_PATH`（默认 `<DATA_DIR>/media`）。停止进程管理器后归档实际配置的路径，和上面一样带上所有 `jant.sqlite*` 文件：
 
 ```bash
 set -a; source .env; set +a   # 加载 DATA_DIR / LOCAL_STORAGE_PATH
 mkdir -p backups
 tar -czf "./backups/jant-full-$(date +%F).tar.gz" \
-  "${DATA_DIR:-./data}/jant.sqlite" \
+  "${DATA_DIR:-./data}"/jant.sqlite* \
   "${LOCAL_STORAGE_PATH:-${DATA_DIR:-./data}/media}"
 ```
 
-如果 `DATABASE_URL` 显式覆盖了 SQLite 路径（例如 `DATABASE_URL=file:/var/lib/jant/custom.sqlite`），归档对象应跟随 URL 中的路径。
+如果 `DATABASE_URL` 显式覆盖了 SQLite 路径（例如 `DATABASE_URL=file:/var/lib/jant/custom.sqlite`），归档对象应跟随 URL 中的路径，连同旁边的 `-wal` 文件。恢复前删掉数据库文件和它的 `-wal`、`-shm` 文件，做法同 Docker。
 
 ### Node + Postgres
 
@@ -162,7 +172,11 @@ npx jant site snapshot export --remote --config ./wrangler.toml --output ./backu
 
 ### Cloudflare
 
-1. **数据库**：用 `wrangler d1 execute <db> --file=./backups/jant-db-*.sql --remote` 灌回 SQL，或用 D1 time-travel 回滚；snapshot 用 `npx jant site snapshot import --remote --replace`。
+1. **数据库**：在 D1 time-travel 的保留期内，用 `npx wrangler d1 time-travel restore <db> --timestamp=<time>` 回滚到丢失之前。snapshot 用 `npx jant site snapshot import --remote --replace`。`db export` 导出的 SQL 文件只有数据行、没有建表语句，要灌进一个新的空数据库：
+   1. 用 `npx wrangler d1 create <db>-restored` 新建，把它的 `database_id` 写进 `wrangler.toml`。
+   2. 用写出这份导出的那个 `@jant/core` 版本运行 `npx jant migrate --remote`，建好表。
+   3. 用 `npx wrangler d1 execute <db>-restored --remote --file=./backups/jant-db-<date>.sql` 灌入数据。
+   4. 按第 3 步部署，让 Worker 用上新数据库。
 2. **对象**：缺失对象从 R2 版本控制或离线副本补齐。
 3. **部署**：binding 没变不用重新部署；换了 D1 / R2 才需更新 `wrangler.toml` 重新部署。
 4. **验证**：首页、collection 页、媒体 URL、setting 页。

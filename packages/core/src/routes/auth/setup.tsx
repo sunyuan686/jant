@@ -56,6 +56,7 @@ import {
 } from "../../lib/schemas.js";
 import { buildPageTitle } from "../../lib/page-title.js";
 import { mapIanaToTimezone } from "../../lib/timezones.js";
+import { readConfigEnvValue } from "../../lib/env-values.js";
 import { getI18n } from "../../i18n/index.js";
 import { isCurrentSiteMember } from "../../middleware/auth.js";
 import type { I18n } from "../../i18n/i18n.js";
@@ -64,11 +65,15 @@ import {
   resolveSupportedLocaleTag,
 } from "../../i18n/supported-locales.js";
 import { toPublicPath } from "../../lib/url.js";
+import { checkRequestRateLimit } from "../../lib/rate-limit.js";
 import { ONBOARDING_STATUS } from "../../lib/constants.js";
 import { announceInBackground } from "../discover-announce.js";
 import {
+  DISCOVER_LANGUAGES,
   discoverIntroRuns,
+  getAuthorGroupUrl,
   getDiscoverPageUrls,
+  isDiscoverLanguage,
   resolveDiscoverMode,
   type DiscoverPageUrls,
 } from "../../lib/discover.js";
@@ -81,6 +86,9 @@ import {
   type DiscoverCopy,
 } from "../../ui/dash/settings/discover-copy.js";
 
+/** Setup submissions allowed per client in a window. */
+const SETUP_ATTEMPTS_PER_CLIENT = 20;
+const SETUP_WINDOW_SEC = 10 * 60;
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
 /**
@@ -143,6 +151,14 @@ const LocaleField: FC<{
 };
 
 /**
+ * `isDiscoverLanguage` as a Datastar expression over the language signal, so
+ * the Discover question follows the picker without a round trip. The list is
+ * the same constant the server reads, and a test holds the two readings of it
+ * together.
+ */
+const DISCOVER_LANGUAGE_EXPRESSION = `${JSON.stringify(DISCOVER_LANGUAGES)}.includes($contentLanguage.split('-')[0].toLowerCase())`;
+
+/**
  * The one question setup asks about the world outside this site.
  *
  * It earns a place on a screen that asks as little as it can because the
@@ -150,6 +166,11 @@ const LocaleField: FC<{
  * never goes looking never learns a directory exists. The wording is the
  * settings page's own: one control appearing twice should not describe itself
  * two ways.
+ *
+ * Only on screen while the chosen language is one the directory lists. For any
+ * other, learning the directory exists leads nowhere, and on hosted Jant the box
+ * would arrive ticked — a promise nobody keeps. It follows the language picker
+ * above it, since both are answered on the same screen.
  *
  * The words come from the same `getDiscoverCopy` the settings page uses,
  * which is what keeps the two surfaces from drifting when either is edited.
@@ -159,19 +180,40 @@ const LocaleField: FC<{
  * first one — the directory's name links to the directory for anyone who wants
  * more. Where to find the setting again is left to the screen's footnote, which
  * says it once for every answer on it.
+ *
+ * On a Chinese screen the help line goes one sentence further than the
+ * settings page's, to the Jant author group — a Chinese-language WeChat group
+ * for people who write on Jant. It picks up the community the sentence before
+ * it names. The sentence is written in Chinese here rather than kept in the
+ * catalog, since no other locale has a version of it, and it is left out when
+ * there is no directory to find the group's page from.
  */
 const DiscoverField: FC<{
   copy: DiscoverCopy;
   /** The directory's pages, or null when this deployment announces to none. */
   pages: DiscoverPageUrls | null;
-}> = ({ copy, pages }) => {
+  /**
+   * The author group's page, on Chinese screens with a directory; null
+   * everywhere else, and the help line then ends where the settings page's
+   * opening does.
+   */
+  authorGroupUrl: string | null;
+  /** Whether the language the form opens with is one the directory lists. */
+  shown: boolean;
+}> = ({ copy, pages, authorGroupUrl, shown }) => {
   const runs = discoverIntroRuns(copy.about, copy, pages);
 
   return (
     // Held a little further from the field above it than the form's own gap:
     // every other field on this screen is about the site itself, and this one
-    // is about the world outside it.
-    <div class="field mt-2">
+    // is about the world outside it. Hidden in the markup as well as by
+    // `data-show`, so a form opening in English never flashes the question
+    // before Datastar starts.
+    <div
+      class="field mt-2"
+      data-show={DISCOVER_LANGUAGE_EXPRESSION}
+      style={shown ? undefined : "display:none"}
+    >
       {/* Classes copied from the settings page's own Discover checkbox
           (`jant-settings-general.ts`), so the control a hosted author meets here
           and the one they find later in Settings are the same object. */}
@@ -202,6 +244,20 @@ const DiscoverField: FC<{
             run.text
           ),
         )}
+        {authorGroupUrl ? (
+          <>
+            你也可以选择加入
+            <a
+              href={authorGroupUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="underline hover:text-foreground transition-colors"
+            >
+              Jant 作者群
+            </a>
+            。
+          </>
+        ) : null}
       </p>
     </div>
   );
@@ -410,6 +466,8 @@ export type SetupContentProps = {
        *
        * False where the answer could not be honoured — a demo site, or feeds
        * switched off — and a control nobody can act on is worse than none.
+       * Where it is true, the question still waits for a language the
+       * directory lists; see `DiscoverField`.
        */
       discoverAvailable: boolean;
       /**
@@ -424,6 +482,11 @@ export type SetupContentProps = {
        * deployment announces to no directory, and the line is then plain text.
        */
       discoverPages: DiscoverPageUrls | null;
+      /**
+       * The Jant author group's page, linked from the help line on Chinese
+       * screens. Null when this deployment announces to no directory.
+       */
+      authorGroupUrl: string | null;
     }
 );
 
@@ -459,6 +522,7 @@ export const SetupContent: FC<SetupContentProps> = (props) => {
     discoverAvailable,
     discoverDefault,
     discoverPages,
+    authorGroupUrl,
   } = props;
 
   const searchLabel = i18n._(
@@ -474,11 +538,16 @@ export const SetupContent: FC<SetupContentProps> = (props) => {
     }),
   );
 
-  // Rendered even when the question is not asked, so the form can name the
-  // signal unconditionally; `discoverAvailable` decides whether the control
+  // The signal exists even when the question is not asked, so the form can
+  // name it unconditionally; `discoverAvailable` decides whether the control
   // appears, and an absent field simply sends the default back.
   const discoverField = discoverAvailable ? (
-    <DiscoverField copy={getDiscoverCopy(i18n)} pages={discoverPages} />
+    <DiscoverField
+      copy={getDiscoverCopy(i18n)}
+      pages={discoverPages}
+      authorGroupUrl={i18n.locale === "zh-Hans" ? authorGroupUrl : null}
+      shown={isDiscoverLanguage(contentLanguage)}
+    />
   ) : null;
 
   const signals = [
@@ -630,6 +699,12 @@ export const SetupContent: FC<SetupContentProps> = (props) => {
  * is the whole point of asking. An absent field is not a refusal — an older
  * client or a scripted setup sends none — and leaves the default in force.
  *
+ * Neither is a value sent with a language the directory does not list. The
+ * question was not on screen for it, but the signal behind the hidden box still
+ * went out holding its starting state, and storing that would record an answer
+ * to a question nobody was asked. It is dropped, and the default stays in
+ * force — the same as sending nothing.
+ *
  * A yes is announced immediately, on the same terms as the settings page's own
  * switch. A directory decides eligibility for itself and re-reads the feed on
  * its own schedule, so a site with nothing published yet loses nothing by
@@ -644,12 +719,16 @@ export const SetupContent: FC<SetupContentProps> = (props) => {
  * page's status block reads it back with a Retry beside it.
  *
  * @param c - The setup request, for its services and its config
- * @param answer - The checkbox, or undefined when the form carried no field
+ * @param answers - The validated answers: the checkbox, or undefined when the
+ *   form carried no field, and the language it was answered for
  */
 async function storeDiscoverAnswer(
   c: Context<Env>,
-  answer: boolean | undefined,
+  answers: SetupLanguageAnswers,
 ): Promise<void> {
+  const answer = isDiscoverLanguage(answers.contentLanguage)
+    ? answers.discover
+    : undefined;
   if (answer === undefined) return;
   const stored = answer ? "latest" : "off";
   const { shouldAnnounce } =
@@ -735,13 +814,15 @@ setupRoutes.get("/setup", async (c) => {
         // configuration, so this screen can never point at one directory while
         // the site announces to another.
         discoverPages={getDiscoverPageUrls(getDiscoverDirectoryBaseUrl(c.env))}
+        authorGroupUrl={getAuthorGroupUrl(getDiscoverDirectoryBaseUrl(c.env))}
         contentLanguage={
           // On a named site the control plane's guess is already stored, so
           // offering it back is offering the site's current language. On an
-          // unnamed one nothing has been stored yet, so the browser's header is
-          // the only prefill there is.
+          // unnamed one nothing has been stored yet: the operator's
+          // SITE_LANGUAGE comes first, then the browser's header.
           askSiteName
-            ? resolveSupportedLocaleTag(c.req.header("Accept-Language"))
+            ? (readConfigEnvValue(c.env, "SITE_LANGUAGE") ??
+              resolveSupportedLocaleTag(c.req.header("Accept-Language")))
             : appConfig.siteLanguage
         }
         // Only a named site has a name worth showing: until the second screen
@@ -940,8 +1021,13 @@ async function storeSiteAnswers(
       browserLanguage: body.language,
       // Left alone on a site whose clock the control plane already set: this
       // screen can be opened from anywhere, and the browser reporting a
-      // different zone is not the author moving their site.
-      timeZone: siteName ? mapIanaToTimezone(body.timezone ?? "") : undefined,
+      // different zone is not the author moving their site. Left alone too
+      // when the operator set TIME_ZONE: storing the browser's zone would
+      // outrank it for good.
+      timeZone:
+        siteName && !readConfigEnvValue(c.env, "TIME_ZONE")
+          ? mapIanaToTimezone(body.timezone ?? "")
+          : undefined,
     },
     { oldLanguage: c.var.appConfig.siteLanguage },
     {
@@ -959,7 +1045,7 @@ async function storeSiteAnswers(
     },
   );
 
-  await storeDiscoverAnswer(c, answers.discover);
+  await storeDiscoverAnswer(c, answers);
 
   return dsRedirect(toPublicPath("/", c.var.appConfig.sitePathPrefix));
 }
@@ -968,6 +1054,25 @@ setupRoutes.post("/setup", async (c) => {
   const status = await c.var.services.settings.getOnboardingStatus();
   if (status === ONBOARDING_STATUS.COMPLETED)
     return c.redirect(toPublicPath("/", c.var.appConfig.sitePathPrefix));
+
+  const limit = await checkRequestRateLimit(c, {
+    name: "setup",
+    limit: SETUP_ATTEMPTS_PER_CLIENT,
+    windowSec: SETUP_WINDOW_SEC,
+  });
+  if (!limit.ok) {
+    const i18n = getI18n(c);
+    return dsToast(
+      i18n._(
+        msg({
+          message: "Too many setup attempts. Wait a few minutes and try again.",
+          comment:
+            "@context: Error toast when setup attempts hit the rate limit",
+        }),
+      ),
+      "error",
+    );
+  }
 
   const body = await c.req.json<Record<string, string>>();
 

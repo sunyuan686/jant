@@ -56,6 +56,20 @@ describe("lazy entries", () => {
     expect(loaded.compose).toHaveBeenCalledTimes(1);
   });
 
+  // A dropped connection on first open must not leave the entry broken
+  // until the page is reloaded.
+  it("tries a failed load again on the next call", async () => {
+    const { ensureCompose } = await freshLazyEntries();
+    loaded.compose.mockImplementationOnce(() => {
+      throw new Error("offline");
+    });
+
+    await expect(ensureCompose()).rejects.toThrow();
+    await ensureCompose();
+
+    expect(loaded.compose).toHaveBeenCalledTimes(2);
+  });
+
   it("loads the entries whose markup is on the page, and only those", async () => {
     document.body.innerHTML = `
       <jant-compose-dialog></jant-compose-dialog>
@@ -69,7 +83,7 @@ describe("lazy entries", () => {
   });
 
   it("loads the composer at once on the compose page", async () => {
-    document.body.innerHTML = `<section data-page="compose"></section>`;
+    document.body.innerHTML = `<section class="compose-page"></section>`;
 
     const { loadEntriesForPage } = await freshLazyEntries();
     loadEntriesForPage();

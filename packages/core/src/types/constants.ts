@@ -26,6 +26,17 @@ export const ARCHIVE_LAYOUTS = ["list", "grid"] as const;
 export type ArchiveLayout = (typeof ARCHIVE_LAYOUTS)[number];
 
 /**
+ * Time axis for the archive page, its `?sort=`.
+ *
+ * `published` (default) orders and buckets by when a thread was first
+ * published — the stable historical record. `updated` switches the whole axis
+ * to thread activity, so a thread moves to the month it last gained a post.
+ * Edits are not activity.
+ */
+export const ARCHIVE_SORTS = ["published", "updated"] as const;
+export type ArchiveSort = (typeof ARCHIVE_SORTS)[number];
+
+/**
  * Visibility values a signed-out reader may select on the archive.
  *
  * `featured` is a virtual member: it is a separate flag rather than a stored
@@ -102,6 +113,31 @@ export type CollectionSortOrder = SortOrder;
  */
 export const SMART_COLLECTION_SORT_ORDERS = COLLECTION_SORT_ORDERS;
 export type SmartCollectionSortOrder = CollectionSortOrder;
+
+/**
+ * How the Threads API orders a list of Threads — each value one the site
+ * already shows somewhere, named for the axis it reads:
+ *
+ * - `activity`: the homepage, and a collection's `newest`. A Thread moves up
+ *   when it gains an announced post.
+ * - `published`: the archive's default. Newest root publication first; a reply
+ *   never moves a Thread, so this is the order to walk a whole site in.
+ * - `updated`: the archive's `?sort=updated`. Like `activity`, but a quiet
+ *   reply counts too.
+ * - `oldest`: a collection's `oldest`. Oldest root publication first.
+ * - `rating`: a collection's `rating_desc`. Highest rating first, then activity.
+ *
+ * Not `SORT_ORDERS`: `newest` means activity on a collection and would read as
+ * publication here.
+ */
+export const THREAD_SORTS = [
+  "activity",
+  "published",
+  "updated",
+  "oldest",
+  "rating",
+] as const;
+export type ThreadSort = (typeof THREAD_SORTS)[number];
 
 export const NAV_ITEM_TYPES = [
   "link",
@@ -314,3 +350,23 @@ export type ContentDisposition = (typeof CONTENT_DISPOSITIONS)[number];
 
 export const GITHUB_APP_ACCOUNT_TYPES = ["User", "Organization"] as const;
 export type GithubAppAccountType = (typeof GITHUB_APP_ACCOUNT_TYPES)[number];
+
+/**
+ * Every value of `data-page`, which `<body>` carries so a theme can tell which
+ * page it is on. One per kind of page, whatever its address or language view.
+ */
+export const PAGE_NAMES = [
+  "home",
+  "post",
+  "search",
+  "archive",
+  "collection",
+  "collections",
+  "featured",
+  "subscribe",
+  "compose",
+  "settings",
+  "brand",
+  "theme-sample",
+] as const;
+export type PageName = (typeof PAGE_NAMES)[number];

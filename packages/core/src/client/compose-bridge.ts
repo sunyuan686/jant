@@ -531,15 +531,25 @@ async function uploadFile(
 // ── Attachment removal handler ───────────────────────────────────────
 
 document.addEventListener("jant:attachment-removed", (e: Event) => {
-  const { clientId, mediaId } = (
-    e as CustomEvent<{ clientId: string; mediaId: string | null }>
+  const { clientId, mediaId, persisted } = (
+    e as CustomEvent<{
+      clientId: string;
+      mediaId: string | null;
+      persisted: boolean;
+    }>
   ).detail;
 
   completedUploads.delete(clientId);
 
+  // Part of the post being edited: saving the edit deletes it, and
+  // discarding the edit has to keep it.
+  if (persisted) return;
+
   if (mediaId) {
     // Upload already finished — fire-and-forget delete
-    fetch(`/api/upload/${mediaId}`, { method: "DELETE" }).catch(() => {});
+    fetch(publicPath(`/api/media/${mediaId}`), { method: "DELETE" }).catch(
+      () => {},
+    );
   } else {
     // Upload still in flight — mark for cleanup after it finishes
     removedClientIds.add(clientId);
@@ -560,7 +570,9 @@ document.addEventListener("jant:files-selected", (e: Event) => {
       if (removedClientIds.has(clientId)) {
         removedClientIds.delete(clientId);
         if (mediaId) {
-          fetch(`/api/upload/${mediaId}`, { method: "DELETE" }).catch(() => {});
+          fetch(publicPath(`/api/media/${mediaId}`), {
+            method: "DELETE",
+          }).catch(() => {});
         }
         return null;
       }
@@ -631,7 +643,10 @@ function buildPostBody(
     // Thread as a side effect. Collection management stays on Thread-level
     // organization surfaces; JSON.stringify omits this undefined field.
     collectionIds: detail.replyToId ? undefined : detail.collectionIds,
-    attachments: attachments.length > 0 ? attachments : undefined,
+    // An edit sends the whole list, empty included: the server removes what
+    // the list leaves out, which is how an attachment the post already had
+    // comes off it. Omitted, it would leave them all as they were.
+    attachments: isEdit || attachments.length > 0 ? attachments : undefined,
     replyToId: detail.replyToId || undefined,
     quietReply: detail.quietReply || undefined,
     // Absent means the author left the language to detection; the server runs
@@ -803,7 +818,7 @@ document.addEventListener("jant:compose-submit-deferred", async (e: Event) => {
           mediaId: upload.id,
           url: upload.url,
           mimeType: upload.mimeType,
-          name: upload.filename || undefined,
+          name: upload.originalName || undefined,
           alt: attachment.alt || undefined,
         });
       }

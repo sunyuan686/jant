@@ -791,7 +791,7 @@ export interface AppConfig {
   imageTransformUrl: string;
 
   // Upload (ENV only, parsed to number)
-  /** Max upload file size in MB. Defaults to 500. */
+  /** Max upload file size in MB. Defaults to 1024. */
   uploadMaxFileSize: number;
 
   // Summary extraction (DB > ENV > Default)
@@ -842,9 +842,12 @@ export interface AppConfig {
 
   // Rate limiting (ENV only)
   rateLimit: {
-    /** When true, all rate-limit middleware becomes a no-op. */
-    disabled: boolean;
-    /** Per-IP cap for `/api/search` requests per 60-second window. */
+    /** When false, every rate-limit check passes without counting. */
+    enabled: boolean;
+    /**
+     * Per-IP cap on searches by signed-out readers on the `/search` page, per
+     * 60-second window. `0` leaves search unlimited.
+     */
     searchPerMinute: number;
   };
 

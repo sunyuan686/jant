@@ -15,6 +15,8 @@ Jant 的配置来自两个地方：
 - `.dev.vars` 存放本地 Cloudflare secrets
 - `.env` 或进程环境变量，供 Node 和 Docker 使用
 
+Jant 启动时会检查读到的值：开关只认 `true` 或 `false`，不分大小写；数字必须是范围内的整数；取值固定的变量必须是其中之一。任何一个不合规，站点都不会提供服务：Node 和 Docker 会退出，并逐个列出出问题的变量；Cloudflare 对每个请求都返回列出这些变量的页面，`/readyz` 也会报告。
+
 ### 必需项
 
 所有运行时都必须设置这个变量：
@@ -67,14 +69,14 @@ DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/DBNAME
 
 Node 和 Docker 的常用变量：
 
-| 变量                 | 默认值                   | 说明                                                                          |
-| -------------------- | ------------------------ | ----------------------------------------------------------------------------- |
-| `DATA_DIR`           | `./data`                 | 默认 SQLite 和本地媒体路径的基础目录                                          |
-| `LOCAL_STORAGE_PATH` | `<DATA_DIR>/media`       | 覆盖本地媒体目录                                                              |
-| `LOCAL_PUBLIC_URL`   | 未设置                   | 供 Jant 外部直接提供媒体的公开基地址；留空时，Jant 使用自己的 `/media/*` 路由 |
-| `HOST`               | 裸 Node 下是 `127.0.0.1` | `jant start` 的绑定地址                                                       |
-| `PORT`               | `3000`                   | `jant start` 的绑定端口                                                       |
-| `TRUST_PROXY`        | `false`                  | 是否信任反向代理传来的转发头                                                  |
+| 变量                 | 默认值                                        | 说明                                                                          |
+| -------------------- | --------------------------------------------- | ----------------------------------------------------------------------------- |
+| `DATA_DIR`           | `./data`，或 SQLite `DATABASE_URL` 所在的目录 | 默认 SQLite 和本地媒体路径的基础目录                                          |
+| `LOCAL_STORAGE_PATH` | `<DATA_DIR>/media`                            | 覆盖本地媒体目录                                                              |
+| `LOCAL_PUBLIC_URL`   | 未设置                                        | 供 Jant 外部直接提供媒体的公开基地址；留空时，Jant 使用自己的 `/media/*` 路由 |
+| `HOST`               | 裸 Node 下是 `127.0.0.1`                      | `jant start` 的绑定地址                                                       |
+| `PORT`               | `3000`                                        | `jant start` 的绑定端口                                                       |
+| `TRUST_PROXY`        | `false`                                       | 站点地址和客户端 IP 是否采信反向代理传来的转发头                              |
 
 官方 Docker 镜像默认把 `DATA_DIR` 设为 `/var/lib/jant`，而 Docker Compose 通常会把 `TRUST_PROXY=true`。
 
@@ -97,6 +99,21 @@ Config Editor 中实时修改；设为 `0` 可关闭延迟。重置运行时覆�
 页面中的 feed 自动发现、按钮和系统 RSS 导航也会隐藏。Worker 中已经缓存的成功
 响应最多还可能保留 60 秒。
 
+### Jant Discover（可选）
+
+| 变量                | 默认值                           | 说明                                                  |
+| ------------------- | -------------------------------- | ----------------------------------------------------- |
+| `DISCOVER`          | `off`                            | 这个部署上的站点默认让目录列出什么：`latest` 或 `off` |
+| `DISCOVER_PING_URL` | 你的控制平面，或 Jant 自己的目录 | 站点向哪里提交自己；设为空则不向任何地方提交          |
+
+Jant Discover 是 Jant 博客的公开目录。每个 Atom feed 都会声明站点是否加入，没有这个声明就不会被收录，所以从没开启过的站点不会出现在任何目录里，包括你没听说过的目录。
+
+`DISCOVER` 是这个部署上各站点的默认值，不是它们的最终选择。站点自己的「站点可见性」设置优先；这个设置还没选时，`NOINDEX=true` 也优先。自部署单个博客时不用管它；运营一个平台、希望旗下博客默认被收录（除非主人关闭）时，设 `DISCOVER=latest`。设了 `RSS_FEEDS_ENABLED=false` 的站点没有 feed 可读，一律按 `off` 处理。
+
+`DISCOVER_PING_URL` 指定站点向哪个目录提交自己。不设置时，运行了控制平面的部署向控制平面提交，其他部署向 Jant 自己的目录提交，两者不需要手动保持一致。设成别的地址就向那里提交，设为空字符串则不向任何地方提交。每次提交是一个请求，只带一个 feed 地址：站点加入时发送，退出后重新加入或点了「提交我的站点」时再发送一次。结果记入日志，也显示在站点的「站点可见性」设置里。
+
+feed 里声明了什么、第三方目录需要遵守什么，见 [Feed](feeds.md#discover)。
+
 ### 公开 API 访问（可选）
 
 | 变量                 | 默认值 | 说明                                      |
@@ -104,9 +121,30 @@ Config Editor 中实时修改；设为 `0` 可关闭延迟。重置运行时覆�
 | `PUBLIC_API_ENABLED` | `true` | 是否允许无 session 或 token 读取公开 JSON |
 
 关闭后，`/api/public/*` 会对所有调用方返回 `404`；已认证客户端可以改用
-`/api/posts`。匿名请求 Collection、导航和搜索 JSON 接口会收到 `401`，浏览器
-session 和 Bearer API token 仍可使用这些接口。包括 `/search` 在内的公开 HTML
-页面不受影响。
+`/api/posts`。包括 `/search` 在内的公开 HTML 页面不受影响。
+
+### 跨域 API 访问（可选）
+
+| 变量           | 默认值 | 说明                                     |
+| -------------- | ------ | ---------------------------------------- |
+| `CORS_ORIGINS` | `*`    | 允许浏览器从哪些来源调用 API，用逗号分隔 |
+
+`*` 允许任何来源。写成 `https://a.example,chrome-extension://<id>` 这样的列表，
+只允许列出的来源；留空则关闭跨域访问。需要 session 或 API token 的接口仍然需要。
+
+### 频率限制（可选）
+
+| 变量                        | 默认值 | 说明                                          |
+| --------------------------- | ------ | --------------------------------------------- |
+| `RATE_LIMIT_SEARCH_PER_MIN` | `30`   | 未登录读者每分钟可以搜索的次数。`0` 表示不限  |
+| `RATE_LIMIT_ENABLED`        | `true` | 设为 `false` 关闭所有限制：搜索、登录和初始化 |
+
+搜索限制作用于 `/search` 页面；已登录的作者和 `/api/search` 不受限制。超过限制的读者
+收到 `429`，附带 `Retry-After` 头。
+
+登录在 10 分钟内允许同一客户端尝试 20 次、同一账户 10 次；初始化允许同一客户端提交
+20 次。客户端按 IP 地址区分：Cloudflare 上用边缘节点报告的地址；Node 上用连接地址，
+设了 `TRUST_PROXY=true` 时用 `X-Forwarded-For` 里的最后一个。
 
 ### 分页（可选）
 
@@ -119,6 +157,28 @@ session 和 Bearer API token 仍可使用这些接口。包括 `/search` 在内�
 只有在搜索页或归档页真的需要和全站不同的分页大小时，才去设置 `SEARCH_PAGE_SIZE` 和 `ARCHIVE_PAGE_SIZE`。
 三个值都接受 `1–100` 的整数，也可以在 Config Editor 中实时修改；环境变量仍
 作为部署时的回退值。
+
+### 归档布局（可选）
+
+| 变量                     | 默认值 | 说明                                      |
+| ------------------------ | ------ | ----------------------------------------- |
+| `ARCHIVE_DEFAULT_LAYOUT` | `list` | `/archive` 打开时的布局：`list` 或 `grid` |
+
+`list` 显示完整帖子，和 Latest、Featured 的时间线一样；`grid` 显示网格目录。读者可以在页面上切换布局，带 `?layout=` 的链接不受这项设置影响，始终用链接里的布局。
+
+`?view=grid` 是这种链接以前的写法，仍然可用：`/archive` 会把它重定向到 `?layout=`，已保存的自定义归档 URL 两种写法都能读。
+
+### 默认外观（可选）
+
+| 变量                 | 默认值    | 说明                         |
+| -------------------- | --------- | ---------------------------- |
+| `DEFAULT_THEME`      | `tufte`   | 站点没有选择配色主题时使用的 |
+| `DEFAULT_FONT_THEME` | `classic` | 站点没有选择字体主题时使用的 |
+
+在 **设置 → 外观** 里选过的主题优先。配色主题：`tufte`、`linen`、`frost`、
+`cotton`、`bone`、`parchment`、`dune`、`ink`、`slate`、`sage`、`clay`、`ember`、
+`paper`、`snow`、`espresso`。字体主题：`classic`、`tufte`、`system-sans`、
+`humanist-sans`、`modern-editorial`、`literary`、`geometric`。
 
 ### 存储
 
@@ -338,9 +398,9 @@ location /_assets/ {
 
 ### Slug（可选）
 
-| 变量             | 默认值 | 说明                                       |
-| ---------------- | ------ | ------------------------------------------ |
-| `SLUG_ID_LENGTH` | `5`    | 对无标题帖子自动生成随机 slug 时使用的长度 |
+| 变量             | 默认值 | 说明                                                    |
+| ---------------- | ------ | ------------------------------------------------------- |
+| `SLUG_ID_LENGTH` | `5`    | 对无标题帖子自动生成随机 slug 时使用的长度，`3` 到 `32` |
 
 ### 上传大小限制（可选）
 
@@ -362,9 +422,51 @@ location /_assets/ {
 为 `1–1500`，RSS 条目数范围为 `1–200`。重置运行时覆盖值后，会重新使用环境
 变量。
 
+### Telegram 机器人（可选）
+
+给 Telegram 机器人发消息就能发布笔记。在 **设置 → Telegram** 页面连接账号后，发给机器人的文字都会被发布。
+
+| 变量                      | 默认值 | 说明                                                               |
+| ------------------------- | ------ | ------------------------------------------------------------------ |
+| `TELEGRAM_BOT_TOKENS`     | _无_   | 平台统一管理的机器人池：`<bot_id>:<secret>` 格式的 token，逗号分隔 |
+| `TELEGRAM_WEBHOOK_SECRET` | _无_   | 为池中每个机器人注册 webhook 时共用的 `secret_token`               |
+
+两个都不设置，就用你自己的机器人：Telegram 设置页会显示 token 输入框，保存 token 时 Jant 自动注册 webhook。
+
+设置了它们就是统一管理的机器人池（托管服务，或者想用一个固定机器人的自部署站点）：token 输入框隐藏，用户用绑定码连接。第一个 token 是对外的机器人；多出来的 token 让同一个 Telegram 账号可以连接多个站点。
+
+托管模式下（设置了 `HOSTED_CONTROL_PLANE_BASE_URL`），Node 服务器启动时会为池中的机器人注册 webhook，指向控制平面的域名，不需要额外操作。这个检查是幂等的：重启只会重新注册 webhook 有偏差或新加入的机器人。
+
+其他情况（例如 Workers 部署，或要注册到自定义 URL）需要手动注册：
+
+```sh
+jant telegram register-webhooks --url https://your-site.example
+```
+
+### 维护命令（可选）
+
+| 变量                   | 默认值 | 说明                                      |
+| ---------------------- | ------ | ----------------------------------------- |
+| `INTERNAL_ADMIN_TOKEN` | 未设置 | 维护命令和 `/api/internal/*` 接受的 token |
+
+`jant search reindex`、`jant posts rebuild-html` 和 `jant uploads cleanup` 用这个
+token 调用站点，见 [命令行](cli.md#维护)。不设置时，`/api/internal/*` 返回 `404`。
+用一个足够长的随机值，不要提交到版本控制。
+
+### GitHub App（可选）
+
+`GITHUB_APP_ID`、`GITHUB_APP_PRIVATE_KEY`、`GITHUB_APP_SLUG` 和
+`GITHUB_APP_WEBHOOK_SECRET` 让 GitHub 同步通过你自己的 GitHub App 连接，
+不用个人访问令牌。见 [GitHub 同步](github-sync.md)。
+
+### 托管服务
+
+`SITE_RESOLUTION_MODE` 和 `HOSTED_CONTROL_PLANE_*` 变量用于托管服务，也就是一台
+服务器运行多个站点的部署。自部署站点不需要设置。它们任何版本都可能改变，见[兼容性](compatibility.md)。
+
 ## Settings 页面设置
 
-这些设置可以在初始化完成后，通过 Jant 的 Settings 页面修改。所有设置都可以通过同名环境变量预置初始值——Settings 里改过的值优先级高于环境变量。
+这些设置可以在初始化完成后，通过 Jant 的 Settings 页面修改。所有设置都可以通过同名环境变量预置初始值——Settings 里改过的值优先级高于环境变量。初始化时询问站点语言，预先填好 `SITE_LANGUAGE` 并保存所选的值；只有没设 `TIME_ZONE` 时，才用浏览器的时区。
 
 | 设置                         | 用途                                      |
 | ---------------------------- | ----------------------------------------- |
@@ -372,9 +474,9 @@ location /_assets/ {
 | `SITE_DESCRIPTION`           | Meta description 和 feed description      |
 | `SITE_LANGUAGE`              | 主要语言代码                              |
 | `DASHBOARD_LANGUAGE`         | 私有管理界面语言                          |
-| `CJK_SERIF_FONT`             | CJK 衬线字体回退                          |
 | `TIME_ZONE`                  | 显示时区，例如 `UTC` 或 `Asia/Shanghai`   |
 | `MAIN_RSS_FEED`              | 决定 `/feed` 返回什么                     |
+| `ARCHIVE_DEFAULT_LAYOUT`     | `/archive` 打开时的布局                   |
 | `PAGE_SIZE`                  | 默认每页条目数（`1–100`）                 |
 | `SEARCH_PAGE_SIZE`           | 每页搜索结果数（`1–100`）                 |
 | `ARCHIVE_PAGE_SIZE`          | 每页归档帖子数（`1–100`）                 |
@@ -387,6 +489,7 @@ location /_assets/ {
 | `NOINDEX`                    | 请求搜索引擎不要收录这个站点              |
 | `PUBLIC_API_ENABLED`         | 是否允许无 session 或 API token 读取 JSON |
 | `RSS_FEEDS_ENABLED`          | 是否发布 Atom feeds 和内置 feed 入口      |
+| `DISCOVER`                   | 站点是否出现在 Jant Discover              |
 
 多语言站点还有两项设置：`ADDITIONAL_LANGUAGES` 和 `MULTILINGUAL_ENABLED`。它们由语言页写入，不建议手工设置——它们的值必须和帖子上标记的语言保持一致，见[多语言内容](multilingual.md)。
 
@@ -419,13 +522,16 @@ Config Editor 使用显式允许清单。部署基础设施、凭据、集成令
 
 ## 保留路径
 
-这些顶层路径是保留的，不能作为 post 或自定义页面的 slug：
+这些顶层路径是保留的，帖子、合集和自定义 URL 地址的第一段都不能是其中之一，不分大小写：`archive/2024` 和 `Archive` 被占用，`archives` 可以用。
 
 ```text
-featured, latest, collections, signin, signout, setup, settings, dash,
-api, feed, search, archive, media, pages, reset, compose, preview, new, static, assets,
-_assets, healthz, readyz
+featured, latest, signin, signout, setup, settings, dash, api, feed, search,
+subscribe, archive, media, pages, reset, collections, compose, preview, new,
+static, assets, _assets, healthz, readyz, skill.md, robots.txt,
+manifest.webmanifest, favicon.ico, apple-touch-icon.png, sites
 ```
+
+`sitemap.xml` 以及所有 `sitemap-*.xml` 形式的名字也不能用，sitemap 占用了这一组。你的地址都以字母或数字开头，所以第一段以 `_` 或 `.` 开头的路径（包括 `/.well-known/`）都归 Jant 使用，新的系统地址放在这里。开启 [多语言内容](multilingual.md) 后，每个附加语言的前缀（比如 `ja`）也会被保留。
 
 ## 配置文件
 
@@ -465,10 +571,13 @@ DATABASE_URL=file:./data/jant.sqlite
 # TRUST_PROXY=true
 ```
 
-有用的模板：
+`jant start` 和各个 `jant` 命令会读取当前目录下的 `.env`。环境里已经设置的变量优先于文件里的值。Docker Compose 用 `env_file` 把这个文件传进容器。
 
-- 仓库根目录下的 Docker / Node 示例：[`.env.example`](https://github.com/jant-me/jant/blob/main/.env.example)
-- package 内部的 Node 示例：[`packages/core/.env.node.example`](https://github.com/jant-me/jant/blob/main/packages/core/.env.node.example)
+| 变量            | 默认值 | 说明                                                   |
+| --------------- | ------ | ------------------------------------------------------ |
+| `JANT_ENV_FILE` | `.env` | 改为读取的文件，相对当前目录。设为空值则不读取任何文件 |
+
+模板：[`.env.example`](https://github.com/jant-me/jant/blob/main/.env.example)。
 
 ### .dev.vars（本地开发）
 
@@ -482,7 +591,7 @@ DEMO_PASSWORD=jant-dev-debug-login
 DEMO_MODE=false
 ```
 
-`DEV_API_TOKEN`、`DEMO_EMAIL` 和 `DEMO_PASSWORD` 都是本地调试辅助项，不属于正常生产环境配置。
+`DEV_API_TOKEN`、`DEMO_EMAIL` 和 `DEMO_PASSWORD` 都是本地调试辅助项，不属于正常生产环境配置。它们和 `DEMO_MODE` 任何版本都可能改变。
 
 ### Demo Mode
 

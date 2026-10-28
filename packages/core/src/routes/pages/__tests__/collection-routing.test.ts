@@ -93,6 +93,47 @@ describe("Collection Routing", () => {
     expect(html).not.toContain('class="feed-link"');
   });
 
+  it("links to ?sort=rating and still reads ?sort=rating_desc", async () => {
+    const { app, services } = createCollectionRoutingTestApp();
+    const collection = await services.collections.create({
+      slug: "reading",
+      title: "Reading",
+    });
+    const higher = await services.posts.create({
+      format: "note",
+      title: "Higher rated",
+      bodyMarkdown: "higher",
+      status: "published",
+      rating: 5,
+      publishedAt: Date.UTC(2024, 0, 1) / 1000,
+    });
+    const lower = await services.posts.create({
+      format: "note",
+      title: "Lower rated",
+      bodyMarkdown: "lower",
+      status: "published",
+      rating: 2,
+      publishedAt: Date.UTC(2026, 0, 1) / 1000,
+    });
+    await services.collections.addThread(collection.id, higher.id);
+    await services.collections.addThread(collection.id, lower.id);
+
+    const byDefault = await (await app.request("/reading")).text();
+    expect(byDefault.indexOf("Lower rated")).toBeLessThan(
+      byDefault.indexOf("Higher rated"),
+    );
+    expect(byDefault).toContain('href="/reading?sort=rating"');
+    expect(byDefault).not.toContain("sort=rating_desc");
+
+    // `rating_desc` is what the page wrote before 1.0; links to it stay.
+    for (const sort of ["rating", "rating_desc"]) {
+      const html = await (await app.request(`/reading?sort=${sort}`)).text();
+      expect(html.indexOf("Higher rated")).toBeLessThan(
+        html.indexOf("Lower rated"),
+      );
+    }
+  });
+
   it("redirects namespaced single-collection paths to the root canonical URL", async () => {
     const { app, services } = createCollectionRoutingTestApp();
 
@@ -246,5 +287,45 @@ describe("Collection Routing", () => {
     const aliasFeedRes = await app.request("/notes/feed");
     expect(aliasFeedRes.status).toBe(200);
     expect(await aliasFeedRes.text()).toContain("Book log");
+  });
+
+  it("redirects every other form of a collection's address to its one address", async () => {
+    const { app, services } = createCollectionRoutingTestApp();
+
+    const { collection } = await createCollectionWithPost(services, {
+      slug: "reading",
+      title: "Reading",
+      postTitle: "Book log",
+    });
+    const redirectOf = async (path: string) => {
+      const res = await app.request(path, { redirect: "manual" });
+      return [res.status, res.headers.get("Location")];
+    };
+
+    expect(await redirectOf("/Reading")).toEqual([301, "/reading"]);
+
+    await services.customUrls.create({
+      path: "notes",
+      targetType: "collection",
+      targetId: collection.id,
+    });
+    await services.customUrls.create({
+      path: "more-notes",
+      targetType: "collection",
+      targetId: collection.id,
+    });
+    // The first custom URL is the address, as the sitemap names it.
+    expect(await redirectOf("/more-notes")).toEqual([301, "/notes"]);
+    expect(await redirectOf("/NOTES")).toEqual([301, "/notes"]);
+    expect((await app.request("/notes")).status).toBe(200);
+    // A saved address keeps the page and sort a reader saved with it.
+    expect(await redirectOf("/more-notes?sort=oldest&page=2")).toEqual([
+      301,
+      "/notes?sort=oldest&page=2",
+    ]);
+    expect(await redirectOf("/Reading?sort=oldest")).toEqual([
+      301,
+      "/notes?sort=oldest",
+    ]);
   });
 });

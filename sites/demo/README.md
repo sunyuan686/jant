@@ -105,24 +105,20 @@ Open `http://localhost:3000`.
 
 ## Common Commands
 
-| Command                                                                          | Description                           |
-| -------------------------------------------------------------------------------- | ------------------------------------- |
-| `npm run dev`                                                                    | Start local development               |
-| `npm run deploy`                                                                 | Apply remote migrations and deploy    |
-| `npm run reset-password`                                                         | Generate a password reset token       |
-| `npx jant site export https://your-site.example --output ./jant-site-export.zip` | Export the site as a portable archive |
+| Command                                                                                | Description                           |
+| -------------------------------------------------------------------------------------- | ------------------------------------- |
+| `npm run dev`                                                                          | Start local development               |
+| `npm run deploy`                                                                       | Apply remote migrations and deploy    |
+| `npm run reset-password -- --remote`                                                   | Get a link to reset your password     |
+| `npx jant site export --url https://your-site.example --output ./jant-site-export.zip` | Export the site as a portable archive |
 
 ## Upgrade
 
-Check the [release notes](https://github.com/jant-me/jant/releases) for breaking changes, then:
-
 ```bash
 npm install @jant/core@latest
-npm run dev      # verify locally; applies new migrations to your local D1
-npm run deploy   # deploy to Cloudflare; applies remote migrations
 ```
 
-If you used one-click deploy, you can skip the local steps: commit the updated `package.json` and lockfile and push to `main`. Cloudflare rebuilds and applies remote migrations automatically.
+Commit `package.json` and the lockfile and push to `main`: the deploy workflow, or Cloudflare after a one-click deploy, deploys the new version and runs its migrations. Without either, run `npm run deploy`. [Upgrading](https://jant.me/docs/upgrading) has what to back up first and what a site on 0.x has to change.
 
 ## Configuration
 
@@ -166,14 +162,6 @@ Reference:
 
 ## AI Coding Tools
 
-This site template includes project guidance in `AGENTS.md` plus task-focused skills in `.agents/skills/`.
+`AGENTS.md` tells a coding agent where to read about this site: the running site's `/skill.md` for content work through the API or MCP, `npx jant --help` for the command line, and the Jant docs for the rest. All three follow the installed Jant version. `CLAUDE.md` points to `AGENTS.md`.
 
-For concrete content automation examples, see `examples/agent-content-automation/README.md`.
-
-Available skills:
-
-- `building-jant-site`
-- `jant-http-api`
-- `jant-site-ops`
-
-If your coding tool expects Claude-style project files, `CLAUDE.md` and `.claude/skills/` are generated too.
+For content automation examples, see `examples/agent-content-automation/README.md`.

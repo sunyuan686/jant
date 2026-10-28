@@ -49,7 +49,7 @@ export async function run(argv) {
     console.log("  --persist-to Local D1 state directory override");
     console.log("");
     console.log(
-      "`.env.node` next to your project (or in packages/core/) is auto-loaded.",
+      "`.env` in the current directory is read, or the file JANT_ENV_FILE names.",
     );
     console.log(
       "If DATABASE_URL or DATA_DIR is then set and no runtime flag is passed,",
@@ -101,12 +101,6 @@ export async function run(argv) {
       {
         async query(sql) {
           return queryD1(sql, runtime, d1Options);
-        },
-        async execute(sql) {
-          executeD1(sql, runtime, {
-            ...d1Options,
-            quiet: true,
-          });
         },
       },
       {

@@ -19,7 +19,7 @@
  * filled in by Commit 5.
  */
 
-import type { PostService } from "./post.js";
+import type { PostFilters, PostService } from "./post.js";
 import type { PathService } from "./path.js";
 import type { CollectionService } from "./collection.js";
 import type { MediaService } from "./media.js";
@@ -37,6 +37,7 @@ import {
   formatFrontMatter,
   type HugoCollectionRef,
   type HugoFrontMatter,
+  type HugoSmartCollectionSelection,
   type JantMedia,
 } from "../lib/hugo-markdown.js";
 // Shared design tokens — single source of truth for colors, typography,
@@ -69,6 +70,8 @@ import LAYOUT_FEATURED_LIST from "./export-theme/layouts/featured/list.html?raw"
 import LAYOUT_ARCHIVE_LIST from "./export-theme/layouts/archive/list.html?raw";
 import LAYOUT_COLLECTIONS_LIST from "./export-theme/layouts/collections/list.html?raw";
 import LAYOUT_COLLECTION_SINGLE from "./export-theme/layouts/collection/single.html?raw";
+import LAYOUT_SMART_COLLECTION_LIST from "./export-theme/layouts/smart_collection/list.html?raw";
+import PARTIAL_JANT_DATA from "./export-theme/layouts/partials/jant-data.html?raw";
 import PARTIAL_HEAD from "./export-theme/layouts/partials/head.html?raw";
 import PARTIAL_HEADER from "./export-theme/layouts/partials/header.html?raw";
 import PARTIAL_FOOTER from "./export-theme/layouts/partials/footer.html?raw";
@@ -78,32 +81,112 @@ import PARTIAL_MEDIA_GALLERY from "./export-theme/layouts/partials/media-gallery
 import PARTIAL_REPLY from "./export-theme/layouts/partials/reply.html?raw";
 import PARTIAL_THREAD_PREVIEW from "./export-theme/layouts/partials/thread-preview.html?raw";
 import PARTIAL_FEATURED_THREAD from "./export-theme/layouts/partials/featured-thread.html?raw";
+import PARTIAL_SMART_COLLECTION_MEMBERS from "./export-theme/layouts/partials/smart-collection-members.html?raw";
+import PARTIAL_COLLECTION_THREADS from "./export-theme/layouts/partials/collection-threads.html?raw";
+import PARTIAL_COLLECTION_MEMBERS from "./export-theme/layouts/partials/collection-members.html?raw";
+import PARTIAL_LATEST_MEMBERS from "./export-theme/layouts/partials/latest-members.html?raw";
+import PARTIAL_FEATURED_MEMBERS from "./export-theme/layouts/partials/featured-members.html?raw";
 import LAYOUT_RSS from "./export-theme/layouts/_default/rss.xml?raw";
 import PARTIAL_FEED_POST_CONTENT from "./export-theme/layouts/partials/feed-post-content.xml?raw";
 
+import { suggestSyncRepoName } from "../lib/github-sync-repo-name.js";
+import {
+  getPostPath,
+  redirectTargetHref,
+  toAbsoluteSiteUrl,
+} from "../lib/url.js";
 import type { StorageDriver } from "../lib/storage.js";
 import { base64ToUint8Array } from "../lib/favicon.js";
+import { makeZip } from "client-zip";
 import {
   SYSTEM_NAV_KEYS,
   isFeedNavKey,
   type Collection,
   type Media,
   type NavItem,
+  type PathRecord,
   type Post,
+  type SmartCollection,
   type SystemNavKey,
 } from "../types.js";
 
-/** A file entry in the exported Hugo site. */
-export interface ExportFile {
+/**
+ * Format version written to `data/jant.toml` as `version`. Raise it whenever
+ * `jant site import` starts reading a field, or a value of one, that it didn't
+ * before: an older importer refuses a version newer than its
+ * `SUPPORTED_SITE_EXPORT_VERSION` (kept equal to this by a test) instead of
+ * importing the export and silently dropping what it doesn't know.
+ * `export-format-version.test.ts` freezes the fields each version reads.
+ */
+export const SITE_EXPORT_FORMAT_VERSION = 2;
+
+/** A file of the exported Hugo site whose text or bytes the export holds. */
+export interface ExportContentFile {
   path: string;
   content: string | Uint8Array;
+  /**
+   * Scaffolding the destination owns once it exists. A fresh export always
+   * carries it — the ZIP is a new tree, and `site export` refuses a non-empty
+   * output directory — but GitHub Sync writes it only when the
+   * repository does not have it yet, so an edit there survives every later
+   * push. Deploy config is the case that needs this: the Worker name has to
+   * be corrected by hand when it does not match the Worker already serving
+   * the domain.
+   */
+  scaffoldOnce?: boolean;
+}
+
+/**
+ * A media file of the exported site, named but not read: the archive streams
+ * it from storage as it is written. Reading every bundled file up front held a
+ * site's media in memory, and on a Docker site with 3 GB of local media the
+ * container was killed before it answered.
+ */
+export interface ExportStoredFile {
+  path: string;
+  storageKey: string;
+}
+
+/** A file entry in the exported Hugo site. */
+export type ExportFile = ExportContentFile | ExportStoredFile;
+
+/**
+ * @param file - An export file entry
+ * @returns Whether its bytes are still in storage
+ * @example
+ * if (isStoredExportFile(file)) await readStoredExportFile(file, storage);
+ */
+export function isStoredExportFile(file: ExportFile): file is ExportStoredFile {
+  return "storageKey" in file;
+}
+
+/**
+ * Read a stored export file's bytes, for a consumer that needs them whole.
+ *
+ * @param file - A stored export file
+ * @param storage - The site's storage
+ * @returns The bytes, or null when the object is gone
+ * @example
+ * const bytes = await readStoredExportFile(file, storage);
+ */
+export async function readStoredExportFile(
+  file: ExportStoredFile,
+  storage: StorageDriver,
+): Promise<Uint8Array | null> {
+  const object = await storage.get(file.storageKey);
+  if (!object?.body) return null;
+  return new Uint8Array(await new Response(object.body).arrayBuffer());
 }
 
 export interface ExportService {
   /** Generate a flat list of files for a complete Hugo site. */
   generateHugoFiles(): Promise<ExportFile[]>;
-  /** Generate a ZIP archive of the Hugo site. */
-  generateHugoSite(): Promise<Uint8Array>;
+  /**
+   * The Hugo site as a ZIP stream. Stored media is read from storage one file
+   * at a time as the stream is consumed, so memory stays flat whatever the
+   * size of the site; the archive switches to ZIP64 past 4 GiB.
+   */
+  generateHugoSite(): Promise<ReadableStream<Uint8Array>>;
 }
 
 export interface SiteConfig {
@@ -124,6 +207,8 @@ export interface SiteConfig {
   mainRssFeed: string;
   /** "list" or "grid" — the layout the exported archive page opens with. */
   archiveDefaultLayout: string;
+  /** IANA time zone the site dates posts in. */
+  timeZone: string;
   siteFooter: string;
   showHeaderAvatar: boolean;
   siteAvatarUrl: string;
@@ -151,6 +236,9 @@ export interface SiteConfig {
     | "url"
     | "position"
     | "placement"
+    | "collectionId"
+    | "smartCollectionId"
+    | "postId"
   >[];
   /** Items per page for Hugo pagination — kept in sync with the main site's PAGE_SIZE. */
   pageSize: number;
@@ -175,6 +263,16 @@ type ExportedCollectionDirectoryItem =
       recentActivityIso?: string | null;
     }
   | {
+      type: "smart_collection";
+      sequence: string;
+      slug: string;
+      title: string;
+      descriptionHtml?: string | null;
+      entryCount?: number;
+      recentActivityLabel?: string | null;
+      recentActivityIso?: string | null;
+    }
+  | {
       type: "divider";
       label: string | null;
     }
@@ -183,17 +281,26 @@ type ExportedCollectionDirectoryItem =
       sequence: string;
       label: string;
       url: string;
+      /** The link description as the author wrote it, or null if empty. */
+      description?: string | null;
       /** Rendered HTML of the link description, or null if empty. */
       descriptionHtml?: string | null;
     };
 
 interface ExportCollectionDirectorySourceItem {
-  type: "collection" | "divider" | "link";
+  type: "collection" | "smart_collection" | "divider" | "link";
   label?: string | null;
   url?: string | null;
   description?: string | null;
   collection?: {
     id: string;
+    slug: string;
+    title: string;
+    description?: string | null;
+    threadCount?: number;
+    recentActivityAt?: number;
+  };
+  smartCollection?: {
     slug: string;
     title: string;
     description?: string | null;
@@ -244,6 +351,35 @@ function buildDefaultAppleTouchAsset(): Pick<
   };
 }
 
+/** Posts read per query while an export walks the site. */
+const EXPORT_POST_PAGE_SIZE = 500;
+
+/**
+ * Every post the filters match, however many there are. An export used to
+ * ask for the first 10,000 and stop there without a word, dropping the rest
+ * of a large site, replies included.
+ *
+ * @param posts - The post service
+ * @param filters - What to list
+ * @returns All matching posts, in the list order
+ */
+async function listEveryPost(
+  posts: PostService,
+  filters: Omit<PostFilters, "limit" | "offset">,
+): Promise<Post[]> {
+  const all: Post[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await posts.listPage(filters, {
+      cursor,
+      limit: EXPORT_POST_PAGE_SIZE,
+    });
+    all.push(...page.posts);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  return all;
+}
+
 export function createExportService(
   services: {
     posts: PostService;
@@ -262,6 +398,14 @@ export function createExportService(
      * base64-encodes attachment bytes.
      */
     bundleMedia?: boolean;
+    /**
+     * Name of the GitHub repository this export is destined for, when it has
+     * one. It decides the Worker name in `wrangler.jsonc`: Cloudflare names a
+     * Worker after the repository it was imported from, and requires the two
+     * to match. GitHub Sync passes it; a ZIP export has no repository and
+     * falls back to the repository name Sync would suggest for the site.
+     */
+    repoName?: string | null;
   } = {},
 ): ExportService {
   return {
@@ -271,15 +415,17 @@ export function createExportService(
           ? // The export builds a public static site, so it sees what a
             // signed-out reader sees. Language narrowing is not applied: the
             // export walks every language itself.
-            services.collections.listDirectoryData({ isAuthenticated: false })
+            services.collections.listDirectoryData({
+              isAuthenticated: false,
+              timeZone: siteConfig.timeZone,
+            })
           : Promise.resolve(null);
 
       // 1. Query all data
       const [allPosts, allCollections, collectionDirectoryData] =
         await Promise.all([
-          services.posts.list({
+          listEveryPost(services.posts, {
             excludeReplies: false,
-            limit: 10000,
           }),
           services.collections.list(),
           collectionDirectoryDataPromise,
@@ -297,13 +443,16 @@ export function createExportService(
         slugMap,
         aliasMap,
         collectionSlugMap,
+        standalonePaths,
       ] = await Promise.all([
-        services.collections.getCollectionsByPostIds(rootPostIds),
+        // A root's id is its Thread's id.
+        services.collections.getCollectionsByThreadIds(rootPostIds),
         services.collections.getCollectionEntriesByThreadIds(rootPostIds),
         services.media.getByPostIds(allPostIds),
         services.paths.getPostSlugMap(allPostIds),
         services.paths.getPostAliases(rootPostIds),
         services.paths.getCollectionSlugMap(allCollections.map((c) => c.id)),
+        services.paths.listStandalonePaths(),
       ]);
       // Denormalized title lookup so front-matter collection refs can
       // include a title label without templates having to resolve another
@@ -320,22 +469,48 @@ export function createExportService(
         allPosts,
         collectionsByRoot,
       );
-      // Smart collections are left out of a static export. Their membership is
-      // a query, and the exported site has no database to run it against, so
-      // the honest options are "omit" or "freeze today's matches under a name
-      // that promises to keep updating". Round-tripping them is out of scope
-      // (see the smart collections design notes); omitting is what that
-      // decision means here.
+      // Smart collections travel as their conditions (a section page per
+      // smart collection, below): a site importing the export recreates them,
+      // and the Hugo theme applies the same conditions to the posts it has, so
+      // the page keeps up with the repository instead of freezing the matches
+      // of the day it was exported.
+      const exportedSmartCollections: {
+        smartCollection: SmartCollection;
+        selection: HugoSmartCollectionSelection;
+      }[] = [];
+      const smartCollectionSlugMap = new Map<string, string>();
+      for (const smartCollection of collectionDirectoryData?.smartCollections ??
+        []) {
+        const selection = toExportedSelection(
+          smartCollection.selection,
+          collectionSlugMap,
+        );
+        if (!selection) {
+          // eslint-disable-next-line no-console -- A dropped page must leave a trace
+          console.warn(
+            `Export: smart collection /${smartCollection.slug} filters by a collection that no longer exists, so it was left out.`,
+          );
+          continue;
+        }
+        smartCollectionSlugMap.set(smartCollection.id, smartCollection.slug);
+        exportedSmartCollections.push({ smartCollection, selection });
+      }
       const exportableDirectoryItems: ExportCollectionDirectorySourceItem[] =
         collectionDirectoryData?.items
           ? collectionDirectoryData.items
-              .filter((item) => item.type !== "smart_collection")
+              .filter(
+                (item) =>
+                  item.type !== "smart_collection" ||
+                  (item.smartCollection !== undefined &&
+                    smartCollectionSlugMap.has(item.smartCollection.id)),
+              )
               .map((item) => ({
-                type: item.type as "collection" | "divider" | "link",
+                type: item.type,
                 label: item.label,
                 url: item.url,
                 description: item.description,
                 collection: item.collection,
+                smartCollection: item.smartCollection,
               }))
           : allCollections.map((collection) => ({
               type: "collection" as const,
@@ -355,9 +530,14 @@ export function createExportService(
         list.push(reply);
         repliesByThread.set(reply.threadId, list);
       }
-      // Sort replies by createdAt within each thread
+      // Thread order, as `posts.getThread` reads it: after the root, which
+      // leads as `_index.md`, creation time, then ID.
       for (const list of repliesByThread.values()) {
-        list.sort((a, b) => a.createdAt - b.createdAt);
+        list.sort(
+          (a, b) =>
+            a.createdAt - b.createdAt ||
+            (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        );
       }
 
       // 3. Build file list
@@ -392,7 +572,11 @@ export function createExportService(
         exportFiles.push(...bundleFiles);
       }
 
-      // Collection landing pages (`content/{slug}/_index.md`).
+      // Collection landing pages (`content/{slug}/_index.md`), with the
+      // custom URLs that name them.
+      const collectionAliases = await services.paths.getCollectionAliases(
+        allCollections.map((c) => c.id),
+      );
       for (const collection of allCollections) {
         const slug = collectionSlugMap.get(collection.id) ?? collection.slug;
         const entryCount =
@@ -403,6 +587,20 @@ export function createExportService(
             collection,
             slug,
             entryCount,
+            siteConfig.rssFeedsEnabled,
+            collectionAliases.get(collection.id) ?? [],
+          ),
+        });
+      }
+
+      // Smart collection landing pages: the conditions, which the theme's
+      // `smart-collection-members` partial applies to the exported posts.
+      for (const { smartCollection, selection } of exportedSmartCollections) {
+        exportFiles.push({
+          path: `content/${smartCollection.slug}/_index.md`,
+          content: await buildSmartCollectionSection(
+            smartCollection,
+            selection,
             siteConfig.rssFeedsEnabled,
           ),
         });
@@ -429,6 +627,7 @@ export function createExportService(
       const usedSlugs = new Set<string>();
       for (const s of slugMap.values()) usedSlugs.add(s);
       for (const s of collectionSlugMap.values()) usedSlugs.add(s);
+      for (const s of smartCollectionSlugMap.values()) usedSlugs.add(s);
       const hasFeaturedSection = !usedSlugs.has("featured");
       if (hasFeaturedSection) {
         exportFiles.push({
@@ -440,14 +639,18 @@ export function createExportService(
       // Feed subscribers are the one audience the export can lose silently:
       // their reader polls a `/feed` address that this site does not serve.
       // With feeds off there is nothing to redirect to, and the live site had
-      // no feeds to have been subscribed to either.
-      if (siteConfig.rssFeedsEnabled) {
+      // no feeds to have been subscribed to either. The author's own
+      // redirects go in too; an old feed address is often one of them.
+      const redirectSections = [
+        siteConfig.rssFeedsEnabled
+          ? buildFeedRedirects(siteConfig.mainRssFeed, hasFeaturedSection)
+          : null,
+        buildCustomUrlRedirects(standalonePaths),
+      ].filter((section): section is string => section !== null);
+      if (redirectSections.length > 0) {
         exportFiles.push({
           path: "static/_redirects",
-          content: buildFeedRedirects(
-            siteConfig.mainRssFeed,
-            hasFeaturedSection,
-          ),
+          content: redirectSections.join("\n"),
         });
       }
 
@@ -460,6 +663,12 @@ export function createExportService(
           siteConfig,
           iconAssets,
           exportedCollectionDirectoryItems,
+          {
+            postSlugs: slugMap,
+            collectionSlugs: collectionSlugMap,
+            smartCollectionSlugs: smartCollectionSlugMap,
+            standalonePaths,
+          },
         ),
       });
 
@@ -509,6 +718,10 @@ export function createExportService(
         content: LAYOUT_COLLECTION_SINGLE,
       });
       exportFiles.push({
+        path: "themes/jant/layouts/partials/jant-data.html",
+        content: PARTIAL_JANT_DATA,
+      });
+      exportFiles.push({
         path: "themes/jant/layouts/partials/head.html",
         content: PARTIAL_HEAD,
       });
@@ -543,6 +756,30 @@ export function createExportService(
       exportFiles.push({
         path: "themes/jant/layouts/partials/featured-thread.html",
         content: PARTIAL_FEATURED_THREAD,
+      });
+      exportFiles.push({
+        path: "themes/jant/layouts/smart_collection/list.html",
+        content: LAYOUT_SMART_COLLECTION_LIST,
+      });
+      exportFiles.push({
+        path: "themes/jant/layouts/partials/smart-collection-members.html",
+        content: PARTIAL_SMART_COLLECTION_MEMBERS,
+      });
+      exportFiles.push({
+        path: "themes/jant/layouts/partials/collection-threads.html",
+        content: PARTIAL_COLLECTION_THREADS,
+      });
+      exportFiles.push({
+        path: "themes/jant/layouts/partials/collection-members.html",
+        content: PARTIAL_COLLECTION_MEMBERS,
+      });
+      exportFiles.push({
+        path: "themes/jant/layouts/partials/latest-members.html",
+        content: PARTIAL_LATEST_MEMBERS,
+      });
+      exportFiles.push({
+        path: "themes/jant/layouts/partials/featured-members.html",
+        content: PARTIAL_FEATURED_MEMBERS,
       });
       exportFiles.push({
         path: "themes/jant/layouts/_default/rss.xml",
@@ -599,22 +836,42 @@ export function createExportService(
         path: ".gitignore",
         content: buildGitignore(),
       });
+      exportFiles.push({
+        path: WRANGLER_CONFIG_PATH,
+        content: buildWranglerConfig(siteConfig, deps.repoName),
+        scaffoldOnce: true,
+      });
 
       return exportFiles;
     },
 
     async generateHugoSite() {
       const exportFiles = await this.generateHugoFiles();
-      const { zipSync } = await import("fflate");
-      const encoder = new TextEncoder();
-      const files: Record<string, Uint8Array> = {};
-      for (const file of exportFiles) {
-        files[file.path] =
-          typeof file.content === "string"
-            ? encoder.encode(file.content)
-            : file.content;
+      const storage = deps.storage ?? null;
+      const lastModified = new Date();
+
+      async function* entries() {
+        for (const file of exportFiles) {
+          if (!isStoredExportFile(file)) {
+            yield { name: file.path, lastModified, input: file.content };
+            continue;
+          }
+
+          const object = storage ? await storage.get(file.storageKey) : null;
+          if (!object?.body) {
+            // The archive is already streaming; say which file is missing
+            // rather than leave it out without a trace.
+            // eslint-disable-next-line no-console -- A dropped file must leave a trace
+            console.warn(
+              `Export: ${file.storageKey} is missing from storage, so ${file.path} is not in the archive.`,
+            );
+            continue;
+          }
+          yield { name: file.path, lastModified, input: object.body };
+        }
       }
-      return zipSync(files);
+
+      return makeZip(entries());
     },
   };
 }
@@ -835,8 +1092,6 @@ function buildMediaEmission(
   if (media.durationSeconds !== null && media.durationSeconds !== undefined) {
     entry.duration_seconds = media.durationSeconds;
   }
-  entry.provider = media.provider;
-  entry.storage_key = media.storageKey;
 
   let inlinePosterPath: string | null = null;
   if (media.posterKey) {
@@ -845,7 +1100,6 @@ function buildMediaEmission(
     entry.poster = hasRemoteUrl
       ? getMediaUrl(media.posterKey, mediaBaseUrl)
       : `/media/${posterLocalName}`;
-    entry.poster_key = media.posterKey;
     if (!hasRemoteUrl) {
       inlinePosterPath = `static/media/${posterLocalName}`;
     }
@@ -910,11 +1164,38 @@ async function buildThreadBundle(
   // Root aliases = historical root slugs + every reply slug (so
   // /{reply-slug}/ gets a Hugo alias page that redirects/anchors to
   // the thread root).
-  const aliases = [...rootAliases];
-  for (const reply of threadReplies) {
-    const replySlug = slugMap.get(reply.id) ?? reply.slug;
-    aliases.push(`/${replySlug}/`);
+  //
+  // A draft or private root is not built, so its alias pages would have no
+  // target: Hugo still writes them, `.Permalink` resolves to the empty
+  // string, and the result is a page that redirects to itself. The thread
+  // is unpublished, so its historical URLs are unpublished with it.
+  const rootIsUnpublished =
+    root.status === "draft" || root.visibility === "private";
+  const aliases: string[] = [];
+  if (!rootIsUnpublished) {
+    aliases.push(...rootAliases);
+    for (const reply of threadReplies) {
+      const replySlug = slugMap.get(reply.id) ?? reply.slug;
+      aliases.push(`/${replySlug}/`);
+    }
   }
+
+  // The `<id>` Jant's feeds give this Thread's entry, kept as the string it
+  // was. A reader recognises an entry it has seen by that string alone, and
+  // the Hugo page's own URL differs from it — a trailing slash always, and
+  // the slug where Jant uses a custom path — so an exported feed that used
+  // the page URL would show every entry to every subscriber again after the
+  // move. RFC 4287 §4.2.6 asks for exactly this: an entry's ID must not
+  // change when its feed is migrated or exported.
+  const siteUrl = siteConfig.siteUrl.trim();
+  const feedId =
+    !rootIsUnpublished && siteUrl
+      ? toAbsoluteSiteUrl(
+          getPostPath(rootSlug, rootAliases[0]),
+          siteUrl,
+          siteConfig.sitePathPrefix,
+        )
+      : undefined;
 
   // Root front matter.
   const rootMedia = mediaByPost.get(root.id) ?? [];
@@ -929,6 +1210,10 @@ async function buildThreadBundle(
       root.publishedAt !== null
         ? toISOString(root.publishedAt)
         : toISOString(root.createdAt),
+    created:
+      root.publishedAt !== null && root.createdAt !== root.publishedAt
+        ? toISOString(root.createdAt)
+        : undefined,
     updated:
       root.updatedAt && root.updatedAt !== root.publishedAt
         ? toISOString(root.updatedAt)
@@ -944,11 +1229,9 @@ async function buildThreadBundle(
         : undefined,
     slug: rootSlug,
     type: "post",
-    draft:
-      root.status === "draft" || root.visibility === "private"
-        ? true
-        : undefined,
+    draft: rootIsUnpublished ? true : undefined,
     aliases: aliases.length > 0 ? aliases : undefined,
+    feed_id: feedId,
     format: root.format,
     status: root.status,
     visibility: root.visibility,
@@ -978,7 +1261,7 @@ async function buildThreadBundle(
     media: rootMediaList.length > 0 ? rootMediaList : undefined,
   };
 
-  const rootBody = root.body ? tiptapJsonToMarkdown(root.body) : "";
+  const rootBody = root.body ? postBodyToMarkdown(root.body, rootSlug) : "";
   files.push({
     path: `content/${rootSlug}/_index.md`,
     content: `${await formatFrontMatter(rootFrontMatter)}\n${rootBody}${rootBody.endsWith("\n") ? "" : "\n"}`,
@@ -994,7 +1277,7 @@ async function buildThreadBundle(
     media: rootMedia[i] as Media,
   }))) {
     if (emission.inlinePath) {
-      const file = await readMediaResourceFile(
+      const file = toStoredMediaFile(
         storage,
         media.storageKey,
         emission.inlinePath,
@@ -1002,7 +1285,7 @@ async function buildThreadBundle(
       if (file) files.push(file);
     }
     if (emission.inlinePosterPath && media.posterKey) {
-      const posterFile = await readMediaResourceFile(
+      const posterFile = toStoredMediaFile(
         storage,
         media.posterKey,
         emission.inlinePosterPath,
@@ -1011,8 +1294,8 @@ async function buildThreadBundle(
     }
   }
 
-  // Replies as nested leaf bundles.
-  for (const reply of threadReplies) {
+  // Replies as nested leaf bundles, in Thread order.
+  for (const [replyIndex, reply] of threadReplies.entries()) {
     const replySlug = slugMap.get(reply.id) ?? reply.slug;
     const replyMedia = mediaByPost.get(reply.id) ?? [];
     const replyEmissions = replyMedia.map((m) =>
@@ -1026,12 +1309,17 @@ async function buildThreadBundle(
         reply.publishedAt !== null
           ? toISOString(reply.publishedAt)
           : toISOString(reply.createdAt),
+      created:
+        reply.publishedAt !== null && reply.createdAt !== reply.publishedAt
+          ? toISOString(reply.createdAt)
+          : undefined,
       updated:
         reply.updatedAt && reply.updatedAt !== reply.publishedAt
           ? toISOString(reply.updatedAt)
           : undefined,
       slug: replySlug,
       type: "post",
+      weight: replyIndex + 1,
       draft:
         reply.status === "draft" || reply.visibility === "private"
           ? true
@@ -1056,7 +1344,9 @@ async function buildThreadBundle(
       media: replyMediaList.length > 0 ? replyMediaList : undefined,
     };
 
-    const replyBody = reply.body ? tiptapJsonToMarkdown(reply.body) : "";
+    const replyBody = reply.body
+      ? postBodyToMarkdown(reply.body, replySlug)
+      : "";
     files.push({
       path: `content/${rootSlug}/${replySlug}/index.md`,
       content: `${await formatFrontMatter(replyFrontMatter)}\n${replyBody}${replyBody.endsWith("\n") ? "" : "\n"}`,
@@ -1067,7 +1357,7 @@ async function buildThreadBundle(
       media: replyMedia[i] as Media,
     }))) {
       if (emission.inlinePath) {
-        const file = await readMediaResourceFile(
+        const file = toStoredMediaFile(
           storage,
           media.storageKey,
           emission.inlinePath,
@@ -1075,7 +1365,7 @@ async function buildThreadBundle(
         if (file) files.push(file);
       }
       if (emission.inlinePosterPath && media.posterKey) {
-        const posterFile = await readMediaResourceFile(
+        const posterFile = toStoredMediaFile(
           storage,
           media.posterKey,
           emission.inlinePosterPath,
@@ -1089,25 +1379,17 @@ async function buildThreadBundle(
 }
 
 /**
- * Read a media record's bytes from storage and return an ExportFile so
- * they can be bundled next to the post as a Hugo page resource. Returns
- * null when storage is unavailable or the object cannot be read, in
- * which case the front matter entry still points at the resource name
- * and the CLI's pull-media step (or a later sync) can fill it in.
+ * Name a media object for the archive to bundle as `static/media/…`. Its
+ * bytes are read when the archive is written. Null when the export has no
+ * storage, in which case the front matter entry still points at the file and
+ * the CLI's pull-media step can fill it in.
  */
-async function readMediaResourceFile(
+function toStoredMediaFile(
   storage: StorageDriver | null,
   storageKey: string,
   bundlePath: string,
-): Promise<ExportFile | null> {
-  if (!storage) return null;
-  try {
-    const bytes = await readStorageObjectBytes(storage, storageKey);
-    if (!bytes) return null;
-    return { path: bundlePath, content: bytes };
-  } catch {
-    return null;
-  }
+): ExportStoredFile | null {
+  return storage ? { path: bundlePath, storageKey } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1155,14 +1437,60 @@ async function buildCollectionSection(
   slug: string,
   entryCount: number,
   rssFeedsEnabled: boolean,
+  aliases: string[],
 ): Promise<string> {
   const frontMatter: HugoFrontMatter = {
     title: collection.title,
     slug,
     type: "collection",
-    summary_text: collection.description ?? undefined,
+    // Custom URLs for this Collection. Hugo writes a redirect page for each;
+    // an import registers them again.
+    aliases: aliases.length > 0 ? aliases : undefined,
+    description: collection.description ?? undefined,
     sort_order: collection.sortOrder,
     entry_count: entryCount,
+    // Opt into Atom output at /{slug}/index.xml.
+    outputs: rssFeedsEnabled ? ["html", "rss"] : ["html"],
+  };
+  return `${await formatFrontMatter(frontMatter)}\n`;
+}
+
+/**
+ * A smart collection's conditions as its section page carries them: the
+ * stored selection, with the collection named by slug rather than ID so an
+ * import into another site can resolve it. Null when the collection it names
+ * is gone.
+ */
+function toExportedSelection(
+  selection: SmartCollection["selection"],
+  collectionSlugs: ReadonlyMap<string, string>,
+): HugoSmartCollectionSelection | null {
+  const { collection, media, ...rest } = selection;
+  const exported: HugoSmartCollectionSelection = { ...rest };
+  if (collection !== undefined) {
+    const slug = collection[0] ? collectionSlugs.get(collection[0]) : undefined;
+    if (!slug) return null;
+    exported.collection = slug;
+  }
+  if (media !== undefined) {
+    exported.media = typeof media === "string" ? media : [...media];
+  }
+  return exported;
+}
+
+async function buildSmartCollectionSection(
+  smartCollection: SmartCollection,
+  selection: HugoSmartCollectionSelection,
+  rssFeedsEnabled: boolean,
+): Promise<string> {
+  const frontMatter: HugoFrontMatter = {
+    title: smartCollection.title,
+    slug: smartCollection.slug,
+    type: "smart_collection",
+    description: smartCollection.description ?? undefined,
+    sort_order: smartCollection.sort,
+    display_layout: smartCollection.layout ?? undefined,
+    selection,
     // Opt into Atom output at /{slug}/index.xml.
     outputs: rssFeedsEnabled ? ["html", "rss"] : ["html"],
   };
@@ -1333,11 +1661,37 @@ function buildExportedCollectionDirectoryItems(
         sequence: sequenceLabels[index] ?? "",
         label: item.label,
         url: item.url,
+        description: description || null,
         descriptionHtml: description
           ? renderMarkdown(description, {
               namespace: `collection-directory-link-${sequenceLabels[index] ?? index}`,
             })
           : null,
+      });
+      return;
+    }
+
+    if (item.type === "smart_collection") {
+      const smartCollection = item.smartCollection;
+      if (!smartCollection?.slug) return;
+      const smartDescription = smartCollection.description?.trim();
+      exportedItems.push({
+        type: "smart_collection",
+        sequence: sequenceLabels[index] ?? "",
+        slug: smartCollection.slug,
+        title: smartCollection.title || smartCollection.slug,
+        descriptionHtml: smartDescription
+          ? renderMarkdown(smartDescription, {
+              namespace: `smart-collection-${smartCollection.slug}`,
+            })
+          : null,
+        entryCount: smartCollection.threadCount,
+        recentActivityLabel: formatCollectionActivityLabel(
+          smartCollection.recentActivityAt,
+        ),
+        recentActivityIso: formatCollectionActivityIso(
+          smartCollection.recentActivityAt,
+        ),
       });
       return;
     }
@@ -1503,7 +1857,12 @@ function buildHugoToml(config: SiteConfig): string {
     `languageCode = "${escapeTomlString(language)}"`,
     `defaultContentLanguage = "${escapeTomlString(language)}"`,
     'theme = "jant"',
-    `paginate = ${config.pageSize}`,
+    // No site-level `paginate` / `[pagination] pagerSize`: every paginated
+    // template calls `.Paginate` with an explicit page size taken from
+    // `params.page_size` / `params.archive_page_size`, so a site-level value
+    // would never be read. `paginate` was also deprecated in Hugo v0.128.0
+    // and has since been removed, so emitting it fails the build outright on
+    // any version that only knows `[pagination] pagerSize`.
     "enableRobotsTXT = true",
     // Disable Hugo's built-in taxonomies — jant has no tags or categories
     // and the default empty /tags/ and /categories/ pages are noise. This
@@ -1580,17 +1939,49 @@ function buildHugoToml(config: SiteConfig): string {
   return `${parts.join("\n")}\n`;
 }
 
+/** What `data/jant.toml` needs to name nav targets and standalone URLs. */
+interface JantDataTargets {
+  postSlugs: ReadonlyMap<string, string>;
+  collectionSlugs: ReadonlyMap<string, string>;
+  smartCollectionSlugs: ReadonlyMap<string, string>;
+  standalonePaths: readonly PathRecord[];
+}
+
+/** The key and slug `data/jant.toml` names a nav item's target by. */
+function resolveNavItemTarget(
+  item: SiteConfig["navItems"][number],
+  targets: JantDataTargets,
+): { key: string; slug: string } | null {
+  const slug =
+    item.type === "collection" && item.collectionId
+      ? targets.collectionSlugs.get(item.collectionId)
+      : item.type === "smart_collection" && item.smartCollectionId
+        ? targets.smartCollectionSlugs.get(item.smartCollectionId)
+        : item.type === "page" && item.postId
+          ? targets.postSlugs.get(item.postId)
+          : undefined;
+  if (!slug) return null;
+  const key =
+    item.type === "collection"
+      ? "collection_slug"
+      : item.type === "smart_collection"
+        ? "smart_collection_slug"
+        : "post_slug";
+  return { key, slug };
+}
+
 function buildJantDataToml(
   config: SiteConfig,
   iconAssets: SiteIconAssets,
   directoryItems: readonly ExportedCollectionDirectoryItem[],
+  targets: JantDataTargets,
 ): string {
   const footerHtml = config.siteFooter
     ? renderMarkdown(config.siteFooter, { namespace: "site-footer" })
     : "";
   const parts: string[] = [
     'format = "jant-site"',
-    "version = 1",
+    `version = ${SITE_EXPORT_FORMAT_VERSION}`,
     `generated_at = "${escapeTomlString(toISOString(Math.floor(Date.now() / 1000)))}"`,
     `site_name = "${escapeTomlString(config.siteName)}"`,
     `site_description = "${escapeTomlString(config.siteDescription)}"`,
@@ -1598,6 +1989,7 @@ function buildJantDataToml(
     `multilingual_enabled = ${config.multilingualEnabled}`,
     `additional_languages = "${escapeTomlString(config.additionalLanguages.join(","))}"`,
     `main_rss_feed = "${escapeTomlString(config.mainRssFeed)}"`,
+    `time_zone = "${escapeTomlString(config.timeZone)}"`,
     `archive_default_layout = "${escapeTomlString(config.archiveDefaultLayout)}"`,
     `public_api_enabled = ${config.publicApiEnabled}`,
     `rss_feeds_enabled = ${config.rssFeedsEnabled}`,
@@ -1635,11 +2027,10 @@ function buildJantDataToml(
   }
 
   for (const item of config.navItems) {
-    // `settings` is authenticated-only and has no corresponding page in the
-    // static Hugo site — drop it at export time so it never shows up in nav.
-    if (item.systemKey === "settings") continue;
-    // Both feed entries resolve to a feed file, so with feeds off both would
-    // export a link to something that was never written.
+    // `settings` has no page in the static site; the theme skips it, and the
+    // entry stays so an import back into Jant keeps it. Both feed entries
+    // resolve to a feed file, so with feeds off both would export a link to
+    // something that was never written.
     if (
       !config.rssFeedsEnabled &&
       item.type === "system" &&
@@ -1656,13 +2047,22 @@ function buildJantDataToml(
     );
     parts.push(`system_key = "${escapeTomlString(item.systemKey ?? "")}"`);
     parts.push(`placement = "${escapeTomlString(item.placement ?? "header")}"`);
+    // `label` above is what the theme shows. The author's own wording, when
+    // there is one, and the target by slug are what an import restores.
+    if (item.label) {
+      parts.push(`custom_label = "${escapeTomlString(item.label)}"`);
+    }
+    const target = resolveNavItemTarget(item, targets);
+    if (target) {
+      parts.push(`${target.key} = "${escapeTomlString(target.slug)}"`);
+    }
   }
 
   for (const item of directoryItems) {
     parts.push("");
     parts.push("[[directory]]");
     parts.push(`type = "${escapeTomlString(item.type)}"`);
-    if (item.type === "collection") {
+    if (item.type === "collection" || item.type === "smart_collection") {
       parts.push(`sequence = "${escapeTomlString(item.sequence)}"`);
       parts.push(`slug = "${escapeTomlString(item.slug)}"`);
       parts.push(`title = "${escapeTomlString(item.title)}"`);
@@ -1692,6 +2092,9 @@ function buildJantDataToml(
       parts.push(`sequence = "${escapeTomlString(item.sequence)}"`);
       parts.push(`label = "${escapeTomlString(item.label)}"`);
       parts.push(`url = "${escapeTomlString(item.url)}"`);
+      if (item.description) {
+        parts.push(`description = "${escapeTomlString(item.description)}"`);
+      }
       if (item.descriptionHtml) {
         parts.push(
           `description_html = "${escapeTomlString(item.descriptionHtml)}"`,
@@ -1700,12 +2103,170 @@ function buildJantDataToml(
     }
   }
 
+  // Custom URLs that name no post or collection. Post aliases travel in each
+  // root's `aliases:`; these would otherwise not travel at all.
+  for (const record of targets.standalonePaths) {
+    parts.push("");
+    parts.push("[[custom_url]]");
+    // Every path in an export starts with a slash, as the API gives them.
+    parts.push(`path = "/${escapeTomlString(record.path)}"`);
+    parts.push(`kind = "${escapeTomlString(record.kind)}"`);
+    if (record.kind === "redirect" && record.redirectToPath) {
+      parts.push(
+        `to = "${escapeTomlString(redirectTargetHref(record.redirectToPath))}"`,
+      );
+      parts.push(`status = ${record.redirectType ?? 301}`);
+    }
+    if (record.kind === "archive" && record.archiveQuery) {
+      parts.push(`archive_query = "${escapeTomlString(record.archiveQuery)}"`);
+    }
+  }
+
   return `${parts.join("\n")}\n`;
 }
 
+/**
+ * The author's redirects as `_redirects` rules, or null when there are none.
+ *
+ * @param standalonePaths - Custom URLs that name no post or collection
+ * @returns The `_redirects` section
+ * @example
+ * buildCustomUrlRedirects([redirectFromAtomXml]); // "# Redirects...\n/atom.xml  /feed  301\n"
+ */
+function buildCustomUrlRedirects(
+  standalonePaths: readonly PathRecord[],
+): string | null {
+  const rules = standalonePaths
+    .filter((record) => record.kind === "redirect" && record.redirectToPath)
+    .map(
+      (record) =>
+        [
+          `/${record.path}`,
+          redirectTargetHref(record.redirectToPath as string),
+          record.redirectType ?? 301,
+        ] as const,
+    );
+  if (rules.length === 0) return null;
+
+  const width = Math.max(...rules.map(([from]) => from.length));
+  return `# Redirects set up under Settings → Custom URLs on the live site.
+
+${rules.map(([from, to, status]) => `${from.padEnd(width)}  ${to}  ${status}`).join("\n")}
+`;
+}
+
 // ---------------------------------------------------------------------------
-// README + .gitignore + _redirects
+// README + .gitignore + _redirects + wrangler.jsonc
 // ---------------------------------------------------------------------------
+
+/** Repo-relative path of the Cloudflare Workers deploy config. */
+export const WRANGLER_CONFIG_PATH = "wrangler.jsonc";
+
+/**
+ * Normalize a string into a name Cloudflare accepts for a Worker: lowercase
+ * letters, digits, and hyphens, at most 63 characters.
+ */
+function toWorkerName(raw: string): string {
+  return (
+    raw
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      // 63 characters is Cloudflare's limit; trimming hyphens comes after the
+      // cut so a truncated name cannot end on one.
+      .slice(0, 63)
+      .replace(/^-+|-+$/g, "")
+  );
+}
+
+/**
+ * Pick the Worker name for `wrangler.jsonc`.
+ *
+ * Cloudflare requires this name to match the Worker in the dashboard, and its
+ * repository-import flow names a new Worker after the repository — so the
+ * repository name is the one value that lines up without the user editing
+ * anything. An export with no repository behind it (a ZIP, or
+ * `site export` into a directory) uses the repository name the GitHub Sync
+ * settings page prefills for this site, so pushing the export to a repository
+ * created with that default still matches.
+ *
+ * @param repoName - The destination repository's name, without the owner.
+ * @param siteUrl - The exported site's URL, used when there is no repository.
+ * @returns A name Cloudflare accepts.
+ * @example
+ * deriveWorkerName("owenyoung-blog", "https://notes.example.com"); // "owenyoung-blog"
+ * deriveWorkerName(null, "https://notes.example.com"); // "notes-jant-sync"
+ */
+export function deriveWorkerName(
+  repoName: string | null | undefined,
+  siteUrl: string,
+): string {
+  return (
+    toWorkerName(repoName ?? "") || toWorkerName(suggestSyncRepoName(siteUrl))
+  );
+}
+
+/**
+ * Build the Cloudflare Workers deploy config for the exported site.
+ *
+ * Workers Builds has no "build output directory" field — that one belongs to
+ * Pages — so `public/` can only be declared here. Without this file the
+ * dashboard's default deploy command (`npx wrangler deploy`) fails on a repo
+ * that has no Worker name to deploy under.
+ *
+ * `build.command` is here because nothing else runs Hugo. Workers Builds
+ * detects frameworks from a `package.json`, which a Hugo site does not have,
+ * so importing this repository leaves the build command empty and the deploy
+ * fails on a `public/` that was never generated. Wrangler runs a custom build
+ * before deploying, assets-only Workers included, which makes
+ * `npx wrangler deploy` self-sufficient — on Cloudflare's image, on any CI,
+ * and in a local checkout. Cloudflare's image ships Hugo extended, so the
+ * command needs no install step; anyone who does fill in a dashboard build
+ * command should leave it empty here to keep Hugo from running twice.
+ *
+ * Deliberately absent:
+ * - `main`: a site with only static assets is a valid assets-only Worker.
+ * - `not_found_handling`: the theme emits no `404.html` to point it at.
+ *
+ * @param config - The exported site's configuration.
+ * @param repoName - The destination repository's name, when there is one.
+ * @returns The contents of `wrangler.jsonc`.
+ * @example
+ * buildWranglerConfig(config, "my-blog"); // '{\n  // Cloudflare Workers …'
+ */
+function buildWranglerConfig(
+  config: SiteConfig,
+  repoName: string | null | undefined,
+): string {
+  const name = deriveWorkerName(repoName, config.siteUrl);
+  // `compatibility_date` pins the Workers runtime behavior to what shipped on
+  // the day this export was generated, which is what a new Worker wants.
+  const compatibilityDate = new Date().toISOString().slice(0, 10);
+  return `{
+  // Cloudflare Workers deploy config for the built site.
+  //
+  // "name" must match the Worker's name in the Cloudflare dashboard: Workers
+  // Builds fails the build when they differ, and a deploy run by hand under
+  // another name goes to another Worker. A Worker imported from a repository
+  // is named after the repository, so Jant uses the repository name when it
+  // knows it, and otherwise the name GitHub Sync suggests for this site's
+  // repository.
+  //
+  // Jant writes this file once and never overwrites it, so your edits stay.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": ${JSON.stringify(name)},
+  "compatibility_date": ${JSON.stringify(compatibilityDate)},
+  // Wrangler runs this before it uploads, so "npx wrangler deploy" builds the
+  // site first. Leave the build command in the Cloudflare dashboard empty, or
+  // Hugo runs twice.
+  "build": {
+    "command": "hugo --gc --minify"
+  },
+  "assets": {
+    "directory": "./public"
+  }
+}
+`;
+}
 
 /**
  * Build the `static/_redirects` file that keeps existing feed subscribers
@@ -1822,6 +2383,29 @@ Thumbs.db
  * @example
  * renderMarkdownTable(["Jant", "This export"], [["/feed", "/index.xml"]]);
  */
+/**
+ * Convert a stored post body to the export's Markdown, naming the post when
+ * it can't be converted. An export that dropped the body would read as a
+ * complete archive and restore as an empty post.
+ *
+ * @param body - Stored TipTap JSON
+ * @param slug - The post's slug, for the error
+ * @returns The body as Markdown
+ * @throws {Error} When the stored body isn't a TipTap document
+ * @example
+ * postBodyToMarkdown('{"type":"doc","content":[]}', "hello"); // ""
+ */
+function postBodyToMarkdown(body: string, slug: string): string {
+  try {
+    return tiptapJsonToMarkdown(body);
+  } catch (error) {
+    throw new Error(
+      `Couldn't convert the body of /${slug} to Markdown: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+}
+
 function renderMarkdownTable(
   headers: [string, string],
   rows: [string, string][],
@@ -1869,6 +2453,10 @@ function buildReadme(config: SiteConfig, hasFeaturedSection: boolean): string {
   const feedNote = config.rssFeedsEnabled
     ? "\n- Feed addresses are the exception: they move to `index.xml` and stay reachable only through `static/_redirects`. See [Feeds](#feeds)."
     : "";
+  // Same reason: without feeds there is no `static/_redirects` to explain.
+  const redirectsNote = config.rssFeedsEnabled
+    ? "`static/_redirects` needs no configuration here. Hugo copies it to `public/_redirects` and Workers applies the rules as published.\n\n"
+    : "";
   // Nothing to say about feeds on a site that publishes none, and no
   // `_redirects` file was written for it either.
   const feedRows: [string, string][] = [
@@ -1890,6 +2478,8 @@ A reader who is already subscribed holds one of the old addresses, and a feed re
 
 Hugo's \`aliases:\` cannot cover this. An alias page redirects with a meta refresh and a script, and feed readers fetch XML without running either — only an HTTP redirect reaches them.
 
+Feed entries keep the IDs Jant gave them, so feed readers don't show old posts again. Each root post stores its ID in \`feed_id\`: the post's address on Jant, which is not its page URL here. Don't change \`feed_id\`, or feed readers show that post again. A post you add here without one uses its page URL.
+
 The **Subscribe** entry in the site navigation points at \`${mainFeed}\`. The exported site has no \`/subscribe\` page; that page belongs to the Jant runtime.
 
 `
@@ -1900,7 +2490,7 @@ This is a static site exported from [Jant](https://github.com/jant-me/jant), rea
 
 ## Install Hugo
 
-This export targets Hugo **extended 0.160.1+**.
+This export targets Hugo **extended 0.147.7+**.
 
 **macOS (Homebrew):**
 
@@ -1938,10 +2528,27 @@ hugo --minify
 
 The output goes to the \`public/\` directory. Upload it to any static host (Netlify, Vercel, Cloudflare Pages, GitHub Pages, etc.).
 
-${feedsSection}## Project structure
+## Deploy to Cloudflare Workers
+
+\`wrangler.jsonc\` at the root is the deploy config: it names the Worker, runs \`hugo --gc --minify\`, and points the upload at \`public/\`. Connect this repository to Cloudflare Workers Builds and leave the commands Cloudflare offers as they are:
+
+| Field           | Value                          |
+| --------------- | ------------------------------ |
+| Build command   | leave empty                    |
+| Deploy command  | \`npx wrangler deploy\`          |
+| Version command | \`npx wrangler versions upload\` |
+
+The build belongs to \`wrangler.jsonc\` rather than to that field: Workers Builds reads a \`package.json\` to detect a framework, a Hugo site has none, and an empty build command deploys a \`public/\` that was never built. Filling the field in as well makes Hugo run twice.
+
+Check one thing before the first deploy: \`name\` in \`wrangler.jsonc\` has to match the Worker's name in the Cloudflare dashboard. Workers Builds fails the build when they differ, and a deploy run by hand under another name goes to another Worker. A Worker imported from a repository is named after the repository, so an export pushed by GitHub Sync uses the repository name. A downloaded export has no repository and uses the name GitHub Sync suggests when it creates one for this site. If the Worker is named something else, change \`name\` to match — Cloudflare names each build token \`<worker-name> build token\`, so the token list is one place to read it.
+
+Jant writes \`wrangler.jsonc\` once and never overwrites it, so a corrected name survives later syncs.
+
+${redirectsNote}${feedsSection}## Project structure
 
 \`\`\`
 hugo.toml                 — Site configuration (baseURL, title, theme, params)
+wrangler.jsonc            — Cloudflare Workers deploy config (see Deploy above)
 content/
   _index.md               — Home section
   archive/_index.md       — Archive section
@@ -1963,7 +2570,7 @@ static/                   — Copy files here to add them to the published site$
 - **Jant metadata** — \`data/jant.toml\` drives nav and the collections directory, and is preserved across round-trip import.
 - **Styles** — edit \`themes/jant/static/main.css\`, or drop a \`static/main.css\` at the site root to override.
 - **Templates** — add files under \`layouts/\` at the site root to override the bundled theme.
-- **Debugging** — from a Jant site project, run \`npx jant site export --directory ./my-site\`, then \`cd my-site && hugo serve\`.
+- **Debugging** — from a Jant site project, run \`npx jant site export --url <site-url> --output ./my-site\`, then \`cd my-site && hugo serve\`.
 
 ## Fetching media locally
 

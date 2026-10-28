@@ -1,8 +1,8 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { requireInternalAdminApi } from "../../../middleware/auth.js";
-import { ConflictError } from "../../../lib/errors.js";
-import { parseValidated } from "../../../lib/schemas.js";
+import { ConflictError, NotFoundError } from "../../../lib/errors.js";
+import { parseValidated, readJsonBody } from "../../../lib/schemas.js";
 import { rebuildPostBodyHtmlWithRuntimeSettings } from "../../../services/post.js";
 import {
   getConfiguredStorageDriver,
@@ -11,6 +11,7 @@ import {
 import type { Bindings } from "../../../types.js";
 import type { AppVariables } from "../../../types/app-context.js";
 import { RebuildPostBodyHtmlSchema } from "./post-body-html.js";
+import { requireStorage } from "../../../lib/storage.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
@@ -96,7 +97,7 @@ function assertHostBasedMode(env: Bindings) {
 internalSitesRoutes.post("/", requireInternalAdminApi(), async (c) => {
   assertHostBasedMode(c.env);
 
-  const body = parseValidated(CreateManagedSiteSchema, await c.req.json());
+  const body = parseValidated(CreateManagedSiteSchema, await readJsonBody(c));
   const result = await c.var.services.siteAdmin.createManagedSite(body);
 
   return c.json(
@@ -132,7 +133,7 @@ internalSitesRoutes.post(
   async (c) => {
     assertHostBasedMode(c.env);
 
-    const body = parseValidated(SitePostCountsSchema, await c.req.json());
+    const body = parseValidated(SitePostCountsSchema, await readJsonBody(c));
     const counts = await c.var.services.siteAdmin.getManagedSitePostCounts(
       body.siteIds,
     );
@@ -176,13 +177,7 @@ internalSitesRoutes.post(
   async (c) => {
     assertHostBasedMode(c.env);
 
-    const storage = c.var.storage;
-    if (!storage) {
-      return c.json(
-        { error: "File storage isn't set up. Check your server config." },
-        500,
-      );
-    }
+    const storage = requireStorage(c.var.storage);
 
     const contentType = c.req.header("Content-Type") || "";
     const rawBody = contentType.includes("application/json")
@@ -190,7 +185,7 @@ internalSitesRoutes.post(
       : {};
     const body = parseValidated(CleanupSiteUploadsSchema, rawBody);
 
-    const services = c.var.servicesForSite(c.req.param("siteId"));
+    const services = await servicesForNamedSite(c);
     const result = await services.uploads.cleanupExpired({
       storage,
       storageDriver: getConfiguredStorageDriver(c.env),
@@ -200,6 +195,18 @@ internalSitesRoutes.post(
     return c.json(result);
   },
 );
+
+/**
+ * The services for the site the `:siteId` parameter names, by TypeID or key,
+ * as the database commands' `--site` takes it. A site that doesn't exist
+ * answers 404 rather than running the operation against an empty one.
+ */
+async function servicesForNamedSite(c: Context<Env>) {
+  const idOrKey = c.req.param("siteId");
+  const site = idOrKey ? await c.var.services.site.getByIdOrKey(idOrKey) : null;
+  if (!site) throw new NotFoundError("Site");
+  return c.var.servicesForSite(site.id);
+}
 
 // Rebuild one managed site's materialized body HTML projection. Hosted fleet
 // orchestration stays in the control plane; core never silently widens a
@@ -215,7 +222,7 @@ internalSitesRoutes.post(
       ? await c.req.json().catch(() => ({}))
       : {};
     const body = parseValidated(RebuildPostBodyHtmlSchema, rawBody);
-    const services = c.var.servicesForSite(c.req.param("siteId"));
+    const services = await servicesForNamedSite(c);
 
     return c.json(
       await rebuildPostBodyHtmlWithRuntimeSettings(services, c.env, body),
@@ -240,7 +247,6 @@ internalSitesRoutes.get(
     return new Response(archive.zip, {
       headers: {
         "Content-Disposition": `attachment; filename="${archive.filename}"`,
-        "Content-Length": String(archive.zip.byteLength),
         "Content-Type": "application/zip",
       },
     });
@@ -284,7 +290,7 @@ internalSitesRoutes.post(
   requireInternalAdminApi(),
   async (c) => {
     assertHostBasedMode(c.env);
-    const body = parseValidated(RenameManagedSiteSchema, await c.req.json());
+    const body = parseValidated(RenameManagedSiteSchema, await readJsonBody(c));
     const result = await c.var.services.siteAdmin.renameManagedSite(
       c.req.param("siteId"),
       body,
@@ -323,7 +329,7 @@ internalSitesRoutes.post(
   requireInternalAdminApi(),
   async (c) => {
     assertHostBasedMode(c.env);
-    const body = parseValidated(ManagedSiteDomainSchema, await c.req.json());
+    const body = parseValidated(ManagedSiteDomainSchema, await readJsonBody(c));
     const domains = await c.var.services.siteAdmin.addManagedSiteDomain(
       c.req.param("siteId"),
       body,
@@ -375,7 +381,7 @@ internalSitesRoutes.post(
     assertHostBasedMode(c.env);
     const body = parseValidated(
       ManagedSiteDomainRedirectSchema,
-      await c.req.json(),
+      await readJsonBody(c),
     );
     const domains = await c.var.services.siteAdmin.setManagedSiteDomainRedirect(
       c.req.param("siteId"),

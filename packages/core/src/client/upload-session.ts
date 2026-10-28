@@ -52,7 +52,8 @@ export interface UploadSessionMetadata {
 
 export interface UploadSessionResult {
   id: string;
-  filename: string;
+  /** The file's name as it was uploaded. */
+  originalName: string;
   url: string;
   mimeType: string;
   size: number;
@@ -212,15 +213,15 @@ async function completeUpload(
 
   const data = await readJsonObject(completeRes);
   const id = getJsonString(data, "id");
-  const filename = getJsonString(data, "filename");
+  const originalName = getJsonString(data, "originalName") ?? "";
   const url = getJsonString(data, "url");
   const mimeType = getJsonString(data, "mimeType");
   const size = getJsonNumber(data, "size");
-  if (!id || !filename || !url || !mimeType || size === undefined) {
+  if (!id || !url || !mimeType || size === undefined) {
     throw new Error("Failed to complete upload");
   }
 
-  return { id, filename, url, mimeType, size };
+  return { id, originalName, url, mimeType, size };
 }
 
 async function uploadMultipartRelay(
@@ -240,7 +241,7 @@ async function uploadMultipartRelay(
     const chunk = file.slice(start, end);
     const partBytes = end - start;
     const response = await xhrPut(
-      publicPath(`${transport.url}?partNumber=${partNumber}`),
+      `${transport.url}?partNumber=${partNumber}`,
       chunk,
       {},
       (partProgress) => {
@@ -292,7 +293,7 @@ export async function uploadViaSession(
       onProgress?.(1);
     } else if (transport.kind === "relay") {
       const response = await xhrPut(
-        publicPath(transport.url),
+        transport.url,
         file,
         { "Content-Type": file.type },
         onProgress,

@@ -1,17 +1,34 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-import Database from "better-sqlite3";
-import { afterEach, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import {
+  access,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { migrate as drizzleMigrate } from "drizzle-orm/better-sqlite3/migrator";
+import { afterEach, describe, expect, it } from "vitest";
+import { createApp } from "../../app.js";
+import { PendingMigrationsError } from "../../db/migration-status.js";
+import {
+  createNodeBindings,
   createNodeRequestHandler,
   migrate,
   resolveNodeAssetRoot,
   resolveNodeDataDir,
   resolveDatabasePath,
   resolvePublicRequestUrl,
+  start,
 } from "../runtime.js";
+import type { App, HonoApp } from "../../types/app-context.js";
 import type { Bindings } from "../../types.js";
 
 const tempDirs: string[] = [];
@@ -204,6 +221,43 @@ describe("resolveNodeAssetRoot", () => {
     ).rejects.toThrow("single-site mode found multiple sites in the database:");
   });
 
+  // A deploy check tells a container that just started from one a rollback
+  // left running by this stamp, so it has to be the handler's start and not a
+  // time taken per request.
+  it("stamps the bindings with when the handler started serving", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jant-node-started-at-"));
+    tempDirs.push(root);
+    const databasePath = join(root, "data", "jant.sqlite");
+    await migrate({ DATABASE_URL: `file:${databasePath}` } as Bindings);
+
+    const before = Math.floor(Date.now() / 1000);
+    const handler = await createNodeRequestHandler({
+      assetRoot: null,
+      env: { DATABASE_URL: `file:${databasePath}` } as Bindings,
+      app: {
+        fetch: (_request: Request, env: Bindings) =>
+          Response.json({ startedAt: env.NODE_STARTED_AT }),
+      } as unknown as App,
+    });
+    const after = Math.floor(Date.now() / 1000);
+
+    try {
+      const read = async () =>
+        (
+          (await (
+            await handler.fetch(new Request("http://127.0.0.1:3000/readyz"))
+          ).json()) as { startedAt: number }
+        ).startedAt;
+      const first = await read();
+
+      expect(first).toBeGreaterThanOrEqual(before);
+      expect(first).toBeLessThanOrEqual(after);
+      expect(await read()).toBe(first);
+    } finally {
+      await handler.close();
+    }
+  });
+
   // The single-site readiness check blames SITE_RESOLUTION_MODE for extra
   // sites, which on a hosted database are just its tenants.
   it("starts in host-based mode when the database holds several sites", async () => {
@@ -379,5 +433,158 @@ describe("migrate", () => {
     } as Bindings);
 
     await access(databasePath);
+  });
+});
+
+async function freePort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  if (!address || typeof address === "string") {
+    throw new Error("Expected a TCP address");
+  }
+  return address.port;
+}
+
+describe("start", () => {
+  // A backup copies `jant.sqlite`. Writes made in WAL mode sit in
+  // `jant.sqlite-wal` until the last connection closes, so stopping the
+  // server has to close the database, not just stop listening.
+  it("writes the WAL back into the database file when it closes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jant-node-close-"));
+    tempDirs.push(root);
+    const databasePath = join(root, "jant.sqlite");
+    const env = {
+      DATABASE_URL: `file:${databasePath}`,
+      HOST: "127.0.0.1",
+      PORT: String(await freePort()),
+    } as Bindings;
+    await migrate(env);
+
+    const handle = await start(
+      env,
+      { fetch: () => new Response("ok") } as unknown as HonoApp,
+      { assetRoot: null },
+    );
+
+    const writer = new Database(databasePath);
+    writer.exec("CREATE TABLE close_check (value TEXT)");
+    writer.prepare("INSERT INTO close_check (value) VALUES (?)").run("kept");
+    writer.close();
+    expect(existsSync(`${databasePath}-wal`)).toBe(true);
+
+    await handle.close();
+
+    expect(existsSync(`${databasePath}-wal`)).toBe(false);
+    const reader = new Database(databasePath, { readonly: true });
+    try {
+      expect(
+        reader.prepare("SELECT value FROM close_check").pluck().get(),
+      ).toBe("kept");
+    } finally {
+      reader.close();
+    }
+  });
+});
+
+const SQLITE_MIGRATIONS_DIR = fileURLToPath(
+  new URL("../../db/migrations", import.meta.url),
+);
+
+/**
+ * Migrate a new SQLite database through every bundled migration but the
+ * newest: what a container finds when an upgrade replaced the image and
+ * skipped `jant migrate`.
+ *
+ * @returns The tag of the migration left out
+ */
+async function migrateAllButNewest(databasePath: string): Promise<string> {
+  const folder = await mkdtemp(join(tmpdir(), "jant-node-migrations-"));
+  tempDirs.push(folder);
+  await cp(SQLITE_MIGRATIONS_DIR, folder, { recursive: true });
+  const journalPath = join(folder, "meta/_journal.json");
+  const journal = JSON.parse(await readFile(journalPath, "utf8")) as {
+    entries: { tag: string }[];
+  };
+  const newest = journal.entries.pop();
+  if (!newest) {
+    throw new Error("The bundled journal has no migrations.");
+  }
+  await writeFile(journalPath, JSON.stringify(journal));
+
+  await mkdir(dirname(databasePath), { recursive: true });
+  const sqlite = new Database(databasePath);
+  try {
+    drizzleMigrate(drizzle(sqlite), { migrationsFolder: folder });
+  } finally {
+    sqlite.close();
+  }
+  return newest.tag;
+}
+
+// Every page of a database a migration behind answers 500 on the column the
+// migration adds, while `/healthz` stays green. The runtime refuses it instead.
+describe("a database behind the bundled migrations", () => {
+  it("refuses to start until jant migrate applies them", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jant-node-behind-"));
+    tempDirs.push(root);
+    const databasePath = join(root, "data", "jant.sqlite");
+    const newest = await migrateAllButNewest(databasePath);
+    const env = {
+      DATABASE_URL: `file:${databasePath}`,
+      HOST: "127.0.0.1",
+      PORT: String(await freePort()),
+    } as Bindings;
+    const app = { fetch: () => new Response("ok") } as unknown as HonoApp;
+
+    const refusal = await start(env, app, { assetRoot: null }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(refusal).toBeInstanceOf(PendingMigrationsError);
+    expect((refusal as PendingMigrationsError).pending).toEqual([newest]);
+    expect((refusal as PendingMigrationsError).message).toContain(
+      `(${newest}). Run \`jant migrate\``,
+    );
+
+    await migrate(env);
+    const handle = await start(env, app, { assetRoot: null });
+    await handle.close();
+  });
+
+  it("reports the database as not ready on /readyz", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jant-node-behind-readyz-"));
+    tempDirs.push(root);
+    const databasePath = join(root, "data", "jant.sqlite");
+    const newest = await migrateAllButNewest(databasePath);
+    const { bindings, close } = await createNodeBindings({
+      AUTH_SECRET: "test-secret-with-enough-entropy-for-readiness",
+      DATABASE_URL: `file:${databasePath}`,
+    } as Bindings);
+
+    try {
+      const response = await createApp().fetch(
+        new Request("http://127.0.0.1:3000/readyz"),
+        bindings,
+      );
+      const body = (await response.json()) as {
+        status: string;
+        checks: {
+          startupConfig: { ok: boolean };
+          database: { ok: boolean; error?: string };
+        };
+      };
+
+      expect(response.status).toBe(503);
+      expect(body.status).toBe("error");
+      expect(body.checks.startupConfig.ok).toBe(true);
+      expect(body.checks.database.ok).toBe(false);
+      expect(body.checks.database.error).toContain(newest);
+      expect(body.checks.database.error).toContain("jant migrate");
+    } finally {
+      await close();
+    }
   });
 });

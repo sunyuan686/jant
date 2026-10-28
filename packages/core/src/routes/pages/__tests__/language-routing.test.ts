@@ -21,7 +21,7 @@ import { latestRoutes } from "../latest.js";
 import { pageRoutes } from "../page.js";
 import { searchRoutes } from "../search.js";
 import { feedRoutes } from "../../feed/feed.js";
-import { publicPostsApiRoutes } from "../../api/public/posts.js";
+import { publicThreadsApiRoutes } from "../../api/public/threads.js";
 
 /**
  * Mount the public route groups in the same order `createApp()` does — the
@@ -40,7 +40,7 @@ function createLanguageTestApp() {
   app.use("*", i18nMiddleware());
 
   // API routes come first in `createApp()` too, ahead of the catch-all.
-  app.route("/api/public/posts", publicPostsApiRoutes);
+  app.route("/api/public/threads", publicThreadsApiRoutes);
   app.route("/feed", feedRoutes);
   app.route("/search", searchRoutes);
   app.route("/archive", archiveRoutes);
@@ -400,6 +400,37 @@ describe("language views filter content", () => {
     );
   });
 
+  it("links each version by its custom path when it has one", async () => {
+    const { app, services, zh, en } = await seedTwoLanguages();
+    await services.posts.linkTranslation(zh.id, en.id);
+    await services.paths.create({
+      path: "notes/kafei",
+      kind: "alias",
+      postId: zh.id,
+    });
+    await services.paths.create({
+      path: "notes/coffee",
+      kind: "alias",
+      postId: en.id,
+    });
+
+    const html = await (await app.request("/notes/kafei")).text();
+
+    // A custom path already starts with "/". One more makes "//notes/coffee",
+    // a protocol-relative URL that `new URL()` resolves to the host "notes".
+    expect(html).not.toContain("//notes/");
+    expect(html).toContain('href="/notes/coffee" hreflang="en"');
+    expect(html).toContain(
+      '<link rel="alternate" hreflang="zh-Hans" href="http://localhost:3000/notes/kafei"/>',
+    );
+    expect(html).toContain(
+      '<link rel="alternate" hreflang="en" href="http://localhost:3000/notes/coffee"/>',
+    );
+    const start = html.indexOf("data-post-translations");
+    const line = html.slice(start, html.indexOf("</p>", start));
+    expect(line).toContain('href="/notes/coffee"');
+  });
+
   it("offers the translation to a reader who cannot read this one", async () => {
     const { app, services, zh, en } = await seedTwoLanguages();
     await services.posts.linkTranslation(zh.id, en.id);
@@ -594,21 +625,21 @@ describe("the public JSON API", () => {
       status: "published",
     });
 
-    const res = await testApp.app.request("/api/public/posts?lang=en");
+    const res = await testApp.app.request("/api/public/threads?lang=en");
     const body = (await res.json()) as {
-      posts: { title: string; language: string }[];
+      threads: { root: { title: string; language: string } }[];
     };
 
-    expect(body.posts).toHaveLength(1);
-    expect(body.posts[0]?.title).toBe("English post");
-    expect(body.posts[0]?.language).toBe("en");
+    expect(body.threads).toHaveLength(1);
+    expect(body.threads[0]?.root.title).toBe("English post");
+    expect(body.threads[0]?.root.language).toBe("en");
   });
 
   it("rejects a malformed language tag rather than ignoring it", async () => {
     const testApp = createLanguageTestApp();
 
     const res = await testApp.app.request(
-      "/api/public/posts?lang=not%20a%20tag",
+      "/api/public/threads?lang=not%20a%20tag",
     );
     expect(res.status).toBe(400);
   });

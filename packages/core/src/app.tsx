@@ -8,7 +8,7 @@ import type { Bindings } from "./types.js";
 
 // Routes - Auth
 import { setupRoutes } from "./routes/auth/setup.js";
-import { signinRoutes } from "./routes/auth/signin.js";
+import { limitApiSignin, signinRoutes } from "./routes/auth/signin.js";
 import { resetRoutes } from "./routes/auth/reset.js";
 import { devAuthRoutes } from "./routes/auth/dev.js";
 import { hostedSsoRoutes } from "./routes/auth/hosted-sso.js";
@@ -36,14 +36,15 @@ import { customUrlsRoutes } from "./routes/dash/custom-urls.js";
 
 // Routes - API
 import { postsApiRoutes } from "./routes/api/posts.js";
+import { threadsApiRoutes } from "./routes/api/threads.js";
 import { attachmentsApiRoutes } from "./routes/api/attachments.js";
 import { navItemsApiRoutes } from "./routes/api/nav-items.js";
 import { collectionsApiRoutes } from "./routes/api/collections.js";
 import { smartCollectionsApiRoutes } from "./routes/api/smart-collections.js";
 import { settingsApiRoutes } from "./routes/api/settings.js";
 import { uploadApiRoutes } from "./routes/api/upload.js";
+import { mediaApiRoutes } from "./routes/api/media.js";
 import { uploadsApiRoutes } from "./routes/api/uploads.js";
-import { multipartUploadApiRoutes } from "./routes/api/upload-multipart.js";
 import { searchApiRoutes } from "./routes/api/search.js";
 import { mcpApiRoutes } from "./routes/api/mcp.js";
 import { customUrlsApiRoutes } from "./routes/api/custom-urls.js";
@@ -56,12 +57,11 @@ import {
   githubSyncAdminRoutes,
 } from "./routes/api/github-sync.js";
 import { telegramWebhookRoutes } from "./routes/api/telegram.js";
-import { internalTextAttachmentsRoutes } from "./routes/api/internal/text-attachments.js";
 import { internalSearchReindexRoutes } from "./routes/api/internal/search-reindex.js";
 import { internalPostBodyHtmlRoutes } from "./routes/api/internal/post-body-html.js";
 import { internalUploadsRoutes } from "./routes/api/internal/uploads.js";
-import { publicArchiveApiRoutes } from "./routes/api/public/archive.js";
 import { publicPostsApiRoutes } from "./routes/api/public/posts.js";
+import { publicThreadsApiRoutes } from "./routes/api/public/threads.js";
 import { discoverApiRoutes } from "./routes/api/discover.js";
 // Routes - Compose
 import { composeRoutes } from "./routes/compose.js";
@@ -76,12 +76,12 @@ import { siteSkillRoutes } from "./routes/site-skill.js";
 import { requireAuth } from "./middleware/auth.js";
 import { attachSession } from "./middleware/session.js";
 import { defaultCacheControl, noStore } from "./middleware/cache-control.js";
-import { requireRssFeedsEnabled } from "./middleware/public-content-access.js";
 import { requireOnboarding } from "./middleware/onboarding.js";
-import { errorHandler } from "./middleware/error-handler.js";
-import { withConfig } from "./middleware/config.js";
+import { errorHandler, notFoundHandler } from "./middleware/error-handler.js";
+import { prefetchSettings, withConfig } from "./middleware/config.js";
 import { secureHeadersMiddleware } from "./middleware/secure-headers.js";
 import { apiCors } from "./middleware/cors.js";
+import { rejectCrossOriginWrites } from "./middleware/cross-origin.js";
 
 import { getConfiguredSingleSitePathPrefix } from "./lib/env.js";
 import { getRuntimeSitePathPrefix } from "./lib/site-resolution.js";
@@ -93,21 +93,25 @@ import {
 } from "./lib/jant-branding.js";
 import { isAssetPath } from "./lib/asset-path.js";
 import { getHostedCanonicalRedirect } from "./lib/hosted-domain.js";
-import { stripSitePathPrefix, toPublicHref } from "./lib/url.js";
 import {
-  matchesIfNoneMatch,
-  withConditionalResponse,
-} from "./lib/http-cache.js";
+  isSafeInternalRedirect,
+  normalizePath,
+  redirectTargetHref,
+  stripSitePathPrefix,
+  toPublicHref,
+  withRequestQuery,
+} from "./lib/url.js";
+import { withConditionalResponse } from "./lib/http-cache.js";
 import { withWorkerResponseCache } from "./lib/worker-response-cache.js";
 import { createRequestRuntime } from "./runtime/index.js";
 import { getInstanceReadiness } from "./runtime/readiness.js";
-import { type AppVariables, type App } from "./types/app-context.js";
-import { isPublicStorageKeyAllowed } from "./lib/public-storage.js";
-import { isTextAttachment } from "./services/media.js";
-import { markdownToTiptapJson } from "./lib/markdown-to-tiptap.js";
-import { renderTiptapJson } from "./lib/tiptap-render.js";
+import { type AppVariables, type HonoApp } from "./types/app-context.js";
+import {
+  getStoredFileContentSecurityPolicy,
+  isPublicStorageKeyAllowed,
+} from "./lib/public-storage.js";
 
-export type { AppVariables, App };
+export type { AppVariables, HonoApp };
 
 const publicRequestMeta = new WeakMap<
   Request,
@@ -144,6 +148,39 @@ function prepareRequestForRouting(
   return rewrittenRequest;
 }
 
+/**
+ * Headers every stored file is served with, whole or in part.
+ *
+ * A stored file answers on the site's own origin, so one that a browser would
+ * run as a page, an HTML or SVG file, must not get the site's session or
+ * scripts. The sandbox policy gives it a unique origin and no scripts, and
+ * `nosniff` stops the browser guessing a more dangerous type than the one
+ * stored. Both leave `<img>`, `<video>`, and `<audio>` on a post untouched:
+ * they apply only when the file itself is opened.
+ */
+function storedFileHeaders(object: {
+  contentType?: string;
+  cacheControl?: string;
+  contentDisposition?: string;
+}): Headers {
+  const contentType = object.contentType || "application/octet-stream";
+  const headers = new Headers();
+  headers.set("Content-Type", contentType);
+  headers.set(
+    "Cache-Control",
+    object.cacheControl || "public, max-age=31536000, immutable",
+  );
+  if (object.contentDisposition) {
+    headers.set("Content-Disposition", object.contentDisposition);
+  }
+  headers.set("X-Content-Type-Options", "nosniff");
+  const policy = getStoredFileContentSecurityPolicy(contentType);
+  if (policy) {
+    headers.set("Content-Security-Policy", policy);
+  }
+  return headers;
+}
+
 async function servePublicStorage(
   c: Context<{ Bindings: Bindings; Variables: AppVariables }>,
 ): Promise<Response> {
@@ -167,22 +204,7 @@ async function servePublicStorage(
     if (!totalSize) {
       const full = await storage.get(storageKey);
       if (!full) return c.notFound();
-      const headers = new Headers();
-      headers.set(
-        "Content-Type",
-        full.contentType || "application/octet-stream",
-      );
-      headers.set(
-        "Cache-Control",
-        full.cacheControl || "public, max-age=31536000, immutable",
-      );
-      if (full.contentDisposition) {
-        headers.set("Content-Disposition", full.contentDisposition);
-      }
-      if (full.contentDisposition === "attachment") {
-        headers.set("X-Content-Type-Options", "nosniff");
-      }
-      return new Response(full.body, { headers });
+      return new Response(full.body, { headers: storedFileHeaders(full) });
     }
 
     const match = /^bytes=(\d+)-(\d*)$/.exec(rangeHeader);
@@ -210,21 +232,7 @@ async function servePublicStorage(
     });
     if (!rangeObj) return c.notFound();
 
-    const headers = new Headers();
-    headers.set(
-      "Content-Type",
-      rangeObj.contentType || "application/octet-stream",
-    );
-    headers.set(
-      "Cache-Control",
-      rangeObj.cacheControl || "public, max-age=31536000, immutable",
-    );
-    if (rangeObj.contentDisposition) {
-      headers.set("Content-Disposition", rangeObj.contentDisposition);
-    }
-    if (rangeObj.contentDisposition === "attachment") {
-      headers.set("X-Content-Type-Options", "nosniff");
-    }
+    const headers = storedFileHeaders(rangeObj);
     headers.set("Accept-Ranges", "bytes");
     headers.set("Content-Range", `bytes ${start}-${end}/${totalSize}`);
     headers.set("Content-Length", String(end - start + 1));
@@ -237,18 +245,7 @@ async function servePublicStorage(
     return c.notFound();
   }
 
-  const headers = new Headers();
-  headers.set("Content-Type", object.contentType || "application/octet-stream");
-  headers.set(
-    "Cache-Control",
-    object.cacheControl || "public, max-age=31536000, immutable",
-  );
-  if (object.contentDisposition) {
-    headers.set("Content-Disposition", object.contentDisposition);
-  }
-  if (object.contentDisposition === "attachment") {
-    headers.set("X-Content-Type-Options", "nosniff");
-  }
+  const headers = storedFileHeaders(object);
   headers.set("Accept-Ranges", "bytes");
   if (object.size) {
     headers.set("Content-Length", String(object.size));
@@ -260,6 +257,10 @@ async function servePublicStorage(
 /**
  * Create a Jant application
  *
+ * The package's public `createApp` in `index.ts` wraps this and narrows the
+ * result to `fetch`; code inside the package that needs the Hono instance
+ * imports this one.
+ *
  * @returns Hono app instance
  *
  * @example
@@ -269,7 +270,7 @@ async function servePublicStorage(
  * export default createApp();
  * ```
  */
-export function createApp(): App {
+export function createApp(): HonoApp {
   const app = new Hono<{ Bindings: Bindings; Variables: AppVariables }>();
   const defaultFetch = app.fetch.bind(app);
 
@@ -301,6 +302,7 @@ export function createApp(): App {
 
   // Global error handler: maps DomainError → HTTP responses
   app.onError(errorHandler);
+  app.notFound(notFoundHandler);
 
   // Instance health checks must bypass hosted site resolution so container
   // health probes keep working in host-based mode before any site matches.
@@ -339,6 +341,10 @@ export function createApp(): App {
 
     await next();
   });
+
+  // Before any route that writes: a signed-in browser's cookie must not be
+  // usable from another site's page (see middleware/cross-origin.ts).
+  app.use("*", rejectCrossOriginWrites());
 
   // Populate c.var.session / c.var.isAuthenticated once per request so
   // downstream handlers don't each call auth.api.getSession themselves.
@@ -399,61 +405,11 @@ export function createApp(): App {
   app.route("/api/attachments", attachmentsApiRoutes);
   app.route("/api/internal/api-tokens", internalApiTokensRoutes);
   app.route("/api/internal/sites", internalSitesRoutes);
-  app.route("/api/internal/text-attachments", internalTextAttachmentsRoutes);
   app.route("/api/internal/search/reindex", internalSearchReindexRoutes);
   app.route("/api/internal/posts/body-html", internalPostBodyHtmlRoutes);
   app.route("/api/internal/uploads", internalUploadsRoutes);
   app.route("/api/github-sync", githubSyncWebhookRoutes);
   app.route("/api/telegram", telegramWebhookRoutes);
-
-  // Fetch text media content by ID (same-origin proxy to avoid CORS with CDN URLs)
-  app.get("/api/media/:id/content", async (c) => {
-    const media = await c.var.services.media.getById(c.req.param("id"));
-    if (!media) return c.notFound();
-
-    const storage = c.var.storage;
-    if (!storage) return c.notFound();
-
-    // The outer conditional layer would answer this too, but only after the
-    // object has been fetched and rendered; matching here skips that work.
-    const etag = `"${media.updatedAt}"`;
-    if (matchesIfNoneMatch(c.req.header("If-None-Match"), etag)) {
-      return new Response(null, { status: 304, headers: { ETag: etag } });
-    }
-
-    // Text attachments are stored as plain markdown. The preview dialog
-    // wants both the raw source (for Copy) and a rendered HTML view, so
-    // read the single `.md` object and render HTML on the fly. Rendering
-    // cost is negligible at typical attachment sizes, and response-level
-    // cache hints let edge caches keep the rendered form for repeat hits.
-    if (isTextAttachment(media)) {
-      const object = await storage.get(media.storageKey);
-      if (!object) return c.notFound();
-
-      const markdown = await new Response(object.body).text();
-      const html = renderTiptapJson(markdownToTiptapJson(markdown), {
-        namespace: media.id,
-      });
-
-      return c.json({ html, markdown }, 200, {
-        "Cache-Control": "public, no-cache",
-        ETag: etag,
-      });
-    }
-
-    const object = await storage.get(media.storageKey);
-    if (!object) return c.notFound();
-
-    const headers = new Headers();
-    headers.set(
-      "Content-Type",
-      object.contentType || "application/octet-stream",
-    );
-    headers.set("Cache-Control", "public, no-cache");
-    headers.set("ETag", etag);
-
-    return new Response(object.body, { headers });
-  });
 
   // Public storage proxy for the current `media/{siteId}/...` layout.
   // `/sites/*` remains readable for older stored keys during migration.
@@ -461,7 +417,10 @@ export function createApp(): App {
   app.get("/media/*", servePublicStorage);
   app.get("/sites/*", servePublicStorage);
 
-  // better-auth handler
+  // better-auth handler. Its password sign-in counts against the same limits
+  // as `/signin`; the limiter reads the site's config, which the routes up
+  // here otherwise go without.
+  app.post("/api/auth/sign-in/email", withConfig(), limitApiSignin);
   app.all("/api/auth/*", async (c) => {
     return c.var.auth.handler(c.req.raw);
   });
@@ -520,20 +479,41 @@ export function createApp(): App {
 
   // --- Middleware for all remaining routes ---
 
+  // Every route below renders with the site's settings. Start reading them
+  // now, so the read shares a round trip with the stored-redirect lookup
+  // below rather than following it; the onboarding gate and `withConfig()`
+  // both take this one read.
+  app.use("*", prefetchSettings());
+
   // Onboarding gate — redirect to /setup if not yet initialized
   app.use("*", requireOnboarding());
 
-  // Trailing slash redirect (redirect /foo/ to /foo)
+  // Trailing slash redirect (redirect /foo/ to /foo). Leading slashes and
+  // backslashes collapse too: `//evil.com/` must become `/evil.com`, never
+  // the protocol-relative `//evil.com` a browser would follow off-site.
+  // Anything but a read gets 308, which keeps the method and body: after a
+  // 301, clients resend `POST /api/posts/` as a GET, list the posts with a
+  // 200, and create nothing.
   app.use("*", async (c, next) => {
-    const publicUrl = new URL(c.var.publicRequestUrl);
-    if (c.var.publicPath !== "/" && c.var.publicPath.endsWith("/")) {
-      const newUrl = c.var.publicPath.slice(0, -1) + publicUrl.search;
-      return c.redirect(newUrl, 301);
+    const path = c.var.publicPath;
+    if (path !== "/" && path.endsWith("/")) {
+      const target = `/${path.replace(/^[/\\]+/, "").replace(/\/+$/, "")}`;
+      if (isSafeInternalRedirect(target)) {
+        const { search } = new URL(c.var.publicRequestUrl);
+        const isRead = c.req.method === "GET" || c.req.method === "HEAD";
+        return c.redirect(target + search, isRead ? 301 : 308);
+      }
     }
     await next();
   });
 
-  // Redirect middleware — only handles redirect-type custom URLs
+  // Redirect middleware — only handles redirect-type custom URLs.
+  //
+  // The lookup it needs is the same `path_registry` read the catch-all route
+  // makes to resolve a post or collection, so the record is stashed on the
+  // context and that route reuses it instead of asking again. Nothing between
+  // here and the route writes to the registry, so the record cannot go stale
+  // within the request.
   app.use("*", async (c, next) => {
     const path = new URL(c.req.url).pathname;
     // Skip redirect lookup for fixed machine routes and static assets.
@@ -541,17 +521,24 @@ export function createApp(): App {
       return next();
     }
 
-    const customUrl = await c.var.services.customUrls.getByPath(path.slice(1));
-    if (customUrl?.targetType === "redirect" && customUrl.toPath) {
+    const storedPath = normalizePath(path);
+    const record = await c.var.services.paths.resolve(storedPath);
+    c.set("pathLookup", { path: storedPath, record });
+
+    if (record?.kind === "redirect" && record.redirectToPath) {
+      // toPublicHref leaves an http(s) target as it is and prefixes a path.
       return c.redirect(
-        toPublicHref(
-          customUrl.toPath,
-          getRuntimeSitePathPrefix({
-            env: c.env,
-            currentSiteDomain: c.var.currentSiteDomain,
-          }),
+        withRequestQuery(
+          toPublicHref(
+            redirectTargetHref(record.redirectToPath),
+            getRuntimeSitePathPrefix({
+              env: c.env,
+              currentSiteDomain: c.var.currentSiteDomain,
+            }),
+          ),
+          c.req.url,
         ),
-        customUrl.redirectType ?? 301,
+        record.redirectType ?? 301,
       );
     }
 
@@ -562,10 +549,6 @@ export function createApp(): App {
   app.use("*", withConfig());
   app.use("*", i18nMiddleware());
 
-  // Feed URLs are spread across page route groups (including dynamic
-  // collection aliases), so one config-aware guard owns the URL policy.
-  app.use("*", requireRssFeedsEnabled());
-
   // --- Routes that need config ---
 
   // Public machine-readable site guide
@@ -573,9 +556,10 @@ export function createApp(): App {
 
   // API Routes
   app.route("/api/public/posts", publicPostsApiRoutes);
-  app.route("/api/public/archive", publicArchiveApiRoutes);
+  app.route("/api/public/threads", publicThreadsApiRoutes);
   app.route("/api/discover", discoverApiRoutes);
   app.route("/api/posts", postsApiRoutes);
+  app.route("/api/threads", threadsApiRoutes);
   app.route("/api/nav-items", navItemsApiRoutes);
   app.route("/api/collections", collectionsApiRoutes);
   app.route("/api/smart-collections", smartCollectionsApiRoutes);
@@ -598,9 +582,9 @@ export function createApp(): App {
   app.route("/settings/custom-urls", customUrlsRoutes);
   app.route("/settings", settingsRoutes);
 
-  // Protected API routes (multipart must be registered before base upload)
-  app.route("/api/upload/multipart", multipartUploadApiRoutes);
+  // Protected API routes
   app.route("/api/upload", uploadApiRoutes);
+  app.route("/api/media", mediaApiRoutes);
   app.route("/api/uploads", uploadsApiRoutes);
   app.route("/api/search", searchApiRoutes);
   app.route("/api/palette", paletteApiRoutes);

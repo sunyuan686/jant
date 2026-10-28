@@ -36,21 +36,24 @@ Jant exposes the same site-owner capabilities through two interfaces:
 | HTTP JSON API           | Writing scripts, making a few direct requests, or running a one-time migration. This is the default. |
 | MCP at `<site>/api/mcp` | The caller already supports MCP and benefits from tool discovery and structured tool calls.          |
 
-For MCP, call `initialize`, then `tools/list`, and use the returned schemas rather than assuming tool arguments. The tool groups cover posts, media, attachments, Collections, settings, and search.
+For MCP, call `initialize`, then `tools/list`, and use the returned schemas rather than assuming tool arguments. The tool groups cover posts, Threads, media, attachments, Collections, settings, and search.
 
 For HTTP, these are the main entry points:
 
 | Task                         | Endpoint                                                         |
 | ---------------------------- | ---------------------------------------------------------------- |
-| Read public posts            | `GET /api/public/posts`, `GET /api/public/posts/:slug`           |
+| Read public Threads          | `GET /api/public/threads`, `GET /api/public/threads/:slug/posts` |
+| Read one public post         | `GET /api/public/posts/:slug`                                    |
 | List or inspect all posts    | `GET /api/posts`, `GET /api/posts/:id`                           |
+| List or read whole Threads   | `GET /api/threads`, `GET /api/threads/:id/posts`                 |
 | Create, update, delete       | `POST /api/posts`, `PUT /api/posts/:id`, `DELETE /api/posts/:id` |
-| Upload or manage media       | `/api/upload` or `/api/uploads`                                  |
+| Upload media                 | `POST /api/upload` or `/api/uploads`                             |
+| List or manage media         | `/api/media`                                                     |
 | Manage Collections           | `/api/collections`                                               |
-| Search published content     | `GET /api/search`                                                |
+| Search posts, private too    | `GET /api/search`                                                |
 | Read or update site settings | `GET /api/settings`, `PUT /api/settings`                         |
 
-Public post, Collection, navigation, and search reads can work without a token. A site can disable anonymous API reads; `/api/public/*` then becomes unavailable, while Collection, navigation, and search JSON reads require a browser session or Bearer token. Private content and all writes always require authentication.
+Public post and Thread reads under `/api/public/*` can work without a token. A site can disable anonymous API reads; `/api/public/*` then becomes unavailable. Everything else, including search and Collection reads, requires authentication.
 
 ---
 
@@ -84,7 +87,7 @@ Jant is a single-author microblog. There are no users, comments, likes, follower
 Three concepts shape almost every content operation:
 
 1. **Posts have three formats** — `note`, `link`, and `quote`. Preserve the semantic format instead of coercing everything into `note`.
-2. **Threads connect posts** — a reply is a post whose `replyToId` points to another post. There is no separate comments table.
+2. **Threads connect posts** — a reply is a post whose `replyToId` points to another post. There is no separate comments table. A post's `threadPostCount` says how many posts its Thread holds; read them all with `GET /api/threads/:id/posts`, passing any post's ID, rather than collecting replies from the post list.
 3. **Collections curate Threads** — they are intentional groupings, not tags. A Thread can belong to multiple Collections; its root and replies share the same memberships.
 
 ### `note` — original writing
@@ -130,7 +133,7 @@ curl -X POST "$JANT_SITE/api/posts" \
   }'
 ```
 
-Use `PUT /api/posts/:id` to update a post and `DELETE /api/posts/:id` to delete one. Fetch the post first, preserve fields the user did not ask to change, and confirm before deletion.
+Use `PUT /api/posts/:id` to update a post and `DELETE /api/posts/:id` to delete one. Fetch the post first, preserve fields the user did not ask to change, and confirm before deletion. To edit a body, read it with `GET /api/posts/:id?content=markdown` (MCP: `jant_posts_get` with `content: "markdown"`) and send the edited `bodyMarkdown` back; a text attachment's Markdown is at its `contentUrl`.
 
 Use `POST /api/upload` for an ordinary single-file script or one-time migration. Use the session-based `/api/uploads` flow for large files, unreliable connections, or clients that need resumable transport. Save the returned `med_*` ID before attaching media to a post.
 
@@ -142,7 +145,16 @@ For exact fields, filters, pagination, and response schemas, read the [full HTTP
 
 ## Import Content from Another Platform
 
-Use this workflow when the user provides an export, archive, feed, database dump, or folder of source files from another blog or CMS.
+Use this workflow when the user wants to move an old blog, site, or archive into this Jant site. The request may arrive as one sentence, with no export and no token yet. Lead the user through the rest.
+
+### Lead the user
+
+Ask for one thing at a time, when the next step needs it. Name the menus the user clicks, not API endpoints.
+
+1. Check that you can send HTTP requests to `<site>` and read files the user gives you. If you cannot, say so first and suggest an assistant that can, such as a coding agent with shell access. Do not hand over a script unless the user asks for one.
+2. Ask which platform the old blog is on and where it lives.
+3. Get the content. Use an export if the user has one. If not, tell them where their platform exports it (the table under "Read the source" lists the usual places) and wait for the file. When the old blog is public and its feed carries full posts, you can read the feed instead. Feeds usually hold only recent posts, so compare the count with the old blog's archive before relying on one.
+4. Ask for the API token just before the first write, using the steps in "Confirm the Target and Authenticate". Do not ask for it at the start.
 
 ### Plan before writing
 

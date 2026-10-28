@@ -1,0 +1,79 @@
+/**
+ * Media API Routes
+ *
+ * The author's uploaded files as a resource: list, read, change alt text,
+ * delete. Uploading happens at `POST /api/upload` (one request) or
+ * `/api/uploads` (a resumable session); the MCP media tools share these
+ * responses.
+ */
+
+import { Hono } from "hono";
+import { z } from "zod";
+import type { Bindings } from "../../types.js";
+import type { AppVariables } from "../../types/app-context.js";
+import { requireAuthApi } from "../../middleware/auth.js";
+import { validate } from "../../middleware/validate.js";
+import { assertFound, parseIdParam } from "../../lib/errors.js";
+import { ID_PREFIX } from "../../lib/ids.js";
+import { pageLimitSchema } from "../../lib/schemas.js";
+import { toApiMedia } from "../../lib/api-media.js";
+
+type Env = { Bindings: Bindings; Variables: AppVariables };
+
+export const mediaApiRoutes = new Hono<Env>();
+
+const ListMediaQuerySchema = z.object({
+  limit: pageLimitSchema(200, 50),
+  mimePrefix: z.string().trim().min(1).optional(),
+  cursor: z.string().optional(),
+});
+
+const UpdateMediaSchema = z.object({
+  alt: z
+    .string()
+    .max(500)
+    .transform((value) => value.trim()),
+});
+
+mediaApiRoutes.use("*", requireAuthApi());
+
+// List files, newest first
+mediaApiRoutes.get("/", validate("query", ListMediaQuerySchema), async (c) => {
+  const { limit, mimePrefix, cursor } = c.req.valid("query");
+  const page = await c.var.services.media.listPage({
+    limit,
+    mimePrefix,
+    cursor,
+  });
+
+  return c.json({
+    media: page.media.map((media) => toApiMedia(media, c.var.appConfig)),
+    nextCursor: page.nextCursor,
+  });
+});
+
+mediaApiRoutes.get("/:id", async (c) => {
+  const id = parseIdParam(c.req.param("id"), ID_PREFIX.media);
+  const media = assertFound(await c.var.services.media.getById(id), "Media");
+  return c.json(toApiMedia(media, c.var.appConfig));
+});
+
+mediaApiRoutes.put("/:id", validate("json", UpdateMediaSchema), async (c) => {
+  const id = parseIdParam(c.req.param("id"), ID_PREFIX.media);
+  const { alt } = c.req.valid("json");
+  assertFound(await c.var.services.media.getById(id), "Media");
+
+  await c.var.services.media.updateAlt(id, alt);
+
+  const media = assertFound(await c.var.services.media.getById(id), "Media");
+  return c.json(toApiMedia(media, c.var.appConfig));
+});
+
+mediaApiRoutes.delete("/:id", async (c) => {
+  const id = parseIdParam(c.req.param("id"), ID_PREFIX.media);
+  assertFound(await c.var.services.media.getById(id), "Media");
+
+  await c.var.services.media.delete(id, c.var.storage);
+
+  return c.json({ success: true });
+});

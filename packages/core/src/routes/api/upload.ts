@@ -1,23 +1,18 @@
 /**
- * Upload API Routes
+ * One-shot Upload API Routes
  *
- * Handles single-request uploads through the legacy relay endpoint.
- * Supports both JSON and SSE (Datastar) responses.
+ * `POST /api/upload`: the whole file in one multipart request, answered with
+ * the media object. Resumable and large uploads use `/api/uploads`.
  */
 
 import { Hono, type Context } from "hono";
-import { html } from "hono/html";
 import { msg } from "@lingui/core/macro";
 import { z } from "zod";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { requireAuthApi } from "../../middleware/auth.js";
-import {
-  getMediaUrl,
-  getImageUrl,
-  getPublicUrlForProvider,
-} from "../../lib/image.js";
-import { sse } from "../../lib/sse.js";
+import { validate } from "../../middleware/validate.js";
+import { toApiMedia } from "../../lib/api-media.js";
 import {
   detectPosterMimeType,
   getPosterExtension,
@@ -33,128 +28,37 @@ import {
   parseImageDimensions,
 } from "../../lib/image-dimensions.js";
 import {
-  assertFound,
+  DomainError,
+  ExternalServiceError,
   MediaQuotaExceededError,
-  parseIdParam,
+  ValidationError,
 } from "../../lib/errors.js";
+import { requireStorage } from "../../lib/storage.js";
 import { getI18n } from "../../i18n/index.js";
-import { ID_PREFIX } from "../../lib/ids.js";
-import { parseValidated } from "../../lib/schemas.js";
-import { toApiMedia } from "../../lib/api-media.js";
+import {
+  FormFileSchema,
+  FormPositiveIntSchema,
+  FormTextSchema,
+} from "../../lib/schemas.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
 export const uploadApiRoutes = new Hono<Env>();
 
-const ListMediaQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(200).optional().default(50),
-  mimePrefix: z.string().trim().min(1).optional(),
-});
-
-const UpdateMediaSchema = z.object({
-  alt: z
-    .string()
-    .max(500)
-    .transform((value) => value.trim()),
-});
-
 // Require auth for all upload routes
 uploadApiRoutes.use("*", requireAuthApi());
 
-/**
- * Render a media card HTML string for SSE response
- */
-function renderMediaCard(
-  media: {
-    id: string;
-    storageKey: string;
-    mimeType: string;
-    originalName: string;
-    alt: string | null;
-    size: number;
-  },
-  publicUrl?: string,
-  imageTransformUrl?: string,
-  sitePathPrefix?: string,
-): string {
-  const fullUrl = getMediaUrl(media.storageKey, publicUrl, sitePathPrefix);
-  const thumbnailUrl = getImageUrl(fullUrl, imageTransformUrl, {
-    width: 300,
-    quality: 80,
-    format: "auto",
-    fit: "cover",
-  });
-  const isImage = media.mimeType.startsWith("image/");
-  const displayName = media.alt || media.originalName;
-  const sizeStr = formatSize(media.size);
-
-  if (isImage) {
-    return html`
-      <div class="group relative" data-media-id="${media.id}">
-        <button
-          type="button"
-          class="block w-full aspect-square bg-muted rounded-lg overflow-hidden border hover:border-primary cursor-pointer"
-          data-on:click="document.getElementById('lightbox-img').src = '${fullUrl}'; document.getElementById('lightbox').showModal()"
-        >
-          <img
-            src="${thumbnailUrl}"
-            alt="${displayName}"
-            class="w-full h-full object-cover"
-            loading="lazy"
-          />
-        </button>
-        <span class="block mt-2 text-xs truncate" title="${media.originalName}">
-          ${media.originalName}
-        </span>
-        <div class="text-xs text-muted-foreground">${sizeStr}</div>
-      </div>
-    `.toString();
-  }
-
-  return html`
-    <div class="group relative" data-media-id="${media.id}">
-      <div
-        class="block aspect-square bg-muted rounded-lg overflow-hidden border"
-      >
-        <div
-          class="w-full h-full flex items-center justify-center text-muted-foreground"
-        >
-          <span class="text-xs">${media.mimeType}</span>
-        </div>
-      </div>
-      <span class="block mt-2 text-xs truncate" title="${media.originalName}">
-        ${media.originalName}
-      </span>
-      <div class="text-xs text-muted-foreground">${sizeStr}</div>
-    </div>
-  `.toString();
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-/**
- * Check if request wants SSE response (from Datastar)
- */
-function wantsSSE(c: {
-  req: { header: (name: string) => string | undefined };
-}): boolean {
-  const accept = c.req.header("accept") || "";
-  return accept.includes("text/event-stream");
-}
-
-/**
- * Return an SSE error response that removes the upload placeholder and shows a toast
- */
-function sseUploadError(c: Context<Env>, message: string): Response {
-  return sse(c, async (stream) => {
-    await stream.remove("#upload-placeholder");
-    await stream.toast(message, "error");
-  });
-}
+const UploadFormSchema = z.object({
+  file: FormFileSchema,
+  summary: FormTextSchema,
+  width: FormPositiveIntSchema,
+  height: FormPositiveIntSchema,
+  durationSeconds: FormPositiveIntSchema,
+  alt: FormTextSchema,
+  blurhash: FormTextSchema,
+  waveform: FormTextSchema,
+  poster: FormFileSchema,
+});
 
 function getHostedMediaQuotaExceededText(c: Context<Env>): string {
   return getI18n(c)._(
@@ -168,36 +72,22 @@ function getHostedMediaQuotaExceededText(c: Context<Env>): string {
 }
 
 // Upload a file
-uploadApiRoutes.post("/", async (c) => {
+uploadApiRoutes.post("/", validate("form", UploadFormSchema), async (c) => {
   const i18n = getI18n(c);
-  const storage = c.var.storage;
-  if (!storage) {
-    const errorText = i18n._(
-      msg({
-        message: "File storage isn't set up. Check your server config.",
-        comment: "@context: Error when file storage is not set up",
-      }),
-    );
-    if (wantsSSE(c)) {
-      return sseUploadError(c, errorText);
-    }
-    return c.json({ error: errorText }, 500);
-  }
+  const storage = requireStorage(c.var.storage);
 
-  const formData = await c.req.formData();
-  const file = formData.get("file") as File | null;
+  const form = c.req.valid("form");
+  const file = form.file;
 
   if (!file) {
-    const errorText = i18n._(
-      msg({
-        message: "No file selected. Choose a file to upload.",
-        comment: "@context: Error when no file was selected for upload",
-      }),
+    throw new ValidationError(
+      i18n._(
+        msg({
+          message: "No file selected. Choose a file to upload.",
+          comment: "@context: Error when no file was selected for upload",
+        }),
+      ),
     );
-    if (wantsSSE(c)) {
-      return sseUploadError(c, errorText);
-    }
-    return c.json({ error: errorText }, 400);
   }
 
   // Validate file type and size
@@ -205,10 +95,7 @@ uploadApiRoutes.post("/", async (c) => {
     maxFileSizeMB: c.var.appConfig.uploadMaxFileSize,
   });
   if (uploadError) {
-    if (wantsSSE(c)) {
-      return sseUploadError(c, uploadError);
-    }
-    return c.json({ error: uploadError }, 400);
+    throw new ValidationError(uploadError);
   }
 
   // Generate a media TypeID-backed filename and storage key
@@ -218,16 +105,10 @@ uploadApiRoutes.post("/", async (c) => {
   );
   const uploadPolicy = getStoredUploadPolicy(file.type);
   if (!uploadPolicy) {
-    const errorText = `File type "${file.type}" is not supported.`;
-    if (wantsSSE(c)) {
-      return sseUploadError(c, errorText);
-    }
-    return c.json({ error: errorText }, 400);
+    throw new ValidationError(`File type "${file.type}" is not supported.`);
   }
 
   try {
-    const sitePathPrefix = c.var.appConfig.sitePathPrefix;
-
     await c.var.services.media.assertCanWriteBytes(file.size);
 
     const peekLength = getStoredUploadSignaturePeekLength(file.type);
@@ -240,15 +121,12 @@ uploadApiRoutes.post("/", async (c) => {
         signatureBytes,
       );
       if (signatureError) {
-        if (wantsSSE(c)) {
-          return sseUploadError(c, signatureError);
-        }
-        return c.json({ error: signatureError }, 400);
+        throw new ValidationError(signatureError);
       }
     }
 
     // Read optional summary (provided for text attachments)
-    let summary = (formData.get("summary") as string) || undefined;
+    let summary = form.summary;
     let chars: number | undefined;
     // Buffer for text files — file.stream() may not work after file.text()
     let textBuffer: Uint8Array | undefined;
@@ -279,17 +157,8 @@ uploadApiRoutes.post("/", async (c) => {
       cacheControl: "public, max-age=31536000, immutable",
     });
 
-    // Read optional client-side metadata
-    const widthRaw = parseInt(formData.get("width") as string) || undefined;
-    const heightRaw = parseInt(formData.get("height") as string) || undefined;
-    const durationSecondsRaw =
-      parseInt(formData.get("durationSeconds") as string) || undefined;
-    const altRaw = (formData.get("alt") as string) || undefined;
-    const blurhashRaw = (formData.get("blurhash") as string) || undefined;
-    const waveformRaw = (formData.get("waveform") as string) || undefined;
-
-    let width = widthRaw && widthRaw > 0 ? widthRaw : undefined;
-    let height = heightRaw && heightRaw > 0 ? heightRaw : undefined;
+    // Client-side metadata, when sent
+    let { width, height } = form;
     if ((!width || !height) && file.type.startsWith("image/")) {
       try {
         const headerBytes = new Uint8Array(
@@ -307,7 +176,7 @@ uploadApiRoutes.post("/", async (c) => {
 
     // Upload poster frame for videos (if provided by client)
     let posterKey: string | undefined;
-    const posterFile = formData.get("poster") as File | null;
+    const posterFile = form.poster;
     if (posterFile && file.type.startsWith("video/")) {
       const posterBytes = new Uint8Array(await posterFile.arrayBuffer());
       const posterMime = detectPosterMimeType(posterBytes);
@@ -331,130 +200,38 @@ uploadApiRoutes.post("/", async (c) => {
       provider: c.var.appConfig.storageDriver,
       width,
       height,
-      durationSeconds:
-        durationSecondsRaw && durationSecondsRaw > 0
-          ? durationSecondsRaw
-          : undefined,
-      alt: altRaw?.trim() || undefined,
+      durationSeconds: form.durationSeconds,
+      alt: form.alt?.trim() || undefined,
       blurhash:
-        blurhashRaw && blurhashRaw.length < 200 ? blurhashRaw : undefined,
+        form.blurhash && form.blurhash.length < 200 ? form.blurhash : undefined,
       waveform:
-        waveformRaw && waveformRaw.length < 2000 ? waveformRaw : undefined,
+        form.waveform && form.waveform.length < 2000
+          ? form.waveform
+          : undefined,
       posterKey,
       summary,
       chars,
       mediaKind: uploadPolicy.mediaKind,
     });
 
-    // SSE response for Datastar
-    if (wantsSSE(c)) {
-      const mediaPublicUrl = getPublicUrlForProvider(
-        c.var.appConfig.storageDriver,
-        c.var.appConfig.r2PublicUrl,
-        c.var.appConfig.s3PublicUrl,
-        c.var.appConfig.localPublicUrl,
-      );
-      const cardHtml = renderMediaCard(
-        media,
-        mediaPublicUrl,
-        c.var.appConfig.imageTransformUrl,
-        sitePathPrefix,
-      );
-
-      return sse(c, async (stream) => {
-        // Replace placeholder with real media card
-        await stream.patchElements(cardHtml, {
-          mode: "outer",
-          selector: "#upload-placeholder",
-        });
-        await stream.toast(
-          i18n._(
-            msg({
-              message: "File uploaded.",
-              comment: "@context: Toast after successful file upload",
-            }),
-          ),
-        );
-      });
-    }
-
-    // JSON response for API clients
-    const mediaPublicUrl = getPublicUrlForProvider(
-      c.var.appConfig.storageDriver,
-      c.var.appConfig.r2PublicUrl,
-      c.var.appConfig.s3PublicUrl,
-      c.var.appConfig.localPublicUrl,
-    );
-    const publicUrl = getMediaUrl(storageKey, mediaPublicUrl, sitePathPrefix);
-    return c.json({
-      id: media.id,
-      filename: media.filename,
-      url: publicUrl,
-      mimeType: media.mimeType,
-      size: media.size,
-    });
+    // The same shape `GET /api/media/:id` returns, as for every other create.
+    return c.json(toApiMedia(media, c.var.appConfig), 201);
   } catch (err) {
+    // The quota error carries the hosted service's own wording; a validation
+    // error thrown above passes through; anything else is a failed write.
+    if (err instanceof MediaQuotaExceededError) {
+      throw new MediaQuotaExceededError(getHostedMediaQuotaExceededText(c));
+    }
+    if (err instanceof DomainError) throw err;
     // eslint-disable-next-line no-console -- Error logging is intentional
     console.error("Upload error:", err);
-
-    const errorText =
-      err instanceof MediaQuotaExceededError
-        ? getHostedMediaQuotaExceededText(c)
-        : i18n._(
-            msg({
-              message: "Upload didn't go through. Try again in a moment.",
-              comment: "@context: Error when file upload fails",
-            }),
-          );
-    if (wantsSSE(c)) {
-      return sse(c, async (stream) => {
-        await stream.remove("#upload-placeholder");
-        await stream.toast(errorText, "error");
-      });
-    }
-    return c.json(
-      { error: errorText },
-      err instanceof MediaQuotaExceededError ? 409 : 500,
+    throw new ExternalServiceError(
+      i18n._(
+        msg({
+          message: "Upload didn't go through. Try again in a moment.",
+          comment: "@context: Error when file upload fails",
+        }),
+      ),
     );
   }
-});
-
-// List uploaded files (JSON only)
-uploadApiRoutes.get("/", async (c) => {
-  const { limit, mimePrefix } = parseValidated(
-    ListMediaQuerySchema,
-    c.req.query(),
-  );
-  const mediaList = await c.var.services.media.list({ limit, mimePrefix });
-
-  return c.json({
-    media: mediaList.map((media) => toApiMedia(media, c.var.appConfig)),
-  });
-});
-
-uploadApiRoutes.get("/:id", async (c) => {
-  const id = parseIdParam(c.req.param("id"), ID_PREFIX.media);
-  const media = assertFound(await c.var.services.media.getById(id), "Media");
-  return c.json(toApiMedia(media, c.var.appConfig));
-});
-
-uploadApiRoutes.patch("/:id", async (c) => {
-  const id = parseIdParam(c.req.param("id"), ID_PREFIX.media);
-  const { alt } = parseValidated(UpdateMediaSchema, await c.req.json());
-  assertFound(await c.var.services.media.getById(id), "Media");
-
-  await c.var.services.media.updateAlt(id, alt);
-
-  const media = assertFound(await c.var.services.media.getById(id), "Media");
-  return c.json(toApiMedia(media, c.var.appConfig));
-});
-
-// Delete a file
-uploadApiRoutes.delete("/:id", async (c) => {
-  const id = parseIdParam(c.req.param("id"), ID_PREFIX.media);
-  assertFound(await c.var.services.media.getById(id), "Media");
-
-  await c.var.services.media.delete(id, c.var.storage);
-
-  return c.json({ success: true });
 });

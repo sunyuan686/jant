@@ -22,12 +22,24 @@
     cursor: pointer;
   }
 
+  /*
+   * A column, so the viewport-height minimum reaches <main>: when the content
+   * is shorter than the screen — a new site with no posts yet — main takes the
+   * slack and the footer rests at the bottom instead of floating up under the
+   * last post.
+   */
   .site-page {
+    display: flex;
+    flex-direction: column;
     min-height: 100vh;
     min-height: 100dvh;
     overflow-x: clip;
     background-color: var(--site-page-bg);
     counter-reset: sidenote-counter;
+  }
+
+  .site-page > main {
+    flex-grow: 1;
   }
 
   /*
@@ -233,7 +245,7 @@
       var(--site-text-secondary) 24%,
       transparent
     );
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 34%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 34%, transparent);
   }
 
   .site-header-search-link-icon {
@@ -270,7 +282,7 @@
       var(--site-text-secondary) 20%,
       transparent
     );
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 58%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 58%, transparent);
   }
 
   /* --- External link icon ------------------------------------------------- */
@@ -411,7 +423,7 @@
   .site-nav-drawer-close:focus-visible {
     color: var(--site-text-primary);
     opacity: 1;
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 50%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 50%, transparent);
   }
 
   /* Navigation links */
@@ -780,7 +792,7 @@
       var(--site-text-primary) 84%,
       var(--site-text-secondary)
     );
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 58%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 58%, transparent);
   }
 
   .site-header-more-link:has(.site-header-link-fresh) {
@@ -1059,7 +1071,7 @@
   }
 
   .site-content {
-    background-color: var(--site-elevated-bg);
+    background-color: var(--site-page-bg);
     padding-top: 1rem;
     padding-bottom: var(--space-xl);
   }
@@ -1068,80 +1080,10 @@
     padding-top: 0;
   }
 
-  .site-mobile-compose-fab {
-    position: fixed;
-    right: max(1rem, calc(env(safe-area-inset-right) + 0.75rem));
-    bottom: max(2rem, calc(env(safe-area-inset-bottom) + 1.75rem));
-    z-index: 35;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    width: 2.875rem;
-    height: 2.875rem;
-    padding: 0;
-    border: 0.5px solid
-      color-mix(in srgb, var(--site-text-primary) 12%, transparent);
-    border-radius: 999px;
-    background: color-mix(
-      in srgb,
-      var(--site-elevated-bg) 90%,
-      var(--site-nav-hover-bg) 10%
-    );
-    color: var(--site-text-primary);
-    box-shadow: 0 14px 32px
-      color-mix(in srgb, var(--site-text-primary) 10%, transparent);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    cursor: pointer;
-    transition:
-      opacity 0.22s ease,
-      transform 0.22s ease,
-      border-color 0.18s ease,
-      background-color 0.18s ease,
-      box-shadow 0.18s ease;
-    transform: translate3d(0, 0, 0);
-  }
-
-  .site-mobile-compose-fab-icon {
-    width: 1.1rem;
-    height: 1.1rem;
-    opacity: 0.84;
-  }
-
-  .site-mobile-compose-fab:hover {
-    border-color: color-mix(in srgb, var(--site-text-primary) 18%, transparent);
-    background: color-mix(
-      in srgb,
-      var(--site-elevated-bg) 84%,
-      var(--site-nav-hover-bg) 16%
-    );
-    box-shadow: 0 16px 36px
-      color-mix(in srgb, var(--site-text-primary) 12%, transparent);
-    transform: translate3d(0, -1px, 0);
-  }
-
-  .site-mobile-compose-fab:focus-visible {
-    outline: 1.5px solid
-      color-mix(in srgb, var(--site-text-primary) 24%, transparent);
-    outline-offset: 2px;
-  }
-
-  .site-mobile-compose-fab:active {
-    transform: translate3d(0, 0, 0) scale(0.98);
-  }
-
-  body:has(.media-lightbox[open]) .site-mobile-compose-fab,
-  body:has(.text-preview-dialog[open]) .site-mobile-compose-fab,
-  body:has(.site-nav-drawer[aria-hidden="false"]) .site-mobile-compose-fab {
-    opacity: 0;
-    pointer-events: none;
-    transform: translate3d(0, 0.75rem, 0) scale(0.96);
-  }
-
   /* --- Search page -------------------------------------------------------- */
 
-  [data-page="search"] .input,
-  [data-page="search"] .btn {
+  .search-page .input,
+  .search-page .btn {
     font-size: var(--type-secondary);
     padding: 1.1rem 1.25rem;
   }
@@ -1162,6 +1104,47 @@
   @media (max-width: 1079px) {
     .sidebar-nav {
       display: none;
+    }
+  }
+
+  /* --- Numbered pagination ------------------------------------------------ */
+
+  .page-pagination {
+    container: page-pagination / inline-size;
+  }
+
+  .page-pagination-step-icon {
+    display: none;
+    width: 1em;
+    height: 1em;
+  }
+
+  /* The bar holds seven page slots between Previous and Next. With both words,
+     three-digit page numbers (1 … 196 197 198 199 200) need just under 24rem
+     and four digits need 25rem — more than most phones held upright give it.
+     Under 25rem the words give way to arrows, so the row keeps to one line and
+     Next never falls off the edge; each word stays in the accessibility tree
+     as its link's name. The bar also wraps, as a last resort for the narrowest
+     screens with three-digit page numbers. */
+  @container page-pagination (max-width: 25rem) {
+    /* Inline, so the arrow keeps a full text line — the same height, and the
+       same tap target, as the page numbers beside it. */
+    .page-pagination-step-icon {
+      display: inline-block;
+      vertical-align: -0.125em;
+    }
+
+    .page-pagination-step-label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      clip-path: inset(50%);
+      white-space: nowrap;
+      border: 0;
     }
   }
 
@@ -2363,6 +2346,13 @@
     margin-top: 0.65rem;
   }
 
+  /* A preview is a block of image, not a line of text: commentary set 0.65rem
+     under it reads as a caption. Give it the same air the title leaves above
+     the preview, so the image sits between the two rather than on the body. */
+  [data-format="link"] .link-preview + [data-post-body] {
+    margin-top: 1.4rem;
+  }
+
   .feed-link-domain {
     display: inline-flex;
     align-items: center;
@@ -2392,7 +2382,7 @@
   }
 
   /* The two post titles that do not carry their own heading font: the detail
-     h1 (`[data-page="post"] .post-detail-title` sets everything but the face)
+     h1 (the detail rule for `.post-detail-title` sets everything but the face)
      and the compact card title, which otherwise runs on utilities alone.
      This used to hang off `.p-name`, but microformats classes are the parsed
      API of a post — styling one means any future `p-name` silently changes
@@ -2522,11 +2512,11 @@
    * This keeps long-form text feeling grounded without making global UI copy
    * unnecessarily heavy.
    */
-  [data-page="post"] {
+  :is(.thread-group-detail, .post-detail) {
     color: var(--site-reading-body);
   }
 
-  [data-page="post"] .post-detail-title {
+  :is(.thread-group-detail, .post-detail) .post-detail-title {
     color: var(--site-reading-title);
     font-size: var(--type-content-display);
     font-weight: var(--type-heading-weight);
@@ -2535,36 +2525,36 @@
     text-wrap: pretty;
   }
 
-  [data-page="post"] .post-detail-body,
-  [data-page="post"] .post-detail-body.prose {
+  :is(.thread-group-detail, .post-detail) .post-detail-body,
+  :is(.thread-group-detail, .post-detail) .post-detail-body.prose {
     color: var(--site-reading-body);
   }
 
-  [data-page="post"] .post-detail-body.prose blockquote {
+  :is(.thread-group-detail, .post-detail) .post-detail-body.prose blockquote {
     border-left-color: var(--site-reading-blockquote-rail);
     background: var(--site-reading-blockquote-bg);
   }
 
-  [data-page="post"] .feed-quote-content,
-  [data-page="post"] .post-detail-quote {
+  :is(.thread-group-detail, .post-detail) .feed-quote-content,
+  :is(.thread-group-detail, .post-detail) .post-detail-quote {
     color: var(--site-reading-quote);
   }
 
-  [data-page="post"] .feed-link-domain,
-  [data-page="post"] .feed-quote-attribution,
-  [data-page="post"] .post-header-meta-row,
-  [data-page="post"] .post-header-meta-link,
-  [data-page="post"] .post-header-meta-link time {
+  :is(.thread-group-detail, .post-detail) .feed-link-domain,
+  :is(.thread-group-detail, .post-detail) .feed-quote-attribution,
+  :is(.thread-group-detail, .post-detail) .post-header-meta-row,
+  :is(.thread-group-detail, .post-detail) .post-header-meta-link,
+  :is(.thread-group-detail, .post-detail) .post-header-meta-link time {
     color: var(--site-reading-meta);
   }
 
-  [data-page="post"] .feed-link-domain:hover,
-  [data-page="post"] .feed-quote-source:hover,
-  [data-page="post"] .post-header-meta-link:hover {
+  :is(.thread-group-detail, .post-detail) .feed-link-domain:hover,
+  :is(.thread-group-detail, .post-detail) .feed-quote-source:hover,
+  :is(.thread-group-detail, .post-detail) .post-header-meta-link:hover {
     color: var(--site-reading-body);
   }
 
-  [data-page="post"] .feed-quote {
+  :is(.thread-group-detail, .post-detail) .feed-quote {
     border-left-color: color-mix(
       in srgb,
       var(--site-reading-meta) 74%,
@@ -2685,124 +2675,6 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
     color: var(--site-footnote-marker);
-  }
-
-  /* --- Legacy v1 sidenotes ----------------------------------------------- */
-
-  /* Kept for one compatibility window so imported snapshots or cached HTML
-     from an older runtime remain readable during rollout. Product reads render
-     stale post projections as v3 before the database rebuild runs. */
-
-  .sidenote:not([role="doc-footnote"]),
-  .marginnote {
-    /* Layout: float into the right margin. A floated note anchors to its containing
-       block's right *content* edge, so if a theme gives that block inline-end padding
-       (e.g. a padded blockquote card) the anchor is inset and the note drifts left.
-       Themes expose that inset via --sidenote-anchor-inset (default 0) — best derived
-       from the same token that sets the padding — so the note still reaches the gutter
-       no matter how the container is indented. Core's own blocks add no inset. */
-    float: right;
-    clear: right;
-    margin-right: calc(
-      var(--layout-sidenote-margin) - var(--sidenote-anchor-inset, 0px)
-    );
-    width: var(--layout-sidenote-width);
-    margin-top: 0.3rem;
-    /* Breathing room so multiple notes from one paragraph don't touch when they stack. */
-    margin-bottom: 1.4rem;
-    vertical-align: baseline;
-    position: relative;
-
-    /* Typographic isolation. A footnote is an annotation, not part of the text it
-       hangs off of, so it must render identically no matter what its reference sits
-       inside. The body span is emitted at the reference position (see tiptap-render
-       renderSidenoteReference), so when the [^n] is inside a blockquote / bold run /
-       heading the span inherits that context. Pin every inheritable type property to
-       the canonical note look to cut every such leak — not just the blockquote
-       serif+italic case. */
-    font-family: var(--font-body);
-    font-size: var(--type-sm);
-    font-style: normal;
-    font-weight: 400;
-    font-variant: normal;
-    line-height: 1.3;
-    letter-spacing: var(--type-body-tracking, normal);
-    text-align: left;
-    color: var(--site-reading-meta);
-  }
-
-  .sidenote-number {
-    counter-increment: sidenote-counter;
-  }
-
-  .sidenote-number::after,
-  .sidenote:not([role="doc-footnote"])::before {
-    position: relative;
-    vertical-align: baseline;
-  }
-
-  .sidenote-number::after {
-    content: counter(sidenote-counter);
-    font-size: var(--type-code);
-    top: -0.5rem;
-    /* Real margins (not `left`, which reserves no space) so the superscript
-       number keeps a gap from the words on both sides — matters for CJK, which
-       has no inter-word spacing. */
-    margin-left: 0.1rem;
-    margin-right: 0.25rem;
-  }
-
-  .sidenote:not([role="doc-footnote"])::before {
-    content: counter(sidenote-counter) " ";
-    font-size: var(--type-xs);
-    top: -0.5rem;
-  }
-
-  .sidenote:not([role="doc-footnote"]) > code,
-  .marginnote > code {
-    font-size: var(--type-code);
-  }
-
-  input.margin-toggle {
-    display: none;
-  }
-
-  label.sidenote-number {
-    display: inline-block;
-    max-height: 2rem;
-  }
-
-  label.margin-toggle:not(.sidenote-number) {
-    display: none;
-  }
-
-  /* Collapse sidenotes from floated margin notes to inline tap-to-toggle at the
-     same width the post column drops to `min(100%, 35rem)` (preset.css) and the
-     Tufte gutter disappears — see --layout-content-width in tokens.css. Below
-     1024px a floated `width: 50%; margin-right: -60%` note has no gutter to land
-     in and overflows the right edge, so it must inline instead. */
-  @media (max-width: 1024px) {
-    label.margin-toggle:not(.sidenote-number) {
-      display: inline;
-      cursor: pointer;
-    }
-
-    .sidenote:not([role="doc-footnote"]),
-    .marginnote {
-      display: none;
-    }
-
-    .margin-toggle:checked + .sidenote:not([role="doc-footnote"]),
-    .margin-toggle:checked + .marginnote {
-      display: block;
-      float: left;
-      left: 1rem;
-      clear: both;
-      width: 95%;
-      margin: 1rem 2.5%;
-      vertical-align: baseline;
-      position: relative;
-    }
   }
 
   /* Link preview (video thumbnails, etc.) */
@@ -3643,7 +3515,7 @@
     position: relative;
     color: color-mix(
       in srgb,
-      var(--search-mark-color) 72%,
+      var(--site-search-mark-color) 72%,
       var(--site-text-secondary)
     );
     --icon-stroke: 1.35;
@@ -3822,7 +3694,7 @@
     min-width: 160px;
     padding: 4px;
     border-radius: 6px;
-    background: var(--site-elevated-bg);
+    background: var(--site-page-bg);
     border: 1px solid var(--site-divider);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   }
@@ -3845,7 +3717,7 @@
   }
 
   .post-collection-popover-item:hover {
-    background: var(--site-nav-hover-bg);
+    background: var(--site-subtle-bg);
     color: var(--site-text-primary);
   }
 
@@ -3928,7 +3800,7 @@
   .post-menu-trigger:focus-visible,
   .reply-trigger:focus-visible {
     outline: none;
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 38%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 38%, transparent);
     color: var(--site-text-primary);
     opacity: 1;
     box-shadow: 0 0 0 3px
@@ -3937,12 +3809,18 @@
 
   .post-menu-trigger[aria-expanded="true"] {
     color: var(--site-text-primary);
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 48%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 48%, transparent);
     opacity: 1;
   }
 
   body[data-authenticated] .post-menu-trigger,
   body[data-authenticated] .reply-trigger {
+    display: flex;
+  }
+
+  /* A reader's menu (Copy link, Share as image) renders only for a reader,
+     so it shows without the signed-in flag. */
+  .post-menu-trigger[data-share-menu-trigger] {
     display: flex;
   }
 
@@ -3969,7 +3847,7 @@
     border: 1px solid color-mix(in srgb, var(--site-divider) 74%, white 26%);
     background: color-mix(
       in srgb,
-      var(--site-elevated-bg) 94%,
+      var(--site-page-bg) 94%,
       var(--site-page-bg) 6%
     );
     box-shadow:
@@ -4014,7 +3892,7 @@
   .post-menu-panel-back:hover,
   .post-menu-panel-back:focus-visible {
     outline: none;
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 66%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 66%, transparent);
     color: var(--site-text-primary);
   }
 
@@ -4210,7 +4088,7 @@
   .post-menu-panel [role="menuitem"]:focus-visible,
   .post-menu-panel [role="menuitemradio"]:focus-visible {
     outline: none;
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 72%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 72%, transparent);
   }
 
   .post-menu-panel .post-menu-item {
@@ -4218,7 +4096,7 @@
   }
 
   .post-menu-item-active {
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 82%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 82%, transparent);
   }
 
   .post-menu-item-icon,
@@ -4374,7 +4252,7 @@
   .post-menu-panel .post-menu-row .post-menu-row-action:hover,
   .post-menu-panel .post-menu-row .post-menu-row-action:focus-visible {
     outline: none;
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 72%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 72%, transparent);
     color: var(--site-text-primary);
   }
 
@@ -4415,7 +4293,7 @@
     padding: 0.65rem 0.78rem;
     border: 1px solid color-mix(in srgb, var(--site-divider) 62%, transparent);
     border-radius: 0.85rem;
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 72%, white 28%);
+    background: color-mix(in srgb, var(--site-subtle-bg) 72%, white 28%);
     color: var(--site-text-secondary);
   }
 
@@ -4465,7 +4343,7 @@
   .post-menu-picker-option:hover,
   .post-menu-picker-option:focus-visible {
     outline: none;
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 78%, white 22%);
+    background: color-mix(in srgb, var(--site-subtle-bg) 78%, white 22%);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, white 22%, transparent);
   }
 
@@ -4567,7 +4445,7 @@
   .post-menu-picker-add:hover,
   .post-menu-picker-add:focus-visible {
     outline: none;
-    background: color-mix(in srgb, var(--site-nav-hover-bg) 72%, transparent);
+    background: color-mix(in srgb, var(--site-subtle-bg) 72%, transparent);
   }
 
   /* --- Collection Quick Dialog -------------------------------------------- */
@@ -4596,7 +4474,7 @@
     border-radius: 1.35rem;
     background: color-mix(
       in srgb,
-      var(--site-elevated-bg) 94%,
+      var(--site-page-bg) 94%,
       var(--site-page-bg) 6%
     );
     color: var(--site-text-primary);
@@ -4633,8 +4511,8 @@
     appearance: none;
     background: color-mix(
       in srgb,
-      var(--site-nav-hover-bg) 58%,
-      var(--site-elevated-bg)
+      var(--site-subtle-bg) 58%,
+      var(--site-page-bg)
     );
     border: 1px solid
       color-mix(in srgb, var(--site-text-primary) 7%, transparent);
@@ -4655,8 +4533,8 @@
     color: var(--site-text-primary);
     background: color-mix(
       in srgb,
-      var(--site-nav-hover-bg) 76%,
-      var(--site-elevated-bg)
+      var(--site-subtle-bg) 76%,
+      var(--site-page-bg)
     );
     border-color: color-mix(in srgb, var(--site-text-primary) 10%, transparent);
   }
@@ -4711,7 +4589,7 @@
     border-color: color-mix(in srgb, var(--site-divider) 72%, transparent);
     background-color: color-mix(
       in srgb,
-      var(--site-elevated-bg) 88%,
+      var(--site-page-bg) 88%,
       var(--site-page-bg) 12%
     );
     border-radius: 0.95rem;
@@ -4735,8 +4613,8 @@
     border-radius: 1rem;
     background: color-mix(
       in srgb,
-      var(--site-nav-hover-bg) 54%,
-      var(--site-elevated-bg)
+      var(--site-subtle-bg) 54%,
+      var(--site-page-bg)
     );
     padding: 0.95rem 1rem;
   }
@@ -4763,8 +4641,8 @@
     appearance: none;
     background: color-mix(
       in srgb,
-      var(--site-elevated-bg) 62%,
-      var(--site-nav-hover-bg)
+      var(--site-page-bg) 62%,
+      var(--site-subtle-bg)
     );
     border: 1px solid
       color-mix(in srgb, var(--site-text-primary) 7%, transparent);
@@ -4785,23 +4663,10 @@
   .collection-quick-link-action:hover {
     background: color-mix(
       in srgb,
-      var(--site-nav-hover-bg) 84%,
-      var(--site-elevated-bg)
+      var(--site-subtle-bg) 84%,
+      var(--site-page-bg)
     );
     border-color: color-mix(in srgb, var(--site-text-primary) 10%, transparent);
-  }
-
-  @media (max-width: 699px) {
-    .site-content-mobile-compose-enabled {
-      padding-bottom: max(
-        var(--space-2xl),
-        calc(env(safe-area-inset-bottom) + 5.75rem)
-      );
-    }
-
-    .site-mobile-compose-fab {
-      display: inline-flex;
-    }
   }
 
   /* =========================================================================
@@ -5384,7 +5249,6 @@
   .home-branding-credit {
     margin-top: var(--space-xl);
     padding-bottom: var(--space-xl);
-    text-align: center;
     color: var(--site-text-secondary);
     font-size: var(--type-base);
   }
@@ -5820,8 +5684,8 @@
   .archive-tile {
     --archive-tile-fade-bg: color-mix(
       in srgb,
-      var(--site-elevated-bg) 92%,
-      var(--site-nav-hover-bg)
+      var(--site-page-bg) 92%,
+      var(--site-subtle-bg)
     );
     position: relative;
     aspect-ratio: 1;
@@ -6048,8 +5912,8 @@
   .archive-tile-text {
     --archive-tile-fade-bg: color-mix(
       in srgb,
-      var(--site-elevated-bg) 94%,
-      var(--site-nav-hover-bg)
+      var(--site-page-bg) 94%,
+      var(--site-subtle-bg)
     );
     background: var(--archive-tile-fade-bg);
   }
@@ -6075,8 +5939,8 @@
   .archive-tile-image {
     --archive-tile-fade-bg: color-mix(
       in srgb,
-      var(--site-elevated-bg) 88%,
-      var(--site-nav-hover-bg)
+      var(--site-page-bg) 88%,
+      var(--site-subtle-bg)
     );
     background: var(--archive-tile-fade-bg);
   }
@@ -6739,13 +6603,13 @@
 
   /* --- Internal theme sample page --------------------------------------- */
 
-  body:has([data-page="theme-sample"]) .site-header,
-  body:has([data-page="theme-sample"]) .site-main,
-  body:has([data-page="theme-sample"]) .site-footer {
+  body:has(.theme-sample-page) .site-header,
+  body:has(.theme-sample-page) .site-main,
+  body:has(.theme-sample-page) .site-footer {
     max-width: min(1240px, calc(100vw - 1.5rem));
   }
 
-  [data-page="theme-sample"] .theme-sample-feed-preview-inner {
+  .theme-sample-page .theme-sample-feed-preview-inner {
     width: min(
       100%,
       calc(var(--content-max-width) - (var(--site-padding) * 2))
@@ -6753,7 +6617,7 @@
     margin-inline: auto;
   }
 
-  [data-page="theme-sample"] code {
+  .theme-sample-page code {
     overflow-wrap: anywhere;
   }
 
@@ -6791,7 +6655,7 @@
  * ------------------------------------------------------------------------- */
 
 :is(
-  [data-post-view] [data-page="post"] [data-post-body].post-detail-body,
+  [data-post-view] .post-detail [data-post-body].post-detail-body,
   [data-timeline-item] article[data-post] > [data-post-body].prose
 ) {
   --jant-footnote-rail-enabled: 0;
@@ -6800,7 +6664,7 @@
 @media screen {
   @container post-view (min-width: 56rem) {
     :is(
-      [data-post-view] [data-page="post"] [data-post-body].post-detail-body,
+      [data-post-view] .post-detail [data-post-body].post-detail-body,
       [data-timeline-item] article[data-post] > [data-post-body].prose
     ) {
       --jant-footnote-rail-enabled: 1;

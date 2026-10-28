@@ -1,115 +1,84 @@
 # 导出与导入
 
-本文涉及的所有命令应在已安装 `@jant/core` 的 Jant 项目目录中运行。通过 `create-jant` 创建的站点，通常即为项目根目录。
-
 ## 选择合适的工具
 
-| 需求                       | 使用                                             |
-| -------------------------- | ------------------------------------------------ |
-| 跨 Jant 站点迁移内容       | `site export` 与 `site import`                   |
-| 生成可移植的静态归档       | `site export`                                    |
-| 按原样恢复内部 ID 与存储键 | `site snapshot export` 与 `site snapshot import` |
-| 导出原始数据库 SQL         | `db export`                                      |
-| 从别的博客或 CMS 迁入内容  | 交给 AI 助手（见下文）                           |
+| 需求                                         | 使用                                             |
+| -------------------------------------------- | ------------------------------------------------ |
+| 把其他平台的旧博客迁进 Jant                  | 交给 AI 助手（见下文）                           |
+| 在 Jant 站点之间迁移内容，或留一份可移植归档 | `site export` 与 `site import`                   |
+| 按原样恢复站点，内部 ID 与存储 key 不变      | `site snapshot export` 与 `site snapshot import` |
+| 把数据库导出为 SQL                           | `db export`                                      |
 
-`site export` 与 `site snapshot` 的差别不在于「用途」，而在于输出物本身：
+`site export` 和 `site snapshot` 的输出完全不同：
 
 | 维度                      | `site export`                                   | `site snapshot`                      |
 | ------------------------- | ----------------------------------------------- | ------------------------------------ |
 | 输出格式                  | Hugo 站点目录（Markdown + front matter + 媒体） | SQL dump + 对象存储 dump（二进制包） |
-| 是否人类可读              | 是，可直接用编辑器改 Markdown                   | 否，需要 Jant 解析                   |
+| 能否直接阅读              | 能，用任意编辑器改 Markdown                     | 不能，只有 Jant 能解析               |
 | 能否用 Hugo 直接构建      | 能                                              | 不能                                 |
 | 内部 ID（post id、media） | 丢弃，导入时重新分配                            | 原样保留                             |
-| 草稿与私密 post           | 包含，front matter 标 `draft: true`             | 包含                                 |
+| 草稿与私密帖子            | 包含，front matter 标 `draft: true`             | 包含                                 |
 | users / sessions / tokens | 不包含                                          | 不包含                               |
 | 媒体存储 key              | 重新生成                                        | 原样保留                             |
 
-一句话决策：换域名、换托管、用 Hugo 自建、长期存档——`site export`。同站恢复、克隆到 staging、在结构相同的部署间迁移——`site snapshot`。
+换域名、换托管、自己用 Hugo 构建、长期存档，用 `site export`。恢复同一个站点、克隆到 staging、在结构相同的部署之间迁移，用 `site snapshot`。
 
-本页只讲一次性命令；要持续备份，看 [备份与恢复](backups.md)；要把导出长期同步到 GitHub 仓库，看 [GitHub 同步](github-sync.md)，它复用同一份 `site export` 格式。
+这些都是一次性命令。定期备份见 [备份与恢复](backups.md)。[GitHub 同步](github-sync.md) 会按 `site export` 的格式持续更新一个仓库。
 
 ## 从别的博客或 CMS 迁移过来
 
-上面这些工具是在 Jant 站点之间搬内容。从非 Jant 来源迁入——WordPress、Tumblr、Ghost、一份 RSS 导出——没有固定的导入器，因为每个平台的导出格式都不一样。
+其他平台没有现成的导入器，WordPress、Tumblr、Ghost 等平台的导出格式各不相同。迁移交给 AI 助手来做。
 
-这种情况把当前站点的 `/skill.md` 地址（例如 `https://example.com/skill.md`）交给 AI 助手即可。这是一份绑定当前站点的 Jant 操作指南，其中包含专门的导入流程，讲清楚了数据模型、来源格式映射、断点续跑和迁移验证。把导出文件和一个 [API token](automation-and-api.md) 给它，让它来跑这次迁移。
+创建 Jant 站点后，把下面这句话发给 Claude Code、Codex 这类能运行命令的 AI 助手，`example.com` 换成你的站点地址：
 
-## 运行环境
-
-本文档涉及的命令分为两类，所需环境差异显著。运行前需确认所处类别与对应配置。
-
-### HTTP API 类
-
-`site export <url>`、`site import <url>`、`site pull-media`
-
-通过站点公开 URL 调用 HTTP API，**不直接访问数据库或对象存储**，因此可在任意机器上对任意可达的 Jant 站点运行，无须站点的 `wrangler.toml` 或 `DATABASE_URL`。
-
-需要一个 API token：
-
-```bash
-export JANT_API_TOKEN=jnt_your_token
+```text
+读取 https://example.com/skill.md，帮我把旧博客迁移到这里。
 ```
 
-Token 在站点的 **Settings → API Tokens** 中生成，亦可通过 `--token` 直接传入。
-
-### 直连数据存储类
-
-`site snapshot export/import`、`db export`
-
-直接读写 Jant 的数据库与媒体存储，因此必须在站点对应的部署环境中运行（持有该站点的 `wrangler.toml`，或与该站点共享 `DATABASE_URL`、`LOCAL_STORAGE_PATH`、`S3_*` 等运行时变量）。
-
-运行目标按以下规则解析：
-
-| 标志       | 目标                  | 所需环境                               |
-| ---------- | --------------------- | -------------------------------------- |
-| `--remote` | 远端 Cloudflare D1/R2 | `wrangler.toml`，wrangler 已认证       |
-| `--local`  | 本地 D1（wrangler）   | `wrangler.toml`                        |
-| `--node`   | Node runtime          | `DATABASE_URL` 与对应 storage 配置变量 |
-
-不传任何标志时按以下顺序自动选择目标：
-
-1. shell 中存在 `DATABASE_URL` 或 `DATA_DIR` → Node runtime；
-2. 否则 → 本地 D1（要求工作目录下有 `wrangler.toml`）。
-
-CLI 启动时会输出一行 `[jant] target = ...`，用于核对实际选中的目标。
-
-`--remote` 经由本地 `wrangler` CLI 调用，需先 `wrangler login` 或设置 `CLOUDFLARE_API_TOKEN`；`--config` 用于指定非默认的 wrangler 配置文件路径。
-
-CLI 启动时会自动加载 `<cwd>/.env.node`，但已通过 `export` 设置的 shell 变量优先级更高、不会被覆盖。把这些变量写进 `.env.node` 即可，不需要每次手动 `source`。
-
-用 `JANT_ENV_FILE` 可以指定加载另一个文件，一台机器管理多个部署时会用到。把 `JANT_ENV_FILE` 设为空值则完全跳过该文件 —— 自动化任务用这种方式把本地 `.env.node` 挡在环境之外。
-
-完整的环境变量列表见 [配置](configuration.md)。
+`/skill.md` 是写给 AI 助手的站点操作指南。它告诉 AI 助手怎么完成迁移：问清旧博客在哪，帮你导出，第一次写入前再要 [API token](automation-and-api.md)。
 
 ## 站点导出（`site export`）
 
-`site export` 生成兼容 Hugo 的站点导出，输出格式为 ZIP 归档或目录。典型用途包括跨 Jant 站点迁移内容、在本地用 Hugo 构建预览、长期保留可移植的内容归档。
+`site export` 把站点导出为 Hugo 站点，格式可以是 ZIP 或目录。它和 `site import`、`site pull-media` 一样走站点的 HTTP API，能在任何可以访问该站点的机器上运行，不需要站点的 `wrangler.toml` 或 `DATABASE_URL`。在安装了 `@jant/core` 的 Jant 项目目录里运行（用 `create-jant` 创建的站点就是项目根目录），并提供 API token：在 **Settings → API Tokens** 生成，写进 `JANT_API_TOKEN` 或用 `--token` 传入。
 
-导出默认会把引用的媒体文件下载至 `static/media/`，使归档自包含。如果导出由 Jant 生成，`data/jant.toml` 会同时保留 round-trip 导入所需的元数据，包括头部导航与 collections directory 结构（顺序、divider、自定义链接）。
+```bash
+JANT_API_TOKEN=jnt_your_token npx jant site export --url https://your-site.example --output ./jant-site-export.zip
+```
+
+`--output` 的路径不以 `.zip` 结尾时，导出到这个目录，目录必须为空。要查看导出结果，导出到目录再运行 Hugo：
+
+```bash
+npx jant site export --url https://your-site.example --output ./jant-site
+cd ./jant-site && hugo serve
+```
 
 ### 包含与不包含
 
 包含：
 
-- **所有 post**（含 Thread 的回复）。草稿与私密 post 也会进入归档，front matter 标 `draft: true`，Hugo 默认不构建它们；需要 `hugo --buildDrafts` 才会渲染。
-- post 与头像引用的媒体文件，默认下载到 `static/media/`，可加 `--no-pull-media` 跳过。
-- collections、collections directory（顺序、divider、自定义链接）、头部导航——写入 `data/jant.toml`。
-- 每个 post 的 `featured_at`、`pinned_at`，以及写在 root bundle 上的 Thread 级 collection 归属，都会进入 front matter 供 round-trip 还原。
-- **当前 slug 加历史别名/重定向**：post 改过 slug 时，`path_registry` 里的旧 slug 会作为 `redirect` 行保留下来；导出时和 `alias` 行一并写进 root post 的 `aliases:`，Hugo 通过自定义 `alias.html` 模板让旧链接继续可用。
-- 站点显示设置：`SITE_NAME`、`SITE_DESCRIPTION`、`SITE_LANGUAGE`、主题、字型、自定义 CSS、favicon 等，写入 `data/jant.toml` 与 `hugo.toml`。
+- 所有帖子，含 Thread 的回复。草稿和私密帖子也在其中，front matter 标 `draft: true`，Hugo 只在 `hugo --buildDrafts` 时构建它们。
+- 帖子和头像用到的媒体，下载到 `static/media/`，归档不依赖原站。`--no-pull-media` 跳过下载。
+- 合集、合集目录（顺序、分隔线、自定义链接及其说明）和导航（位置、标签、每一项指向的合集、智能合集或页面），写在 `data/jant.toml`。
+- 智能合集，条件和排序写在各自的 `content/{slug}/_index.md`。主题用这些条件筛选导出的帖子，页面列出的内容和 Jant 上一致，仓库里加了帖子也会跟着更新。
+- 在 **Settings → Custom URLs** 里设置的重定向，写在 `data/jant.toml` 和 `static/_redirects`。
+- 每篇帖子的 `featured_at`、`pinned_at`，以及写在 root bundle 上的 Thread 合集归属，写在 front matter。
+- 当前 slug，以及旧 slug 和别名，写在 root 帖子的 `aliases:` 里。自定义的 `alias.html` 模板让旧链接继续可用。
+- 站点设置，写在 `data/jant.toml` 和 `hugo.toml`：名称、描述、语言、时区、主 feed、主题、字型、自定义 CSS、页脚、头像和图标。[文件字段一览](#文件字段一览)逐项列出。
 
 不包含：
 
-- users、sessions、accounts、verifications、API tokens——账户与认证数据，跨站点不可移植。
-- 站点级运行时配置（`wrangler.toml`、环境变量、绑定）。
-- **智能合集。** 它的成员是一条查询，而导出出来的 Hugo 站点没有数据库可以跑这条查询。诚实的做法只有两种：不导出，或者把今天命中的结果冻结下来、挂在一个承诺会持续更新的名字底下。导出选前者。帖子本身一篇不少——智能合集只是把帖子聚在一起，并不拥有它们——丢的只是「聚」这件事，在目标站点重建一次即可。
+- users、sessions、accounts、verifications 和 API tokens。账户数据不能跨站点迁移。
+- 运行时配置：`wrangler.toml`、环境变量、绑定。
+- 代码注入（**设置 → 代码注入**）。自定义 CSS 会带走，自定义 head 和 body HTML 不会，所以导入导出包不能在导入的站点上执行脚本。
+- GitHub 同步和 Telegram 绑定。它们指向的仓库或聊天不属于目标站点。
 
 ### 导出结构
 
-导出本质是一个标准 Hugo 站点。模板与静态资源被打包为 `themes/jant/` 主题，`hugo.toml` 中设置 `theme = "jant"`：
+导出是一个标准 Hugo 站点。模板和静态资源打包成 `themes/jant/` 主题，`hugo.toml` 里设置了 `theme = "jant"`：
 
 ```
 hugo.toml
+wrangler.jsonc            Cloudflare Workers 部署配置
 content/                  posts、collections、sections
   {slug}/
     _index.md             thread root（branch bundle）
@@ -124,72 +93,160 @@ layouts/                  用户自定义覆盖（可选）
 static/                   用户自有静态文件 + 下载的媒体
 ```
 
-根目录下的 `layouts/` 与 `static/` 由用户自由维护。Hugo 优先加载根目录的 `layouts/<name>.html` 而非 `themes/jant/layouts/<name>.html`，因此可以在不 fork 主题的前提下单独覆盖任意模板。
+### 部署到 Cloudflare Workers
 
-### URL 方案
+`wrangler.jsonc` 指定 Worker 名称，用 `hugo --gc --minify` 构建，再上传 `public/`，所以部署就是 `npx wrangler deploy` 这一条命令。Hugo 站点没有 `package.json`，Cloudflare 连接仓库时给出的构建命令是空的，保持为空；两边都填，Hugo 会跑两遍。`HUGO_VERSION` 不用设，主题用 Cloudflare 构建镜像自带的 Hugo 就能构建。
 
-| URL                   | 渲染内容                                         |
-| --------------------- | ------------------------------------------------ |
-| `/`                   | 首页：置顶 post 优先，随后是非置顶 post 的第一页 |
-| `/page/N/`            | 非置顶 post 的分页（N ≥ 2）                      |
-| `/archive/`           | 归档：所有已发布 post，按时间倒序                |
-| `/archive/page/N/`    | 归档分页（N ≥ 2）                                |
-| `/featured/`          | 精选：标记为 Featured 的 post，最新优先          |
-| `/{slug}/`            | 单条 Thread（root post 与内联回复）              |
-| `/{reply-slug}/`      | Alias，重定向至 `/{root-slug}/#{reply-slug}`     |
-| `/{collection-slug}/` | 一个 collection 中的完整 Threads                 |
-| `/collections/`       | Collections directory                            |
+`name` 必须和 Cloudflare 控制台里的 Worker 名称一致。不一致时 Workers Builds 会构建失败，手动部署则会部署到另一个 Worker。Cloudflare 用仓库名给从仓库导入的 Worker 命名，所以 [GitHub 同步](github-sync.md) 推送的仓库用仓库名（`My_Blog` 得到 `my-blog`）。下载的导出没有仓库，用 GitHub 同步为这个站点建仓库时建议的名字（`www.example.com` 得到 `example-jant-sync`）。Worker 叫别的名字时，把 `name` 改成一致。Cloudflare 把这个 Worker 的构建 token 命名为 `<worker 名> build token`，可以从这里看到名称。
 
-每页条数由 Jant **Settings → Posts per page** 控制。
+`wrangler.jsonc` 只写入一次。之后 GitHub 同步推送不会覆盖它，改过的名字会保留。
 
-开启 **Settings → Feeds** 时，Atom feed 与对应页面一起导出：
+### URL 结构
 
-| URL                            | 内容            |
-| ------------------------------ | --------------- |
-| `/index.xml`                   | 首页时间线      |
-| `/featured/index.xml`          | 精选            |
-| `/archive/index.xml`           | 全部归档        |
-| `/{collection-slug}/index.xml` | 单个 collection |
+| URL                         | 渲染内容                                     |
+| --------------------------- | -------------------------------------------- |
+| `/`                         | 首页：先列置顶帖子，然后是非置顶帖子的第一页 |
+| `/page/N/`                  | 非置顶帖子的分页（N ≥ 2）                    |
+| `/archive/`                 | 归档：所有已发布帖子，按时间倒序             |
+| `/archive/page/N/`          | 归档分页（N ≥ 2）                            |
+| `/featured/`                | Featured：标为 Featured 的帖子，按时间倒序   |
+| `/{slug}/`                  | 单个 Thread（root 帖子和内联回复）           |
+| `/{reply-slug}/`            | 别名，重定向到 `/{root-slug}/#{reply-slug}`  |
+| `/{collection-slug}/`       | 一个合集里的完整 Thread                      |
+| `/{smart-collection-slug}/` | 一个智能合集：符合条件的完整 Thread          |
+| `/collections/`             | 合集目录                                     |
+
+每页条数跟随 Jant 的 **Settings → Posts per page**。
+
+开启 **Settings → Feeds** 时，导出还会生成 Atom feed：
+
+| URL                                  | 内容         |
+| ------------------------------------ | ------------ |
+| `/index.xml`                         | 首页时间线   |
+| `/featured/index.xml`                | Featured     |
+| `/archive/index.xml`                 | 全部归档     |
+| `/{collection-slug}/index.xml`       | 单个合集     |
+| `/{smart-collection-slug}/index.xml` | 单个智能合集 |
 
 ### Feed 地址会变
 
-Jant 的 feed 都在 `/feed` 下 —— `/feed`、`/latest/feed`、`/featured/feed`、`/archive/feed`、`/{collection-slug}/feed`。Hugo 把同样的内容放在各 section 里的 `index.xml`，导出站上旧地址一个都不存在，而所有已经订阅的读者手里拿的正是旧地址。
+Jant 的 feed 地址是 `/feed`、`/latest/feed`、`/featured/feed`、`/archive/feed`，以及每个合集和智能合集的 `/{slug}/feed`。Hugo 把同样的 feed 写成各 section 里的 `index.xml`，所以订阅者用的地址在导出站上都不存在。
 
-导出会写一份 `static/_redirects`，把每个旧地址 301 到新地址。Cloudflare Pages 和 Netlify 会直接读这个文件，站点迁到这两家不会丢订阅者。其他 host 会忽略它 —— 把域名指过去之前，先把里面的规则翻译成该 host 自己的重定向配置。
+导出会写一份 `static/_redirects`，把每个旧地址 301 到新地址。Cloudflare Pages 和 Netlify 会直接读取这个文件，迁到这两家不会丢订阅者。其他 host 会忽略它，把域名指过去之前，先把里面的规则改写成该 host 的重定向配置。
 
-保住 `/{reply-slug}/` 链接的 `aliases:` 机制对 feed 无效：alias 页面靠 meta refresh 加脚本跳转，而 feed 阅读器只抓取并解析 XML，两者都不执行。
+让旧帖子链接继续可用的 `aliases:` 页面管不了 feed：它靠 meta refresh 和脚本跳转，feed 阅读器两样都不执行。
 
-导出站也没有 `/subscribe` 页面 —— 那是 Jant 运行时的一部分。导航里的 **Subscribe** 会指向主 feed 文件。
+feed 条目沿用 Jant 给的 ID，搬站之后，feed 阅读器不会把旧帖子再显示一遍。ID 写在每篇 root 帖子的 `feed_id` 里，是帖子在 Jant 上的地址。导出页面的地址和它不同：末尾多一个斜杠，设过自定义 URL 的帖子还会换成 slug。不要改 `feed_id`，改了 feed 阅读器会把这篇帖子再显示一遍。之后在 Hugo 里写的帖子没有 `feed_id`，用页面地址。
 
-### Round-trip 保真
+导出站没有 Jant 的 `/subscribe` 页面，导航里的 **Subscribe** 指向主 feed 文件。
 
-`site export` → `site import` 一次往返会完整保留每个 post 的 Featured、置顶状态，以及每个 Thread 的 collection 归属：
+### 导出再导入
 
-- `featured_at` 与 `pinned_at` 在 front matter 里写 ISO 时间戳，而非布尔值；重新导入后会恢复到该 post 当时被 Feature 或置顶的具体时刻。
-- Thread root 的 front matter 顶层 `collections` 数组中，每条 entry 携带 `collected_at`、`position` 与 per-collection `pinned_at`；回复 leaf bundle 不再重复 Thread 归属。
-- Import 仍兼容旧导出中逐 post 写入的 `collections`：导入前会按 Thread 取并集，重复归属取最新 `collected_at`、最新 `pinned_at` 与最小 `position`。
-- Thread root 的 `last_activity_at` 会保留 **Reply quietly** 的效果。导出里没有 per-reply 的 quiet 字段；导入时会用 root 的活动时间判断哪些回复原本不应把 thread bump 到 Latest 顶部。
+`site import` 会还原 `site export` 写下的这些状态：
 
-未在文档中列出的字段属于 Jant 内部使用，不要手动改：再次导入时它们会原样写回数据库，覆盖你后来在 Jant 中的修改。
+- `featured_at` 和 `pinned_at` 是 ISO 时间戳，重新导入后恢复到帖子被 Featured 或置顶的具体时刻。
+- Thread 的合集归属写在 root 的 `collections` 数组里，每条带 `collected_at`、`position` 和该合集内的 `pinned_at`。回复不重复写。旧版导出在每篇帖子上都写了 `collections`，也能导入。
+- 用 **Reply quietly** 发布的回复带 `quiet_reply: true`。没有这个字段的旧版导出，导入时读取 root 的 `last_activity_at`，这类回复不会把 Thread 顶上去。
+- 每条回复的 `weight` 是它在 Thread 里的位置，导入按这个顺序创建回复。同一秒发布的帖子也保持原来的先后。
+- `created` 和 `updated` 记录帖子的写作时间和最后编辑时间，与 `date` 不同时才写。搬站之后，feed 和 sitemap 报的仍是原来的时间。
+- 视频和音频保留 `duration_seconds`。
+- 智能合集的 `selection` 记录它的条件，合集条件写的是合集的 slug。导入在合集之后重建智能合集。条件里的合集没有一起导入时，这个智能合集会跳过并给出警告：少了这个条件，它会收进原本不属于它的帖子。
 
-### 导出站点
+### 文件字段一览
 
-需要 `JANT_API_TOKEN` 环境变量（或 `--token`），见 [运行环境 § HTTP API 类](#http-api-类)。
+下面几张表列出 `site export` 写出的每个字段。标为「**仅主题**」的字段是给内置 Hugo 主题用的，任何版本都可能改变，`site import` 也不读取；其余字段只在大版本里变动。这些字段都不要手动修改：下次导入会把它们原样写回数据库，覆盖你之后在 Jant 里做的修改。
 
-```bash
-JANT_API_TOKEN=jnt_your_token npx jant site export https://your-site.example --output ./jant-site-export.zip
-```
+帖子文件：Thread 的 root 是 `content/<slug>/_index.md`，每条回复是 `content/<root>/<slug>/index.md`。
 
-若需直接查看生成的站点结构，可导出至目录：
+| 字段                        | 位置 | 说明                                                                                              |
+| --------------------------- | ---- | ------------------------------------------------------------------------------------------------- |
+| `id`                        | 都有 | 帖子 TypeID                                                                                       |
+| `title`                     | 都有 | 引用没有                                                                                          |
+| `date`                      | 都有 | 发布时间，UTC 的 RFC 3339；草稿是创建时间                                                         |
+| `created`、`updated`        | 都有 | 写作时间和最后编辑时间，和 `date` 不同时才写                                                      |
+| `slug`                      | 都有 | 规范 slug                                                                                         |
+| `type`                      | 都有 | `post`                                                                                            |
+| `draft`                     | 都有 | 草稿和私密帖子为 `true`，Hugo 只在 `--buildDrafts` 时构建                                         |
+| `format`                    | 都有 | `note`、`link` 或 `quote`                                                                         |
+| `status`                    | 都有 | `published` 或 `draft`                                                                            |
+| `visibility`                | 都有 | `public`、`latest_hidden` 或 `private`                                                            |
+| `summary_text`              | 都有 | 仅主题：纯文本摘要                                                                                |
+| `link_url`                  | 都有 | 链接帖子的链接                                                                                    |
+| `source_name`、`source_url` | 都有 | 引用的出处                                                                                        |
+| `quote_text`                | 都有 | 引用的原文                                                                                        |
+| `rating`                    | 都有 | `1` 到 `5`                                                                                        |
+| `featured_at`、`pinned_at`  | 都有 | UTC 的 RFC 3339                                                                                   |
+| `media`                     | 都有 | 按顺序的附件，见下表                                                                              |
+| `aliases`                   | root | Hugo 的别名页：root 的自定义 URL 和每条回复的 slug                                                |
+| `root_aliases`              | root | root 的自定义 URL，导入时重建                                                                     |
+| `language`                  | root | BCP 47 内容语言，整个 Thread 相同                                                                 |
+| `translation_group`         | root | 互为译文的帖子共用                                                                                |
+| `last_activity_at`          | root | Thread 里最新一篇帖子（不含用 **Reply quietly** 发布的回复），和 `date` 不同时才写                |
+| `collections`               | root | Thread 所属的合集，每项含 `slug`、`collected_at`、`position`、`pinned_at`，以及仅主题用的 `title` |
+| `weight`                    | 回复 | 在 Thread 里的位置                                                                                |
+| `build`                     | 回复 | Hugo 构建选项 `render` 和 `list`，让回复不出现在列表里                                            |
+| `quiet_reply`               | 回复 | 用 **Reply quietly** 发布的回复为 `true`                                                          |
+| `feed_id`                   | root | 仅主题：Jant 的 feed 给这个 Thread 的条目 ID                                                      |
+| `featured_post_ids`         | root | 仅主题                                                                                            |
+| `featured_sort_at`          | root | 仅主题                                                                                            |
+| `truncated`                 | 都有 | 仅主题                                                                                            |
 
-```bash
-npx jant site export https://your-site.example --directory ./jant-site
-cd ./jant-site && hugo serve
-```
+`media` 的每一项：
+
+| 字段                                 | 说明                                                |
+| ------------------------------------ | --------------------------------------------------- |
+| `id`                                 | 仅主题：媒体 TypeID                                 |
+| `kind`                               | `image`、`video`、`audio`、`text` 或 `document`     |
+| `src`                                | 文件：拉取后是 `static/media/` 下的路径，否则是 URL |
+| `mime_type`、`original_name`、`size` | 文件类型、上传时的文件名、字节数                    |
+| `width`、`height`                    | 图片和视频的像素尺寸                                |
+| `alt`、`blurhash`                    | 替代文本和图片占位                                  |
+| `duration_seconds`                   | 音频和视频的时长                                    |
+| `waveform`                           | 音频：播放器绘制的波形峰值                          |
+| `poster`                             | 视频的封面帧                                        |
+| `summary`、`chars`                   | 文本附件的摘要和长度                                |
+| `position`                           | 仅主题                                              |
+
+合集页：`content/<slug>/_index.md`，`type` 为 `collection` 或 `smart_collection`。
+
+| 字段             | 说明                                        |
+| ---------------- | ------------------------------------------- |
+| `title`、`slug`  | 标题和地址                                  |
+| `type`           | `collection` 或 `smart_collection`          |
+| `aliases`        | 合集的自定义 URL，每个以斜杠开头            |
+| `description`    | 说明                                        |
+| `sort_order`     | `newest`、`oldest` 或 `rating_desc`         |
+| `selection`      | 智能合集的条件，合集按 slug 指定            |
+| `display_layout` | 智能合集的布局 `list` 或 `grid`，设置了才写 |
+| `entry_count`    | 仅主题                                      |
+| `outputs`        | 仅主题：页面渲染的 Hugo 输出                |
+
+其他栏目页（`content/_index.md`、`archive/`、`featured/`、`collections/`）属于主题。
+
+`data/jant.toml`：
+
+| 键                                                                                                                                  | 说明                                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`、`format`                                                                                                                 | 导出格式，见[冲突与约束](#冲突与约束)                                                                                                     |
+| `site_name`、`site_description`、`site_language`                                                                                    | 站点设置                                                                                                                                  |
+| `site_footer_markdown`                                                                                                              | 页脚原文                                                                                                                                  |
+| `theme_id`、`default_theme_id`、`font_theme_id`、`theme_mode`                                                                       | 外观                                                                                                                                      |
+| `noindex`、`public_api_enabled`、`rss_feeds_enabled`                                                                                | 站点设置                                                                                                                                  |
+| `time_zone`、`main_rss_feed`                                                                                                        | 站点设置                                                                                                                                  |
+| `additional_languages`、`multilingual_enabled`                                                                                      | `site_language` 之外的语言，以及是否各有自己的视图                                                                                        |
+| `show_header_avatar`、`show_jant_branding_on_home`                                                                                  | 页头和首页设置                                                                                                                            |
+| `site_avatar_mode`、`site_avatar_url`、`favicon_mode`、`favicon_path`、`apple_touch_mode`、`apple_touch_icon_path`                  | 头像和图标，以及文件位置                                                                                                                  |
+| `nav`                                                                                                                               | 导航项，每项含 `type`、`label`、`custom_label`、`url`、`placement`、`system_key`、`collection_slug`、`smart_collection_slug`、`post_slug` |
+| `directory`                                                                                                                         | 按顺序的合集目录，每项含 `type`、`slug`、`label`、`url`、`description`                                                                    |
+| `custom_url`                                                                                                                        | 自定义 URL，每项含 `kind`、`path`、`to`、`status`、`archive_query`；`path` 以斜杠开头，`to` 除非是别的站点的地址，也以斜杠开头            |
+| `page_size`、`archive_page_size`、`archive_default_layout`、`rss_feed_limit`、`generated_at`、`site_footer_html`、`favicon_version` | 仅主题                                                                                                                                    |
+| `title`、`description_html`、`entry_count`、`sequence`、`recent_activity_iso`、`recent_activity_label`                              | 仅主题，在 `directory` 的各项里                                                                                                           |
+
+导入还会读三个文件，先找 `static/`，再找导出写入的 `themes/jant/static/`：`custom.css`、`favicon.ico` 和 `apple-touch-icon.png`。
 
 ### 单独拉取媒体
 
-`site export` 默认下载媒体，但拉取步骤也可针对已存在的导出（目录或 ZIP）单独执行。常见场景：先前以 `--no-pull-media` 导出、导出后新增了媒体、或上一次拉取过程中断。
+`site pull-media` 对已有的导出（目录或 ZIP）单独执行媒体下载。适用于用 `--no-pull-media` 导出之后、导出后又新增了媒体，或上一次拉取中断的情况。
 
 ```bash
 # 针对已解压目录
@@ -202,119 +259,118 @@ npx jant site pull-media --path ./jant-site-export.zip
 npx jant site pull-media --path ./jant-site-export.zip --output ./pulled.zip
 ```
 
-该命令扫描所有 markdown 文件与 `hugo.toml`，把每个远程媒体引用下载至 `static/media/` 并重写为本地路径。操作是幂等的：`static/media/` 中已存在的文件会直接复用，不重复下载。下载失败的引用保留原 URL，不影响 Hugo 构建。
+它扫描所有 Markdown 文件和 `hugo.toml`，把每个远程媒体文件下载到 `static/media/`，并把引用改成本地路径。`static/media/` 里已有的文件直接复用，重复运行不会出问题。下载失败的文件保留原 URL，Hugo 照样能构建。
 
 ### 自定义导出
 
-`themes/jant/` 是打包后的 Jant 主题。如果该导出与 GitHub 仓库做了双向同步，每次 Jant 推送会按以下规则更新仓库：
+下次导出或 [GitHub 同步](github-sync.md) 推送都会覆盖 `themes/jant/**`，不要直接修改它。同步的仓库每次推送还会重写 `content/**`、`data/jant.toml`、`hugo.toml`、`.gitignore` 和 `README.md`，并删除这些路径下 Jant 不再生成的文件。根目录的 `layouts/`、`static/`、`data/` 下你自己的文件以及其他文件都不会被改动。自定义的方式：
 
-- **覆盖并清理**（managed paths）：`themes/jant/**`、`content/**`、`data/jant.toml`、`hugo.toml`、`.gitignore`、`README.md`。这些路径下 Jant 不再生成的文件会被删除，例如已删除的 post 对应目录。
-- **保留**（unmanaged paths）：根目录 `layouts/`、`static/`、`data/` 下用户自建的 Hugo data 文件，以及任何不在上面 managed 列表中的文件，都不会被覆盖或删除。
-
-因此自定义主题与新增静态资源应放在 unmanaged 路径里，不要直接编辑 `themes/jant/**`。
-
-支持的自定义方式：
-
-- **覆盖单个模板**：把 `themes/jant/layouts/<name>.html` 复制到根目录 `layouts/<name>.html`，然后编辑根目录副本。Hugo 优先加载根目录模板，不需要 fork 整个主题。
-- **新增静态文件**：放在根目录 `static/`，将以对应 URL 提供服务，并优先于 `themes/jant/static/` 下的同名文件。
-- **调整颜色、字体或布局细节**：用 Jant 中的 **Settings → Custom CSS**。该值在每次 export 时写入 `themes/jant/static/custom.css`，应通过 Settings 修改，而不是直接编辑仓库。
-
-直接编辑 `themes/jant/**` 不受支持，下次 sync 或 export 会覆盖修改。站点级配置请通过 Jant 的 **Settings** 调整，不要手动编辑 `hugo.toml`。
+- 改单个模板：把 `themes/jant/layouts/<name>.html` 复制到根目录 `layouts/<name>.html`，改这份副本。Hugo 优先加载根目录的模板。本页列出的 front matter 字段只在大版本里变动；主题的模板和 partial 任何版本都可能改变，升级 Jant 后要对照新主题检查复制出来的模板。
+- 额外的静态文件放在根目录 `static/`，同名时优先于 `themes/jant/static/` 里的文件。
+- 颜色、字体和布局细节在 Jant 的 **Settings → Custom CSS** 里改，每次导出都会写入 `themes/jant/static/custom.css`。
+- 站点级配置在 Jant 的 **Settings** 里改，不要改 `hugo.toml`。
 
 ## 站点导入（`site import`）
 
-`site import` 读取 site export 目录或 ZIP 并将其导入 Jant。典型用途包括 Jant 站点之间的迁移、从可移植导出中恢复内容、以及在写入前预览导入结果。
+`site import` 把一份导出（目录或 ZIP）导入 Jant 站点。先加 `--dry-run` 运行一遍：完整校验，不写任何数据。Dry run 不会连接站点，但 URL 仍然必填。
+
+```bash
+npx jant site import --url https://your-site.example --path ./jant-site-export.zip --dry-run
+```
+
+然后正式导入，需要 `JANT_API_TOKEN` 或 `--token`：
+
+```bash
+JANT_API_TOKEN=jnt_your_token npx jant site import --url https://your-site.example --path ./jant-site-export.zip
+```
 
 ### 冲突与约束
 
-Import 不做合并、不做覆盖、不做事务回滚——它逐条把入站 post 与 collection 的 slug 与目标站点的 `path_registry` 比对：
+导入逐条写入帖子和合集，不合并、不覆盖、不回滚。
 
-- 如果某个 slug 已被现有的 post、collection、alias 或 redirect 占用，命令立即终止；之前已经写入的内容**保留**在目标站点（部分写入状态需要手动清理）。
-- 目标站点不必完全为空，但实际上你只会把一份导出导进一个干净站点——和源站重叠的内容几乎一定会撞 slug。
-- 同一份导出内部如果存在重复 slug（例如手工编辑了多份 markdown 后再导入），同样会触发冲突并退出。
-- `--dry-run` 提前跑完整套校验，不写任何数据。推荐先 dry-run 再执行真正的 import。
+- 目标站点上某个 slug 已被帖子、合集、别名或重定向占用时，导入立即停止。停止前写入的内容会留在站点上，需要手动清理。
+- 导出内部有重复 slug（比如手动改过 Markdown 文件）时，同样会停止。
+- 目标站点不必是空的，但导出和源站重叠太多，实际上都是导入到一个干净的站点。
+- `data/jant.toml` 记录导出的格式 `version`。导出的格式比导入方能读的更新时，导入在写入任何数据之前停止，提示先升级 `@jant/core`。旧格式的导出可以导入。
 
 ### 清空目标站点
 
-迁移时如果遇到字段冲突或一次没导干净，目前没有「只清空内容、保留账号」的轻量入口。最快的做法是去 **Settings → Account & Data → Delete Account** 把账号连同内容一起删掉，再重新注册——这是初次迁移调试常用的快捷方式。流程会先强制下载一份 `site export` 作为最后的备份，再要求输入确认短语。
+Jant 目前没有「只删内容、保留账号」的单独操作。导入失败或只导了一部分时，最快的重来方式是 **Settings → Account & Data → Delete Account**，然后重新注册。这个流程会先要求下载一份 `site export` 作为最后的备份，再要求输入确认短语。
 
-托管站点上点这个 **Delete Account** 删的也是该站点的内容和账号，不影响计费、域名绑定和你在 jant.me 上的实例本身——重新注册后实例还在，可以直接重新初始化。
+托管站点上的 **Delete Account** 同样删除内容和账号，但计费、域名绑定和 jant.me 上的实例本身都会保留，重新注册后可以在同一个实例上重新设置。
 
-### 先执行 Dry Run
+### 跳过正文中的远程图片
 
-Dry-run 不会连接目标站点，但 URL 仍为必填项，以保持参数形态一致：
+默认情况下，导入会把所有媒体复制到目标站点：front matter `media:` 里声明的文件、正文中 `![](...)` 引用的图片（包括远程 URL）和头像。正文里的 URL 会改成新地址，源站下线后目标站点照常可用。
 
-```bash
-npx jant site import https://your-site.example --path ./jant-site-export.zip --dry-run
-```
-
-### 导入到站点
-
-与 `site export` 同样需要 `JANT_API_TOKEN`（或 `--token`）：
+如果不想把指向第三方 URL 的图片（imgur、Wikipedia 或任何 `https://` 链接）存进自己的存储，比如出于带宽或版权考虑，加 `--skip-remote-media`：
 
 ```bash
-JANT_API_TOKEN=jnt_your_token npx jant site import https://your-site.example --path ./jant-site-export.zip
+npx jant site import --url https://your-site.example --path ./jant-site-export.zip --skip-remote-media
 ```
 
-### 跳过 body 中的远程图片
+加上后，相对路径（`/media/...`、`./foo.png`）属于源站自己的文件，仍会上传；绝对 URL（`https://...`、`//cdn...`）原样留在正文里。front matter `media:`、头像和文本附件始终会迁移。
 
-默认情况下，import 会把所有媒体重新托管到目标站点：front matter `media:` 中声明的资源、body 中 `![](...)` 引用的图片（包括远程 URL）以及头像，都会被抓取上传，body 中的 URL 也会重写至新地址。这样目标站点完全独立于源站点，源站点后续下线不会影响目标站点的图片可用性。
+如果源站用自己的存储域名提供媒体，比如 R2 公开域名 `media.yourdomain.com` 或 S3 CDN，这些正文图片也算绝对 URL。只有确定该域名会长期可用时才用这个 flag，例如源站和目标站共用同一个存储桶。否则源站的存储下线后，这些图片就失效了。
 
-如果不想把 body 中**指向第三方 URL 的图片**（如 imgur、Wikipedia 等任意 https 链接）镜像到自有存储——出于带宽、版权或必要性的考量——可加 `--skip-remote-media`：
+## 运行环境
 
-```bash
-npx jant site import https://your-site.example --path ./jant-site-export.zip --skip-remote-media
-```
+`site snapshot export/import` 和 `db export` 直接读写数据库和媒体存储，必须在站点的部署环境里运行：在项目目录下持有该站点的 `wrangler.toml`，或者使用相同的 `DATABASE_URL`、`LOCAL_STORAGE_PATH`、`S3_*` 等运行时变量。
 
-启用后：
+| 标志       | 目标                  | 所需环境                               |
+| ---------- | --------------------- | -------------------------------------- |
+| `--remote` | 远端 Cloudflare D1/R2 | `wrangler.toml`，wrangler 已认证       |
+| `--local`  | 本地 D1（wrangler）   | `wrangler.toml`                        |
+| `--node`   | Node runtime          | `DATABASE_URL` 与对应 storage 配置变量 |
 
-- **相对路径**（`/media/...`、`./foo.png`）：仍会上传，属于源站点自有文件。
-- **绝对 URL**（任意 `https://...`、`//cdn...`）：不抓取、不上传，body 中保留原值。
+不传标志时，shell 里设置了 `DATABASE_URL` 或 `DATA_DIR` 就用 Node runtime，否则用本地 D1（要求工作目录下有 `wrangler.toml`）。CLI 启动时会输出一行 `[jant] target = ...`，可以据此核对。
 
-Front matter `media:` 声明的资源、头像与文本附件不受此 flag 影响，始终会被迁移。
+`--remote` 通过本地的 `wrangler` CLI 运行，需要先 `wrangler login` 或设置 `CLOUDFLARE_API_TOKEN`。`--config` 指定非默认的 wrangler 配置文件。
 
-> **注意**：如果源站点把媒体托管在独立存储域名上（如 R2 公开域名 `media.yourdomain.com`、S3 CDN 等），body 中的此类图片也会被识别为绝对 URL。仅在确定该域名长期可用时启用此 flag（例如源站点与目标站点共用同一存储桶），否则源站点 R2 失效后相关图片将全部不可用。
+CLI 启动时会加载 `<cwd>/.env`，shell 里已经 export 的变量优先。`JANT_ENV_FILE` 用来加载另一个文件，一台机器管理多个部署时会用到；设为空值则跳过该文件，自动化任务用这种方式避开本地的 env 文件。完整的环境变量列表见 [配置](configuration.md)。
 
 ## 站点快照（`site snapshot`）
 
-`site snapshot export` 与 `site snapshot import` 会完整保留 Jant 内部的 ID、存储 key 以及对象文件。当你需要的是可往返恢复的快照而不是内容迁移时，用 snapshot。
+快照原样保留 Jant 的内部 ID、存储 key 和媒体文件，用来恢复站点，不用来迁移内容。它直接读写数据库（见 [运行环境](#运行环境)），托管站点用不了。
 
 ### 包含与不包含
 
-Snapshot 包含：
+快照包含：
 
-- post（含草稿与私密 post，原样保留 `status` 与 `visibility`）。
-- collection、collection directory item、navigation item。
-- media 记录、path registry 记录。
-- 上述记录引用的存储对象本身（默认全量下载，归档大小约等于媒体总量；可加 `--skip-objects` 跳过）。
-- 一组站点显示设置（站点名、描述、语言、主题、字型、favicon、自定义 CSS、时区等）。
+- 帖子，含草稿和私密帖子，`status` 和 `visibility` 原样保留。
+- 合集、智能合集、合集目录项和导航项。
+- 媒体记录和 path registry 记录。
+- 这些记录引用的存储对象，以及头像和图标文件。归档大小约等于媒体总量；`--skip-objects` 可以不带这些对象。
+- 站点设置：名称、描述、页脚、时区、主 feed、主题、字型、深浅色模式、自定义 CSS、头像和图标，以及搜索引擎收录、公开 API、feed、首页 Jant 标识这几个开关。
+- 语言配置：主语言、带前缀的其他语言，以及 [多语言内容](multilingual.md) 是否开启。每篇帖子的语言和译文关联随帖子一起带走。
 
-Snapshot **不包含**（导出时即被排除，不写入归档）：
+快照不包含（导出时就排除）：
 
-- users、sessions、accounts、verifications。
-- API tokens。
-- 站点运行时配置（`wrangler.toml`、环境变量）。
+- users、sessions、accounts、verifications 和 API tokens。
+- 运行时配置（`wrangler.toml`、环境变量）。
+- 代码注入（**设置 → 代码注入**）。自定义 CSS 会带走，自定义 head 和 body HTML 不会，所以导入归档不能在导入的站点上执行脚本。
+- GitHub 同步和 Telegram 绑定，以及它们的 token 和同步状态。它们指向的仓库或聊天不属于目标站点。
 
-也就是说：把 snapshot 文件分发给他人不会泄露登录凭据，但目标站点导入后需要自行注册账号。
+快照不带登录凭据，导入的人之后要自己注册账号。
 
-归档结构由三部分组成：
+归档由三部分组成：
 
 ```
 jant-site-snapshot.zip
-├── meta.json                  // { format, version, site }
+├── meta.json                  // { format, version, dialect, jant, schema, site }
 ├── db.sql                     // 完整 SQL，包含 favicon.ico 的 base64
-└── objects/<storage-key>/...  // 所有 media 引用的对象
+└── objects/<storage-key>/...  // 所有媒体文件，以及头像和图标
 ```
 
-### 导出 Snapshot
+### 导出快照
 
-默认目标（按 [运行环境](#运行环境) 自动推导，本地 D1 或 Node）：
+不传标志时，目标按 [运行环境](#运行环境) 自动选择（本地 D1 或 Node）：
 
 ```bash
 npx jant site snapshot export --output ./jant-site-snapshot.zip
 ```
 
-显式 Node runtime（如 SQLite 或 Postgres 部署）：
+Node runtime，适用于 SQLite 或 Postgres 部署：
 
 ```bash
 DATABASE_URL=postgres://... npx jant site snapshot export --node --output ./jant-site-snapshot.zip
@@ -326,27 +382,23 @@ DATABASE_URL=postgres://... npx jant site snapshot export --node --output ./jant
 npx jant site snapshot export --remote --config ./wrangler.toml --output ./jant-site-snapshot.zip
 ```
 
-### 跳过媒体文件下载
+### 跳过媒体文件
 
-如果源与目标共用同一个 R2 / S3 存储桶（例如只想把数据库状态迁到另一个 Worker，而媒体文件已存在于目标桶中），可用 `--skip-objects` 跳过 `objects/` 目录：
+源站和目标站共用同一个 R2 或 S3 存储桶时（例如把数据库迁到另一个 Worker，媒体已经在目标桶里），`--skip-objects` 不导出 `objects/`，归档只剩 `meta.json` 和 `db.sql`。
 
 ```bash
 npx jant site snapshot export --output ./jant-site-snapshot.zip --skip-objects
 ```
 
-此时归档仅包含 `meta.json` 与 `db.sql`，体积显著缩小。
+目标存储里必须已有 `db.sql` 引用的全部 storage key，否则导入后所有媒体引用都会 404。导入时加 `--allow-missing-objects`（见下文）；不加的话，导入会停在预检阶段并列出缺失的 key。
 
-> **前提**：目标存储中已包含 `db.sql` 引用的全部 storage key（典型场景是源与目标共用同一个 R2 / S3 桶）。否则导入后所有 media 引用都会 404。
->
-> 导入时需配合使用 `--allow-missing-objects`（见下文）；不加该标志时 import 会停在预检阶段并列出缺失的 key。
+### 导入快照
 
-### 导入 Snapshot
+快照导入必须加 `--replace`。它会清空目标数据库中快照涵盖的内容表（`post`、`collection`、`smart_collection`、`nav_item`、`collection_directory_item`、`thread_collection`、`media`、`path_registry`）和快照带的设置，再写入快照内容。users、sessions 和 tokens 不受影响。不加 `--replace` 时导入直接拒绝运行。
 
-Snapshot import 必须显式传 `--replace`。`--replace` 会清空目标库中 snapshot 涵盖的表（post、collection、nav_item、collection_directory_item、thread_collection、media、path_registry），再按 snapshot 内容重新写入。users、sessions、tokens 不在涵盖范围内，保持不变。没有 `--replace` 时 import 直接拒绝运行，避免误覆盖。
+媒体文件会上传到目标站点自己的存储，所以 R2 上导出的快照可以导入到用 S3 或本地磁盘存媒体的站点。导出使用快照格式 v2，导入也接受 v1。`meta.json` 记录写出快照的 Jant 版本（`jant`）和该版本最后一个数据库迁移（`schema`）。快照来自比导入方更新的 Jant 时，导入在写入任何数据之前停止，提示先升级 `@jant/core`。
 
-当前导出使用 snapshot format v2。Import 仍接受 v1 snapshot：会先在内存中把旧 `post_collection` 行升级成 Thread 级并集，确认可转换后才清空目标内容。
-
-默认目标：
+快照只能恢复到同一种数据库：SQLite（包括 D1）或 Postgres，`meta.json` 里的 `dialect` 记录着它来自哪一种。类型不同时，导入在写入任何数据之前拒绝。要在 SQLite 和 Postgres 之间迁移站点，用站点导出和站点导入。
 
 ```bash
 npx jant site snapshot import --path ./jant-site-snapshot.zip --replace
@@ -360,9 +412,7 @@ npx jant site snapshot import --remote --config ./wrangler.toml --path ./jant-si
 
 ### 允许缺失对象
 
-Import 默认执行一次预检：从 `db.sql` 中提取所有 `storage_key` 与 `poster_key`，与 `objects/` 目录中的文件做比对。任何缺失都会触发中止，并输出缺失 key 的完整列表。
-
-如果已确认目标 storage 中存在这些文件（例如把 `--skip-objects` 归档导入到与源共用 R2 桶的 Worker），可用 `--allow-missing-objects` 跳过该校验：
+写入前，导入会把 `db.sql` 里的每个 `storage_key` 和 `poster_key` 与 `objects/` 中的文件比对，有缺失就停止并列出完整清单。如果目标存储里已经有这些文件（比如把 `--skip-objects` 归档导入到与源站共用 R2 桶的 Worker），用 `--allow-missing-objects` 跳过这项检查：
 
 ```bash
 npx jant site snapshot import \
@@ -371,19 +421,19 @@ npx jant site snapshot import \
   --allow-missing-objects
 ```
 
-即使启用该 flag，缺失列表仍会输出至 stderr，可重定向保存以便后续审计。
+缺失清单仍会输出到 stderr，可以重定向到文件留作记录。
 
 ## 数据库导出（`db export`）
 
-`db export` 把当前数据库导出为原始 SQL，**不包含媒体文件**。它适合用来检查表内容、与其他备份并存留作 SQL dump、或接入自有运维工具链；**不适合作为完整备份**——媒体文件需另行处理，参见 [备份与恢复](backups.md)。Postgres 部署也可以直接用 `pg_dump`，详见 [备份与恢复 § Node + Postgres](backups.md#node--postgres)。
+`db export` 把数据库导出为原始 SQL，不含媒体文件。适合查看表内容、和其他备份一起保留一份 SQL dump，或接入自己的工具。它不是完整备份，媒体的处理见 [备份与恢复](backups.md)。Postgres 部署也可以直接用 `pg_dump`，见 [备份与恢复 § Node + Postgres](backups.md#node--postgres)。
 
-默认目标（按 [运行环境](#运行环境) 自动推导）：
+不传标志时，目标按 [运行环境](#运行环境) 自动选择：
 
 ```bash
 npx jant db export --output ./jant-export.sql
 ```
 
-显式 Node runtime：
+Node runtime：
 
 ```bash
 DATABASE_URL=postgres://... npx jant db export --node --output ./jant-export.sql
@@ -397,7 +447,7 @@ npx jant db export --remote --config ./wrangler.toml --output ./jant-remote.sql
 
 ## 接下来
 
-- [备份与恢复](backups.md) —— 完整的备份与恢复策略
-- [GitHub 同步](github-sync.md) —— 通过 GitHub 仓库实现内容备份与双向编辑
-- [自动化与 API](automation-and-api.md) —— 把上述操作脚本化
+- [备份与恢复](backups.md)：完整的备份与恢复方案
+- [GitHub 同步](github-sync.md)：把内容备份到 GitHub 仓库，并在那里编辑
+- [自动化与 API](automation-and-api.md)：把上述操作写成脚本
 - [API 参考（英文）](../API.md)

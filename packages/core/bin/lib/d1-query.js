@@ -1,8 +1,22 @@
-import { runLocalWrangler } from "./wrangler-cli.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WRANGLER_MAX_BUFFER, runLocalWrangler } from "./wrangler-cli.js";
 import { extractWranglerJson } from "./wrangler-json.js";
 
 const DEFAULT_RETRY_ATTEMPTS = 4;
 const DEFAULT_RETRY_DELAY_MS = 500;
+
+/**
+ * Byte ceiling for a statement batch sent as one `--command=` argument.
+ *
+ * Linux caps a single argv entry at 128 KiB (`MAX_ARG_STRLEN`) and fails the
+ * spawn with `E2BIG`; macOS has no per-argument cap, so an oversized batch
+ * works on a developer's Mac and dies in CI and in the demo rebuild, which is
+ * exactly how it first surfaced — a snapshot import whose `db.sql` had grown
+ * past the limit. Anything at or above this goes through `--file` instead.
+ */
+const MAX_INLINE_COMMAND_BYTES = 96 * 1024;
 
 function getD1Flag(runtime) {
   return runtime === "d1-remote" ? "--remote" : "--local";
@@ -54,12 +68,77 @@ export function parseWranglerError(output) {
   }
 }
 
+/**
+ * Read the `--json` error out of a failed Wrangler call.
+ *
+ * Wrangler writes that error to stdout and its warnings to stderr, and a
+ * warning such as "Proxy environment variables detected" comes with any
+ * failure on a machine behind a proxy. Read together, the warning trails the
+ * JSON and breaks the parse, so the message fell back to the warning alone and
+ * the cause went unseen. Each stream is read on its own.
+ *
+ * @param {{ stdout?: string, stderr?: string } | undefined} error - The error a failed Wrangler call threw
+ * @returns {string | undefined} The error text and its notes, when Wrangler printed one
+ * @example
+ * parseWranglerFailure({
+ *   stdout: '{"error":{"text":"Couldn\'t find a D1 DB with name or binding \'DB\'"}}',
+ *   stderr: "▲ [WARNING] Proxy environment variables detected.",
+ * });
+ * // => "Couldn't find a D1 DB with name or binding 'DB'"
+ */
+export function parseWranglerFailure(error) {
+  return (
+    parseWranglerError(error?.stdout?.trim()) ??
+    parseWranglerError(error?.stderr?.trim())
+  );
+}
+
 function sleepSync(ms) {
   if (!Number.isFinite(ms) || ms <= 0) {
     return;
   }
 
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+const WRANGLER_OUTPUT_EXCERPT_LENGTH = 2000;
+
+/**
+ * Rows per read when dumping a D1 table: small enough that a page of long
+ * posts stays well inside {@link WRANGLER_MAX_BUFFER}.
+ */
+export const D1_DUMP_PAGE_SIZE = 200;
+
+/**
+ * Say why a Wrangler call failed without echoing its whole output: on a
+ * failed `d1 execute` that output can be a site's rows, hundreds of KB of it.
+ *
+ * @param {string[]} args - The Wrangler arguments
+ * @param {Error & { code?: string, stdout?: string, stderr?: string }} error
+ * @returns {string} A message naming the command and the cause
+ * @example
+ * describeWranglerFailure(["d1", "execute", "DB"], enobufsError);
+ * // "`wrangler d1 execute DB` printed more than 67108864 bytes, …"
+ */
+export function describeWranglerFailure(args, error) {
+  const command = `wrangler ${args.slice(0, 3).join(" ")}`;
+  if (error?.code === "ENOBUFS") {
+    return `\`${command}\` printed more than ${WRANGLER_MAX_BUFFER} bytes, the most the CLI buffers.`;
+  }
+
+  const stderr = String(error?.stderr ?? "").trim();
+  if (stderr) return `\`${command}\` failed: ${stderr}`;
+
+  const stdout = String(error?.stdout ?? "").trim();
+  if (stdout) {
+    const excerpt =
+      stdout.length > WRANGLER_OUTPUT_EXCERPT_LENGTH
+        ? `${stdout.slice(0, WRANGLER_OUTPUT_EXCERPT_LENGTH)}… (${stdout.length} characters)`
+        : stdout;
+    return `\`${command}\` failed: ${excerpt}`;
+  }
+
+  return `\`${command}\` failed: ${error?.message ?? "unknown error"}`;
 }
 
 export function isRetryableWranglerD1Failure(output, error) {
@@ -108,7 +187,7 @@ function runWrangler(args, options = {}) {
       return runLocalWrangler(args, getWranglerExecutionOptions(options));
     } catch (error) {
       const output = `${error.stdout ?? ""}${error.stderr ?? ""}`.trim();
-      const wranglerError = parseWranglerError(output);
+      const wranglerError = parseWranglerFailure(error);
       const retryable = isRetryableWranglerD1Failure(output, error);
 
       if (retryable && attempt < retryAttempts) {
@@ -123,12 +202,43 @@ function runWrangler(args, options = {}) {
         throw new Error(`Wrangler error: ${wranglerError}`);
       }
 
-      throw new Error(output || error.message, { cause: error });
+      throw new Error(describeWranglerFailure(args, error), { cause: error });
     }
   }
 }
 
+/**
+ * Whether a statement batch is too large to travel as one CLI argument.
+ *
+ * @param {string} sql - SQL batch about to be sent to Wrangler
+ * @returns {boolean} true when it has to go through a file instead
+ * @example
+ * ```js
+ * exceedsInlineCommandLimit("SELECT 1;"); // false
+ * ```
+ */
+export function exceedsInlineCommandLimit(sql) {
+  return Buffer.byteLength(sql, "utf8") >= MAX_INLINE_COMMAND_BYTES;
+}
+
+function withTemporarySqlFile(sql, run) {
+  const directory = mkdtempSync(join(tmpdir(), "jant-d1-"));
+  try {
+    const filePath = join(directory, "batch.sql");
+    writeFileSync(filePath, sql);
+    return run(filePath);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 export function executeD1(sql, runtime, options = {}) {
+  if (exceedsInlineCommandLimit(sql)) {
+    return withTemporarySqlFile(sql, (filePath) =>
+      executeD1File(filePath, runtime, options),
+    );
+  }
+
   const args = appendWranglerContext(
     [
       "d1",

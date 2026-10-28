@@ -10,6 +10,7 @@
 
 import { msg } from "@lingui/core/macro";
 import { Hono } from "hono";
+import { buildFeedPostViews } from "../feed/feed.js";
 import type { Context } from "hono";
 import type {
   Bindings,
@@ -47,9 +48,10 @@ import {
 import { defaultFeedRenderer } from "../../lib/feed.js";
 import {
   buildFeedDiscoveryFields,
-  getFeedEntryUpdatedAt,
+  buildFeedLabels,
   getFeedLimit,
   getRssPublishedBefore,
+  feedsPublished,
   renderFeed,
 } from "../../lib/feed-policy.js";
 import { getNavigationData } from "../../lib/navigation.js";
@@ -66,9 +68,9 @@ import {
 import {
   createMediaContext,
   toArchiveGroupsWithMedia,
-  toPostViews,
 } from "../../lib/view.js";
 import { buildMediaMap } from "../../lib/media-helpers.js";
+
 import { assembleTimelineItems } from "../../lib/timeline.js";
 import { getI18n } from "../../i18n/index.js";
 import type { PostFilters } from "../../services/post.js";
@@ -253,11 +255,13 @@ function buildArchivePostFilters(
   opts: {
     isAuthenticated: boolean;
     lang?: string;
+    /** The site's time zone, whose calendar `year` reads. */
+    timeZone: string;
     /** Overrides the request's own selection, for the unfiltered baseline. */
     selection?: PostFilterSelection;
   },
 ): PostFilters {
-  const { isAuthenticated, lang } = opts;
+  const { isAuthenticated, lang, timeZone } = opts;
   const selection = opts.selection ?? params.selection;
   const sortsByActivity = params.sort === "updated";
 
@@ -276,6 +280,7 @@ function buildArchivePostFilters(
     // under `year=N` really belongs to that year.
     ...toPostFilters(selection, {
       yearAxis: sortsByActivity ? "sort" : "published",
+      timeZone,
     }),
     // "thread_updated", not "activity": the archive is the canonical all-posts
     // view, and the quiet-reply switch only promises not to move a Thread on
@@ -432,11 +437,16 @@ export async function renderArchivePage(
 
   if (params.collectionMissing) return c.notFound();
 
-  const navData = await getNavigationData(c);
+  // The chrome is independent of every query below, so it goes out with them
+  // rather than ahead of them. Its `isAuthenticated` is `c.var.isAuthenticated`
+  // verbatim, which is what the filters below read.
+  const navDataPromise = getNavigationData(c);
+  const isAuthenticated = c.var.isAuthenticated;
 
   const filters = buildArchivePostFilters(params, {
-    isAuthenticated: navData.isAuthenticated,
+    isAuthenticated,
     lang: getViewLang(c) ?? undefined,
+    timeZone: appConfig.timeZone,
   });
 
   // --- Parallel data fetches ------------------------------------------------
@@ -456,38 +466,72 @@ export async function renderArchivePage(
   // media EXISTS subqueries.
   const baselineFilters = hasActiveArchiveFilter(params.selection)
     ? buildArchivePostFilters(params, {
-        isAuthenticated: navData.isAuthenticated,
+        isAuthenticated,
         lang: filters.lang,
+        timeZone: appConfig.timeZone,
         selection: {},
       })
     : undefined;
 
+  const postsPromise = services.posts.list({
+    ...filters,
+    limit: pageSize,
+    offset: (params.currentPage - 1) * pageSize,
+  });
+  // What each layout reads per post needs only this page of posts, so it
+  // follows the list directly rather than waiting for everything beside it:
+  // the year picker takes a round longer than the list does.
+  const flatItemsPromise = isListView
+    ? postsPromise.then((listed) => assembleTimelineItems(c, listed))
+    : Promise.resolve(undefined);
+  const gridPostDataPromise = isListView
+    ? Promise.resolve(undefined)
+    : postsPromise.then(async (listed) => {
+        const postIds = listed.map((p) => p.id);
+        // Only the grid renders permalinks from this map. The list view goes
+        // through `assembleTimelineItems`, which loads the same aliases itself.
+        const [mediaByPost, replyCounts, aliasesByPost] = await Promise.all([
+          services.media.getByPostIds(postIds),
+          services.posts.getReplyCounts(postIds),
+          services.paths.getPostAliases(postIds),
+        ]);
+        return { mediaByPost, replyCounts, aliasesByPost };
+      });
+
   const [
+    navData,
     totalCount,
     baselineCount,
     monthlyCounts,
     posts,
+    flatItems,
+    gridPostData,
     availableYears,
     listedCollections,
   ] = await Promise.all([
+    navDataPromise,
     services.posts.count(filters),
     baselineFilters
       ? services.posts.count(baselineFilters)
       : Promise.resolve(undefined),
     isListView
       ? Promise.resolve([] as { yearMonth: string; count: number }[])
-      : services.posts.countByYearMonth(filters),
-    services.posts.list({
-      ...filters,
-      limit: pageSize,
-      offset: (params.currentPage - 1) * pageSize,
-    }),
-    services.posts.getDistinctYears({
-      status: "published",
-      excludeReplies: true,
-      lang: filters.lang,
-      sortBy: filters.sortBy,
-    }),
+      : services.posts.countByYearMonth(filters, appConfig.timeZone),
+    postsPromise,
+    flatItemsPromise,
+    gridPostDataPromise,
+    // The year picker is part of the page, so a signed-out reader mustn't
+    // learn from it that private posts exist in a given year.
+    services.posts.getDistinctYears(
+      {
+        status: "published",
+        excludeReplies: true,
+        excludePrivate: !isAuthenticated,
+        lang: filters.lang,
+        sortBy: filters.sortBy,
+      },
+      appConfig.timeZone,
+    ),
     // Already loaded when the query named a collection, because parsing needed
     // it. Fetched here otherwise, so an unfiltered archive keeps paying for one
     // round of queries rather than two.
@@ -502,22 +546,12 @@ export async function renderArchivePage(
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   const mediaCtx = createMediaContext(appConfig);
-  const allPostIds = posts.map((p) => p.id);
-  const archiveAliasesMap =
-    await c.var.services.paths.getPostAliases(allPostIds);
-  const archiveAliasMap = new Map<string, string>();
-  for (const [id, aliases] of archiveAliasesMap) {
-    if (aliases[0]) archiveAliasMap.set(id, aliases[0]);
-  }
 
   // --- List view: flat timeline items (no month grouping) ------------------
 
   let groups: Awaited<ReturnType<typeof toArchiveGroupsWithMedia>> = [];
-  let flatItems: Awaited<ReturnType<typeof assembleTimelineItems>> | undefined;
 
-  if (isListView) {
-    flatItems = await assembleTimelineItems(c, posts);
-  } else {
+  if (gridPostData) {
     // --- Grid view: group posts by year-month --------------------------------
 
     const grouped = new Map<string, PostWithMedia[]>();
@@ -542,11 +576,15 @@ export async function renderArchivePage(
       monthlyCounts.map((row) => [row.yearMonth, row.count] as const),
     );
 
-    const postIds = posts.map((p) => p.id);
-    const [rawMediaMap, replyCounts] = await Promise.all([
-      services.media.getByPostIds(postIds),
-      services.posts.getReplyCounts(postIds),
-    ]);
+    const {
+      mediaByPost: rawMediaMap,
+      replyCounts,
+      aliasesByPost: archiveAliasesMap,
+    } = gridPostData;
+    const archiveAliasMap = new Map<string, string>();
+    for (const [id, aliases] of archiveAliasesMap) {
+      if (aliases[0]) archiveAliasMap.set(id, aliases[0]);
+    }
     const mediaMap = buildMediaMap(
       rawMediaMap,
       mediaCtx.r2PublicUrl,
@@ -624,6 +662,7 @@ export async function renderArchivePage(
     : `${toAbsoluteSiteUrl(c.req.path, appConfig.siteUrl, appConfig.sitePathPrefix)}${canonicalQuery}`;
 
   return renderPublicPage(c, {
+    page: "archive",
     // A tab has no filter bar beside it, so unlike the page heading this has to
     // name the selection itself — otherwise every bookmarked filtered view
     // reads identically in the tab bar.
@@ -774,6 +813,7 @@ async function buildArchiveFeedData(
   // bound the publication column, the tighter one wins.
   const selectionFilters = toPostFilters(params.selection, {
     yearAxis: sortsByActivity ? "sort" : "published",
+    timeZone: appConfig.timeZone,
   });
   const filters: PostFilters = {
     lang: getViewLang(c) ?? undefined,
@@ -793,95 +833,15 @@ async function buildArchiveFeedData(
 
   const posts = await services.posts.list(filters);
 
-  // Collect thread root IDs to batch-load replies
-  const rootIds = posts.filter((p) => p.threadId === p.id).map((p) => p.id);
-
-  // Batch load media, aliases, and thread replies
-  const postIds = posts.map((p) => p.id);
-  const [threadMap, rawMediaMap, aliasesMap] = await Promise.all([
-    services.posts.getPublishedThreads(rootIds, {
-      publishedBefore: rssPublishedBefore,
-    }),
-    services.media.getByPostIds(postIds),
-    services.paths.getPostAliases(postIds),
-  ]);
-
-  // Collect reply IDs for media loading
-  const replyIds: string[] = [];
-  for (const [rootId, thread] of threadMap) {
-    for (const reply of thread) {
-      if (reply.id !== rootId) {
-        replyIds.push(reply.id);
-      }
-    }
-  }
-
-  const replyMediaMap =
-    replyIds.length > 0
-      ? await services.media.getByPostIds(replyIds)
-      : new Map<
-          string,
-          typeof rawMediaMap extends Map<string, infer V> ? V : never
-        >();
-
-  const mediaCtx = createMediaContext(appConfig);
-
-  // Merge all media
-  const allRawMedia = new Map(rawMediaMap);
-  for (const [id, media] of replyMediaMap) {
-    allRawMedia.set(id, media);
-  }
-
-  const mediaMap = buildMediaMap(
-    allRawMedia,
-    mediaCtx.r2PublicUrl,
-    mediaCtx.imageTransformUrl,
-    mediaCtx.s3PublicUrl,
-    mediaCtx.localPublicUrl,
-    mediaCtx.sitePathPrefix,
-  );
-  const aliasMap = new Map<string, string>();
-  for (const [id, aliases] of aliasesMap) {
-    if (aliases[0]) aliasMap.set(id, aliases[0]);
-  }
-
-  const postViews = toPostViews(
-    posts.map((p) => ({
-      ...p,
-      mediaAttachments: mediaMap.get(p.id) ?? [],
-    })),
-    mediaCtx,
-    undefined,
-    aliasMap,
-  ).map((postView, index) => {
-    const post = posts[index] as (typeof posts)[number];
-    const thread = threadMap.get(post.id);
-
-    // Build thread replies
-    const replies =
-      thread && thread.length > 1
-        ? toPostViews(
-            thread
-              .filter((r) => r.id !== post.id)
-              .map((r) => ({
-                ...r,
-                mediaAttachments: mediaMap.get(r.id) ?? [],
-              })),
-            mediaCtx,
-          )
-        : undefined;
-
-    return {
-      ...postView,
-      feedUpdatedAt: getFeedEntryUpdatedAt(post, thread),
-      threadReplies: replies,
-    };
+  const postViews = await buildFeedPostViews(c, posts, {
+    publishedBefore: rssPublishedBefore,
   });
 
   const feedQuery = buildArchiveFeedQuery(params, dimensionCtx);
 
   return {
     ...buildFeedDiscoveryFields(c, { query: feedQuery }),
+    labels: buildFeedLabels(c),
     siteName: appConfig.siteName,
     siteDescription: toPlainText(appConfig.siteDescription),
     siteUrl: appConfig.siteUrl,
@@ -906,6 +866,7 @@ async function buildArchiveFeedData(
  * @returns Atom feed response
  */
 export async function renderArchiveFeed(c: Context<Env>): Promise<Response> {
+  if (!feedsPublished(c)) return c.notFound();
   // No session reaches a feed reader, so a selection only the author can see
   // has no honest rendering here — not an empty feed, and certainly not the
   // unfiltered one. The page already withholds the link; this is the backstop.
@@ -926,7 +887,10 @@ export async function renderArchiveFeed(c: Context<Env>): Promise<Response> {
 archiveRoutes.get("/feed", renderArchiveFeed);
 
 // Legacy atom.xml redirect
-export function redirectLegacyArchiveFeed(c: Context<Env>): Response {
+export function redirectLegacyArchiveFeed(
+  c: Context<Env>,
+): Response | Promise<Response> {
+  if (!feedsPublished(c)) return c.notFound();
   const qs = c.req.url.includes("?")
     ? c.req.url.slice(c.req.url.indexOf("?"))
     : "";

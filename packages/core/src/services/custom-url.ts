@@ -5,15 +5,24 @@
  * shared path_registry table.
  */
 
-import { and, desc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lt, ne, or, sql } from "drizzle-orm";
 import type { Database } from "../db/index.js";
 import {
   sqliteSchemaBundle,
   type DatabaseSchema,
 } from "../db/schema-bundle.js";
 import { isReservedPath } from "../lib/constants.js";
-import { ConflictError, ValidationError } from "../lib/errors.js";
-import { normalizePath } from "../lib/url.js";
+import { ID_PREFIX } from "../lib/ids.js";
+import {
+  ConflictError,
+  NotFoundError,
+  ValidationError,
+} from "../lib/errors.js";
+import {
+  decodePostListCursor,
+  encodePostListCursor,
+} from "../lib/post-list-cursor.js";
+import { normalizePath, redirectTargetHref } from "../lib/url.js";
 import type { CustomUrl } from "../types.js";
 import { readLanguageSettings } from "./language.js";
 import { createPathService, type PathService } from "./path.js";
@@ -25,6 +34,7 @@ export interface CreateCustomUrl {
    * refuses it. Stored ones predate smart collections and keep working.
    */
   targetType: "post" | "collection" | "redirect" | "archive";
+  /** The post or collection: its TypeID, or its slug. */
   targetId?: string;
   toPath?: string;
   redirectType?: 301 | 302;
@@ -33,6 +43,11 @@ export interface CreateCustomUrl {
 
 export interface CustomUrlService {
   getByPath(path: string): Promise<CustomUrl | null>;
+  /**
+   * The custom URL a post or collection is known by: its oldest alias, the
+   * one feeds, the sitemap, and the export name it by. Later aliases are
+   * other ways in.
+   */
   getByTarget(
     targetType: "post" | "collection",
     targetId: string,
@@ -41,9 +56,23 @@ export interface CustomUrlService {
   delete(id: string): Promise<boolean>;
   count(): Promise<number>;
   list(opts?: { limit?: number; offset?: number }): Promise<CustomUrl[]>;
+  /**
+   * One page of custom URLs, newest first, and the cursor that continues it.
+   *
+   * @param opts - Page size, and `nextCursor` from the previous page
+   * @returns The page and its `nextCursor`, null on the last page
+   * @throws {ValidationError} When the cursor doesn't continue this list
+   */
+  listPage(opts: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ customUrls: CustomUrl[]; nextCursor: string | null }>;
   /** Check if a path is available (not used by slug/alias/redirect records). */
   isPathAvailable(path: string): Promise<boolean>;
 }
+
+/** The one order custom URLs are listed in: newest first, then by ID. */
+const CUSTOM_URL_CURSOR_MODE = "custom-urls:newest";
 
 export function createCustomUrlService(
   db: Database,
@@ -67,7 +96,9 @@ export function createCustomUrlService(
               ? "post"
               : "collection",
       targetId: row.postId ?? row.collectionId,
-      toPath: row.redirectToPath ? `/${row.redirectToPath}` : null,
+      toPath: row.redirectToPath
+        ? redirectTargetHref(row.redirectToPath)
+        : null,
       redirectType: row.redirectType as 301 | 302 | null,
       archiveQuery: row.archiveQuery,
       createdAt: row.createdAt,
@@ -76,6 +107,43 @@ export function createCustomUrlService(
 
   function normalizeInputPath(path: string): string {
     return normalizePath(path);
+  }
+
+  /**
+   * The post or collection a custom URL points at, named by TypeID or by
+   * slug. Both are read from its slug record, so an ID that names nothing is
+   * refused here rather than by a foreign key.
+   */
+  async function resolveTarget(
+    targetType: "post" | "collection",
+    idOrSlug: string,
+  ): Promise<string> {
+    const idColumn =
+      targetType === "post" ? pathRegistry.postId : pathRegistry.collectionId;
+    const rows = await db
+      .select({
+        postId: pathRegistry.postId,
+        collectionId: pathRegistry.collectionId,
+      })
+      .from(pathRegistry)
+      .where(
+        and(
+          eq(pathRegistry.siteId, siteId),
+          eq(pathRegistry.kind, "slug"),
+          or(
+            eq(idColumn, idOrSlug),
+            eq(pathRegistry.path, normalizeInputPath(idOrSlug)),
+          ),
+        ),
+      )
+      .limit(1);
+    const id = targetType === "post" ? rows[0]?.postId : rows[0]?.collectionId;
+    if (!id) {
+      throw new NotFoundError(
+        `${targetType === "post" ? "Post" : "Collection"} "${idOrSlug}"`,
+      );
+    }
+    return id;
   }
 
   return {
@@ -108,7 +176,7 @@ export function createCustomUrlService(
               : eq(pathRegistry.collectionId, targetId),
           ),
         )
-        .orderBy(desc(pathRegistry.createdAt))
+        .orderBy(asc(pathRegistry.createdAt), asc(pathRegistry.id))
         .limit(1);
       return result[0] ? toCustomUrl(result[0]) : null;
     },
@@ -178,13 +246,13 @@ export function createCustomUrlService(
       if (!data.targetId) {
         throw new ValidationError("Target resource is required");
       }
+      const targetId = await resolveTarget(data.targetType, data.targetId);
 
       const record = await resolvedPaths.create({
         path: normalized,
         kind: "alias",
-        postId: data.targetType === "post" ? (data.targetId ?? null) : null,
-        collectionId:
-          data.targetType === "collection" ? (data.targetId ?? null) : null,
+        postId: data.targetType === "post" ? targetId : null,
+        collectionId: data.targetType === "collection" ? targetId : null,
       });
       const row = await db
         .select()
@@ -228,12 +296,54 @@ export function createCustomUrlService(
         .where(
           and(eq(pathRegistry.siteId, siteId), ne(pathRegistry.kind, "slug")),
         )
-        .orderBy(desc(pathRegistry.createdAt))
+        .orderBy(desc(pathRegistry.createdAt), desc(pathRegistry.id))
         .$dynamic();
       if (opts?.limit !== undefined) q = q.limit(opts.limit);
       if (opts?.offset !== undefined) q = q.offset(opts.offset);
       const rows = await q;
       return rows.map(toCustomUrl);
+    },
+
+    async listPage({ limit, cursor }) {
+      const after = cursor
+        ? decodePostListCursor(cursor, {
+            mode: CUSTOM_URL_CURSOR_MODE,
+            kinds: ["number", "id"],
+            idPrefix: ID_PREFIX.path,
+          })
+        : null;
+      const rows = await db
+        .select()
+        .from(pathRegistry)
+        .where(
+          and(
+            eq(pathRegistry.siteId, siteId),
+            ne(pathRegistry.kind, "slug"),
+            after
+              ? or(
+                  lt(pathRegistry.createdAt, after[0] as number),
+                  and(
+                    eq(pathRegistry.createdAt, after[0] as number),
+                    lt(pathRegistry.id, after[1] as string),
+                  ),
+                )
+              : undefined,
+          ),
+        )
+        .orderBy(desc(pathRegistry.createdAt), desc(pathRegistry.id))
+        .limit(limit + 1);
+      const page = rows.slice(0, limit);
+      const last = page.at(-1);
+      return {
+        customUrls: page.map(toCustomUrl),
+        nextCursor:
+          rows.length > limit && last
+            ? encodePostListCursor(CUSTOM_URL_CURSOR_MODE, [
+                last.createdAt,
+                last.id,
+              ])
+            : null,
+      };
     },
 
     async isPathAvailable(path) {

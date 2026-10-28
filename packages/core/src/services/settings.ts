@@ -15,6 +15,7 @@ import { now } from "../lib/time.js";
 import {
   SETTINGS_KEYS,
   ONBOARDING_STATUS,
+  parseOnboardingStatus,
   type OnboardingStatus,
   type SettingsKey,
 } from "../lib/constants.js";
@@ -29,9 +30,13 @@ import type { StorageDriver } from "../lib/storage.js";
 import type { MediaService } from "./media.js";
 import {
   validateUploadFile,
+  validateStoredUploadSignature,
   generateSiteAssetStorageKey,
   getSiteStorageKey,
 } from "../lib/upload.js";
+
+/** Avatar formats kept: the browser turns every upload into one of these. */
+const AVATAR_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 import { arrayBufferToBase64 } from "../lib/favicon.js";
 import { ValidationError } from "../lib/errors.js";
 import { normalizeEditableSettingValue } from "../lib/schemas.js";
@@ -126,7 +131,13 @@ export interface GeneralSettingsResult {
 }
 
 export interface AvatarUploadData {
-  file: { stream(): ReadableStream; name: string; type: string; size: number };
+  file: {
+    stream(): ReadableStream;
+    slice(start?: number, end?: number): Blob;
+    name: string;
+    type: string;
+    size: number;
+  };
   faviconIco?: ArrayBuffer;
   appleTouchIcon?: ArrayBuffer;
 }
@@ -358,14 +369,9 @@ export function createSettingsService(
     },
 
     async getOnboardingStatus() {
-      const status = await this.get(SETTINGS_KEYS.ONBOARDING_STATUS);
-      if (status === ONBOARDING_STATUS.COMPLETED) {
-        return ONBOARDING_STATUS.COMPLETED;
-      }
-      if (status === ONBOARDING_STATUS.PROVISIONED) {
-        return ONBOARDING_STATUS.PROVISIONED;
-      }
-      return ONBOARDING_STATUS.PENDING;
+      return parseOnboardingStatus(
+        await this.get(SETTINGS_KEYS.ONBOARDING_STATUS),
+      );
     },
 
     async isOnboardingComplete() {
@@ -523,8 +529,7 @@ export function createSettingsService(
       // told anyone it exists. Opting out is the half that used to be missed:
       // a directory that is not told keeps the blog until its next scheduled
       // read, and the owner watches a blog they just removed sit there for
-      // another hour. Switching between `latest` and `featured` while already
-      // listed changes nothing a directory needs to be told twice.
+      // another hour.
       const wasListed = previous !== null && previous !== "off";
       const isListed = mode !== "off";
       const changed = wasListed !== isListed;
@@ -605,6 +610,30 @@ export function createSettingsService(
       });
       if (uploadError) {
         throw new ValidationError(uploadError);
+      }
+
+      // The browser resizes every avatar to a PNG before upload, so only the
+      // raster formats the upload path serves inline are accepted, and the
+      // bytes must be what the type says. An SVG is a document that can run
+      // script when opened from the site's origin.
+      if (!AVATAR_MIME_TYPES.has(data.file.type)) {
+        throw new ValidationError("Upload a PNG, JPEG, or WebP image.");
+      }
+      const signatureError = validateStoredUploadSignature(
+        data.file.type,
+        new Uint8Array(await data.file.slice(0, 64).arrayBuffer()),
+      );
+      if (signatureError) {
+        throw new ValidationError(signatureError);
+      }
+      if (data.appleTouchIcon) {
+        const appleTouchError = validateStoredUploadSignature(
+          "image/png",
+          new Uint8Array(data.appleTouchIcon.slice(0, 64)),
+        );
+        if (appleTouchError) {
+          throw new ValidationError(appleTouchError);
+        }
       }
 
       const { id, filename, storageKey } = generateSiteAssetStorageKey(

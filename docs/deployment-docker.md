@@ -1,6 +1,6 @@
 # Deploy with Docker
 
-The official image [`owenyoung/jant`](https://hub.docker.com/r/owenyoung/jant) runs the Node version of Jant and applies database migrations automatically before the app starts.
+The official image [`owenyoung/jant`](https://hub.docker.com/r/owenyoung/jant) runs the Node version of Jant. The Compose file applies database migrations before the app starts; the image on its own doesn't, and refuses to start on a database that hasn't been migrated.
 
 ## Before you begin
 
@@ -17,7 +17,10 @@ Create a directory for your site's config and data, then download the official C
 mkdir jant-site && cd jant-site
 curl -O https://raw.githubusercontent.com/jant-me/jant/main/compose.yml
 curl -o .env https://raw.githubusercontent.com/jant-me/jant/main/.env.example
+mkdir -p data
 ```
+
+The container runs as the user with ID 1000. On Linux, give it the data directory, or it can't create the database: `sudo chown 1000:1000 data`. Docker Desktop on macOS and Windows doesn't need this.
 
 Edit `.env` and set `AUTH_SECRET` to the secret you generated:
 
@@ -117,7 +120,7 @@ Putting Jant behind a reverse proxy like Caddy, Nginx, or Traefik is common. Com
 Two cases need explicit settings:
 
 - **The reverse proxy doesn't forward `X-Forwarded-Host` / `X-Forwarded-Proto` correctly**: absolute URLs in RSS, sitemap, exports, and auth callbacks will use the wrong host. Pin it with `SITE_ORIGIN=https://<your-domain>` in `.env`.
-- **Mounted under a subpath** (e.g. `example.com/blog`): set `SITE_PATH_PREFIX=/blog`. `SITE_ORIGIN` is a separate variable that only accepts an origin (scheme + host + port); the path part is ignored — decide whether you also need it based on the previous bullet.
+- **Mounted under a subpath** (e.g. `example.com/blog`): set `SITE_PATH_PREFIX=/blog`. `SITE_ORIGIN` is a separate variable that only accepts an origin (scheme + host + port), and one with a path stops the site at startup — decide whether you also need it based on the previous bullet.
 
 For the full list of variables, see [Configuration](configuration.md).
 
@@ -130,8 +133,8 @@ To start a single container, run migrations manually first, then start the app:
 docker run --rm \
   -e AUTH_SECRET=<auth-secret> \
   -v "$(pwd)/data:/var/lib/jant" \
-  owenyoung/jant:latest \
-  node bin/jant.js migrate
+  owenyoung/jant:1 \
+  jant migrate
 
 # Then start the app
 docker run -d \
@@ -140,14 +143,27 @@ docker run -d \
   -e AUTH_SECRET=<auth-secret> \
   -e TRUST_PROXY=false \
   -v "$(pwd)/data:/var/lib/jant" \
-  owenyoung/jant:latest
+  owenyoung/jant:1
 ```
 
 If the container sits behind your own reverse proxy, set `TRUST_PROXY=true`.
 
+## Creating the admin account from the command line
+
+To set up without the browser, such as from a deploy script, run `jant setup` after migrations. It creates the admin account and the site, and finishes onboarding. The password is read from standard input:
+
+```bash
+printf '%s' "$OWNER_PASSWORD" | docker compose run --rm -T jant \
+  jant setup --email you@example.com --password-stdin --site-name "My Blog"
+```
+
+`docker compose run` gives the command the site's `.env` and data directory, so the account goes into the database the site reads, Postgres included.
+
+`--language` defaults to `en` and `--time-zone` to `UTC`; `jant setup --help` lists every option. A site that is already set up is left unchanged, so running the command on every start never puts back a password changed since.
+
 ## Updating the site
 
-Pull the latest image and restart:
+Back up `./data` first; see [Backups](#backups). Then pull the latest image and restart:
 
 ```bash
 docker compose pull
@@ -162,6 +178,8 @@ For repeatable deploys, pin the image tag:
 IMAGE=owenyoung/jant:<version>
 ```
 
+[Upgrading](upgrading.md) has what a site on 0.x has to change.
+
 ## Common commands
 
 ```bash
@@ -174,7 +192,7 @@ docker compose down          # stop the whole stack
 
 Under the default Docker setup, a complete backup must include at least:
 
-- `./data/jant.sqlite` — the database
+- `./data/jant.sqlite` — the database, with `jant.sqlite-wal` next to it if the container didn't stop cleanly
 - `./data/media/` — uploaded media
 
 For details, see [Backups and recovery](backups.md).

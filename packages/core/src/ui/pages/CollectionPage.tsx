@@ -15,6 +15,7 @@ import {
 import { render as renderMarkdown } from "../../lib/markdown.js";
 import { formatPageLabel } from "../../lib/pagination.js";
 import { toPublicPath } from "../../lib/url.js";
+import { collectionSortParam } from "../../lib/collection-sort.js";
 import { TimelineFeed } from "../feed/TimelineFeed.js";
 import {
   getCollectionDialogLabels,
@@ -80,7 +81,7 @@ export const CollectionPage: FC<CollectionPageProps> = ({
   );
   const sortOptions = [
     {
-      value: "newest",
+      value: "newest" as const,
       icon: (
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -106,7 +107,7 @@ export const CollectionPage: FC<CollectionPageProps> = ({
       ),
     },
     {
-      value: "oldest",
+      value: "oldest" as const,
       icon: (
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -134,7 +135,7 @@ export const CollectionPage: FC<CollectionPageProps> = ({
     ...(showRatingSort
       ? [
           {
-            value: "rating_desc",
+            value: "rating_desc" as const,
             icon: (
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -168,7 +169,6 @@ export const CollectionPage: FC<CollectionPageProps> = ({
   return (
     <div
       class="py-6"
-      data-page="collection"
       data-collection-mode={isAggregate ? "aggregate" : "single"}
       data-collection-id={isAggregate ? undefined : primaryCollection.id}
       data-collection-slugs={collections
@@ -295,7 +295,7 @@ export const CollectionPage: FC<CollectionPageProps> = ({
                   >
                     <span
                       dangerouslySetInnerHTML={{
-                        __html: getIconSvg("rss") ?? "",
+                        __html: getIconSvg("rss"),
                       }}
                     />
                   </a>
@@ -358,7 +358,7 @@ export const CollectionPage: FC<CollectionPageProps> = ({
                       href={
                         option.value === defaultSort
                           ? collectionUrl
-                          : `${collectionUrl}?sort=${option.value}`
+                          : `${collectionUrl}?sort=${collectionSortParam(option.value)}`
                       }
                       role="menuitem"
                       class={`collection-sort-option ${

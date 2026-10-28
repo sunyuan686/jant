@@ -3,6 +3,7 @@ import {
   readAuthorCss,
   readComponentCss,
   readReaderCss,
+  readShareCss,
 } from "./helpers/component-css.js";
 
 /**
@@ -24,6 +25,13 @@ const AUTHOR_ONLY = [
   "confirm",
   "draft",
   "theme-preview",
+  // "Share as image": the dialog and the card it captures. Readers use it
+  // too, but from `client-share.css`, linked when a post menu opens.
+  "share",
+  // The floating compose button on phones, and the page modifier that keeps
+  // room for it. Reader layout renders both, but only for a signed-in author.
+  "site-mobile-compose",
+  "site-page-mobile-compose-enabled",
   // From `components.css`: the config editor, the navigation manager, the
   // custom URL manager, the dash chrome and the form skeletons. `.nav-*` here
   // is `jant-nav-manager`, not the site header — that is `.site-header-nav`.
@@ -128,6 +136,17 @@ describe("stylesheet audience", () => {
     ]) {
       expect(selectorClasses(css)).toContain(name);
     }
+  });
+
+  it("keeps Share as image in its own sheet, which readers load too", () => {
+    // A share rule in the author sheet would reach the author's dialog and
+    // leave a reader's unstyled.
+    const isShare = (name: string) =>
+      name === "share" || name.startsWith("share-");
+    expect(selectorClasses(readAuthorCss()).filter(isShare)).toEqual([]);
+    expect(selectorClasses(readShareCss())).toEqual(
+      expect.arrayContaining(["share-dialog", "share-card"]),
+    );
   });
 
   it("moved real weight, not a handful of rules", () => {

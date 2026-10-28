@@ -1,10 +1,15 @@
 # Demo Source
 
-`sites/demo-source` is the private authoring site for the public demo.
+`sites/demo-source` is the authoring site for the public demo.
 
 Use this Worker to write, edit, and curate the official demo content. Its
 output is the canonical site snapshot committed in
 `sites/demo-source/canonical/snapshot/`.
+
+Private means only the author can write here. Reading is open, the way every
+Jant site is — so `wrangler.toml` sets `NOINDEX = "true"` to keep the official
+demo content from being indexed twice, once under a hostname that is not its
+public face.
 
 Repo automation still lives in the root `mise.toml` because the rebuild flow
 crosses both `sites/demo-source` and `sites/demo`, and `sites/demo` also serves
@@ -54,11 +59,11 @@ mise run demo-source-reset
 
 ## GitHub Actions deploy
 
-`sites/demo-source` now auto-deploys from the repo root workflow
-[`deploy-demo-source.yml`](/Users/green/project/jant/1/.github/workflows/deploy-demo-source.yml).
-Pushes to `main` deploy when either `packages/core/**` or
-`sites/demo-source/**` changes. You can also run the workflow manually with
-`workflow_dispatch`.
+`sites/demo-source` deploys from the repo root workflow
+[`deploy-demo-source.yml`](../../.github/workflows/deploy-demo-source.yml),
+which is `workflow_dispatch` only — run it by hand from the Actions tab. Pushing
+to `main` does not deploy it, so the deployed Worker stays on whatever code was
+current the last time someone ran it.
 
 Configure these repository secrets before relying on CI deploys:
 
@@ -83,8 +88,8 @@ Precedence is:
 Recommended split:
 
 - repo root `.env.repo.local`: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
-  Start from [`/.env.repo.example`](/Users/green/project/jant/main/.env.repo.example).
-- [`sites/demo-source/.env.example`](/Users/green/project/jant/main/sites/demo-source/.env.example):
+  Start from [`.env.repo.example`](../../.env.repo.example).
+- [`.env.example`](.env.example):
   copy to `.env.local` only if you want local overrides such as
   `DEMO_SOURCE_URL`
 
@@ -98,8 +103,10 @@ Recommended split:
    ```
 
 3. Optional: refresh the canonical `site-export/` fixture for `jant site import`
-   testing and local Node/Postgres bootstrapping. This is derived from the
-   committed snapshot, not exported separately from the live Worker:
+   testing and local Node/Postgres bootstrapping. This one goes over HTTP
+   against the deployed `demo-source` site, so it needs `JANT_API_TOKEN` and it
+   reads the live site rather than the snapshot you just committed — deploy
+   first if the two have to agree:
 
    ```sh
    mise run demo-source-export-canonical-site-export

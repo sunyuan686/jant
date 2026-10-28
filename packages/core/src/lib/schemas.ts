@@ -48,7 +48,7 @@ import {
 } from "./filter-dimensions.js";
 import { normalizeSlug } from "./slug-format.js";
 import { isReservedPath } from "./constants.js";
-import { sanitizeUrl, normalizePath } from "./url.js";
+import { isFullUrl, sanitizeUrl, normalizePath } from "./url.js";
 import { isSupportedTimeZone, normalizeTimeZone } from "./timezones.js";
 
 // =============================================================================
@@ -157,11 +157,7 @@ function sanitizeNullableUpdateUrl() {
 /** Preserve omitted ratings and normalize explicit clears to null on update. */
 function createNullableUpdateRatingSchema() {
   return z
-    .union([
-      z.coerce.number().int().min(0).max(5),
-      z.literal("").transform(() => null),
-      z.null(),
-    ])
+    .union([z.number().int().min(0).max(5), z.null()])
     .optional()
     .transform((value) => (value === 0 ? null : value));
 }
@@ -177,6 +173,54 @@ export const FormatSchema = z.enum(FORMATS);
  * Based on STATUSES from types.ts
  */
 export const StatusSchema = z.enum(STATUSES);
+
+/**
+ * A list's `limit`: an integer, clamped to `1`…`max`. A value past either end
+ * reads as that end, so a client asking for more than a page holds gets a
+ * full page rather than an error; one that isn't an integer answers 400. An
+ * empty value reads as absent.
+ *
+ * @param max - The largest page the list returns
+ * @param fallback - The page size when `limit` is absent
+ * @returns The schema, for a query string or a JSON body
+ * @example
+ * ```ts
+ * z.object({ limit: pageLimitSchema(100, 20) }).parse({ limit: "500" });
+ * // => { limit: 100 }
+ * ```
+ */
+export function pageLimitSchema(max: number, fallback: number) {
+  return z
+    .preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .transform((value) => Math.min(Math.max(value, 1), max))
+        .optional(),
+    )
+    .transform((value) => value ?? fallback)
+    .describe(`Page size, 1 to ${max}; default ${fallback}`);
+}
+
+/** `q` and `limit` for the author's search, over HTTP and MCP. */
+export const SearchPostsQuerySchema = z.object({
+  q: z
+    .string({ error: "Query parameter 'q' is required" })
+    .trim()
+    .min(1, "Query parameter 'q' is required")
+    .max(200, "Query parameter 'q' is longer than 200 characters"),
+  limit: pageLimitSchema(50, 20),
+});
+
+/**
+ * How a read returns post bodies: `markdown` returns `bodyMarkdown` in place
+ * of the rendered fields. Every API read that returns posts takes it.
+ */
+export const PostContentSchema = z.enum(["markdown"]);
+
+/** A post read's body format, as {@link PostContentSchema} parses it. */
+export type PostContent = z.infer<typeof PostContentSchema>;
 
 /**
  * Post/general sort order enum schema
@@ -195,10 +239,14 @@ export const NavItemTypeSchema = z.enum(NAV_ITEM_TYPES);
 export const SystemNavKeySchema = z.enum(SYSTEM_NAV_KEY_VALUES);
 
 /**
- * Redirect type enum schema
- * Form input validation for redirect type (stored as number in DB)
+ * Redirect type, as forms send it ("301") or as the API answers it (301).
+ * Parses to the string form; stored as a number.
  */
-export const RedirectTypeSchema = z.enum(["301", "302"]);
+export const RedirectTypeSchema = z.union([
+  z.enum(["301", "302"]),
+  z.literal(301).transform(() => "301" as const),
+  z.literal(302).transform(() => "302" as const),
+]);
 
 /**
  * Custom URL target type enum schema.
@@ -230,13 +278,12 @@ export const CreatableCustomUrlTargetTypeSchema = z.enum([
 /**
  * Rating schema (1-5 integer)
  */
-export const RatingSchema = z.coerce
+export const RatingSchema = z
   .number()
   .int()
   .min(0)
   .max(5)
   .optional()
-  .or(z.literal("").transform(() => undefined))
   .transform((v) => (v === 0 ? undefined : v));
 
 /**
@@ -264,6 +311,15 @@ const NavItemIdSchema = createTypeIdSchema(ID_PREFIX.navItem);
 const PathIdSchema = createTypeIdSchema(ID_PREFIX.path);
 
 /**
+ * An address the author picks, without its leading slash. It starts with a
+ * letter or digit because a first segment that starts with `_` or `.` belongs
+ * to Jant (`isReservedPath`).
+ */
+const AUTHOR_PATH_PATTERN = /^[a-z0-9][a-z0-9\-/.]*$/;
+const AUTHOR_PATH_MESSAGE =
+  "Path must start with a letter or digit and contain only lowercase letters, digits, hyphens, slashes, and dots";
+
+/**
  * Base post fields (shared between create and update schemas)
  */
 const PostFieldsSchema = z.object({
@@ -284,7 +340,7 @@ const PostFieldsSchema = z.object({
     .string()
     .min(1)
     .transform(normalizePath)
-    .pipe(z.string().min(1))
+    .pipe(z.string().min(1).regex(AUTHOR_PATH_PATTERN, AUTHOR_PATH_MESSAGE))
     .optional()
     .or(z.literal("").transform(() => undefined)),
   title: sanitizeText(300)
@@ -297,32 +353,12 @@ const PostFieldsSchema = z.object({
   bodyMarkdown: z.string().optional(),
   status: StatusSchema.optional(),
   visibility: z.enum(VISIBILITIES).optional(),
-  // Admin UI sends boolean flags; the Hugo importer and API clients can
-  // instead send explicit ISO-8601 or Unix-second timestamps via
-  // `pinnedAt` / `featuredAt`. The refine below at the API-body level
-  // collapses whichever form is present into a single internal field.
-  pinned: z
-    .union([z.boolean(), z.literal("on").transform(() => true)])
-    .optional(),
+  // The composer sends the flags; the importer and other API clients can
+  // send the moments themselves, in Unix seconds like every timestamp.
+  pinned: z.boolean().optional(),
   featured: z.boolean().optional(),
-  pinnedAt: z
-    .union([
-      z.iso
-        .datetime()
-        .transform((iso) => Math.floor(new Date(iso).getTime() / 1000)),
-      z.number().int().positive(),
-      z.null(),
-    ])
-    .optional(),
-  featuredAt: z
-    .union([
-      z.iso
-        .datetime()
-        .transform((iso) => Math.floor(new Date(iso).getTime() / 1000)),
-      z.number().int().positive(),
-      z.null(),
-    ])
-    .optional(),
+  pinnedAt: z.union([z.number().int().positive(), z.null()]).optional(),
+  featuredAt: z.union([z.number().int().positive(), z.null()]).optional(),
   url: z
     .url()
     .refine((val) => sanitizeUrl(val) !== "", {
@@ -339,10 +375,7 @@ const PostFieldsSchema = z.object({
     .or(z.literal("")),
   quoteText: z.string().optional(),
   rating: RatingSchema,
-  collectionIds: z
-    .array(CollectionIdSchema)
-    .optional()
-    .or(z.literal("").transform(() => undefined)),
+  collectionIds: z.array(CollectionIdSchema).optional(),
   collectionEntries: z
     .array(
       z.object({
@@ -366,31 +399,27 @@ const PostFieldsSchema = z.object({
   mediaAlts: z.record(MediaIdSchema, z.string()).optional(),
 });
 
-const ApiMediaAttachmentInputSchema = z
-  .object({
-    type: z.literal("media"),
-    mediaId: MediaIdSchema,
-    alt: z
-      .string()
-      .max(500)
-      .transform((s) => s.replace(CONTROL_CHAR_RE, "").trim())
-      .optional()
-      .or(z.literal("").transform(() => "")),
-  })
-  .strict();
+const ApiMediaAttachmentInputSchema = z.object({
+  type: z.literal("media"),
+  mediaId: MediaIdSchema,
+  alt: z
+    .string()
+    .max(500)
+    .transform((s) => s.replace(CONTROL_CHAR_RE, "").trim())
+    .optional()
+    .or(z.literal("").transform(() => "")),
+});
 
-const ApiTextAttachmentInputSchema = z
-  .object({
-    type: z.literal("text"),
-    contentFormat: z.enum(TEXT_ATTACHMENT_CONTENT_FORMATS),
-    content: z.string().refine((value) => value.trim().length > 0, {
-      message: "Text attachments need content.",
-    }),
-    summary: sanitizeText(300)
-      .optional()
-      .or(z.literal("").transform(() => undefined)),
-  })
-  .strict();
+const ApiTextAttachmentInputSchema = z.object({
+  type: z.literal("text"),
+  contentFormat: z.enum(TEXT_ATTACHMENT_CONTENT_FORMATS),
+  content: z.string().refine((value) => value.trim().length > 0, {
+    message: "Text attachments need content.",
+  }),
+  summary: sanitizeText(300)
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+});
 
 export const PostAttachmentInputSchema = z.discriminatedUnion("type", [
   ApiMediaAttachmentInputSchema,
@@ -400,16 +429,14 @@ export const PostAttachmentInputSchema = z.discriminatedUnion("type", [
 const ApiPostFieldsSchema = PostFieldsSchema.omit({
   mediaIds: true,
   mediaAlts: true,
-})
-  .extend({
-    attachments: z
-      .array(PostAttachmentInputSchema)
-      .max(MAX_MEDIA_ATTACHMENTS, {
-        message: `Posts allow at most ${MAX_MEDIA_ATTACHMENTS} attachments`,
-      })
-      .optional(),
-  })
-  .strict();
+}).extend({
+  attachments: z
+    .array(PostAttachmentInputSchema)
+    .max(MAX_MEDIA_ATTACHMENTS, {
+      message: `Posts allow at most ${MAX_MEDIA_ATTACHMENTS} attachments`,
+    })
+    .optional(),
+});
 
 /** Mutual exclusivity: body and bodyMarkdown cannot both be provided */
 function refineBodyExclusivity<
@@ -425,6 +452,121 @@ function hasNonEmptyText(value: string | null | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/** A field a post's format doesn't allow, or needs and lacks. */
+export interface PostFormatIssue {
+  path: string;
+  message: string;
+}
+
+/**
+ * The fields a post of this format mustn't carry, and, with `complete`, the
+ * ones it must.
+ *
+ * Create checks both. Update checks only what the body sends against the
+ * format the post will have, since a field it leaves out keeps its value.
+ *
+ * @param format - The post's format after the request
+ * @param data - The request's format-specific fields
+ * @param options.complete - Whether missing required fields count
+ * @returns Every issue found, in field order
+ * @example
+ * postFormatIssues("note", { sourceName: "Ada" }, { complete: false });
+ * // [{ path: "sourceName", message: "Notes can't include a source name." }]
+ */
+export function postFormatIssues(
+  format: string,
+  data: {
+    title?: string | null;
+    sourceName?: string | null;
+    url?: string | null;
+    sourceUrl?: string | null;
+    quoteText?: string | null;
+  },
+  options: { complete: boolean },
+): PostFormatIssue[] {
+  const has = {
+    url: hasNonEmptyText(data.url),
+    sourceUrl: hasNonEmptyText(data.sourceUrl),
+    quoteText: hasNonEmptyText(data.quoteText),
+    title: hasNonEmptyText(data.title),
+    sourceName: hasNonEmptyText(data.sourceName),
+  };
+  const issues: PostFormatIssue[] = [];
+
+  if (format === "note") {
+    if (has.url)
+      issues.push({ path: "url", message: "Notes can't include a URL." });
+    if (has.quoteText) {
+      issues.push({
+        path: "quoteText",
+        message: "Notes can't include quoted text.",
+      });
+    }
+    if (has.sourceName) {
+      issues.push({
+        path: "sourceName",
+        message: "Notes can't include a source name.",
+      });
+    }
+    if (has.sourceUrl) {
+      issues.push({
+        path: "sourceUrl",
+        message: "Notes can't include a source URL.",
+      });
+    }
+  }
+
+  if (format === "link") {
+    if (options.complete && !has.title) {
+      issues.push({ path: "title", message: "Link posts need a title." });
+    }
+    if (options.complete && !has.url) {
+      issues.push({ path: "url", message: "Link posts need a URL." });
+    }
+    if (has.quoteText) {
+      issues.push({
+        path: "quoteText",
+        message: "Link posts can't include quoted text.",
+      });
+    }
+    if (has.sourceName) {
+      issues.push({
+        path: "sourceName",
+        message: "Link posts can't include a source name.",
+      });
+    }
+    if (has.sourceUrl) {
+      issues.push({
+        path: "sourceUrl",
+        message: "Link posts can't include a source URL.",
+      });
+    }
+  }
+
+  if (format === "quote") {
+    if (options.complete && !has.quoteText) {
+      issues.push({
+        path: "quoteText",
+        message: "Quote posts need quoted text.",
+      });
+    }
+    if (has.title) {
+      issues.push({
+        path: "title",
+        message: "Quote posts use sourceName instead of title.",
+      });
+    }
+    if (has.url) {
+      issues.push({
+        path: "url",
+        message: "Quote posts use sourceUrl instead of url.",
+      });
+    }
+  }
+
+  return issues;
+}
+
 function refineCreatePostFormatShape<
   T extends {
     format: string;
@@ -436,102 +578,13 @@ function refineCreatePostFormatShape<
   },
 >(schema: z.ZodType<T>) {
   return schema.superRefine((data, ctx) => {
-    const hasUrl = hasNonEmptyText(data.url);
-    const hasSourceUrl = hasNonEmptyText(data.sourceUrl);
-    const hasQuoteText = hasNonEmptyText(data.quoteText);
-    const hasTitle = hasNonEmptyText(data.title);
-    const hasSourceName = hasNonEmptyText(data.sourceName);
-
-    if (data.format === "note") {
-      if (hasUrl) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["url"],
-          message: "Notes can't include a URL.",
-        });
-      }
-      if (hasQuoteText) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["quoteText"],
-          message: "Notes can't include quoted text.",
-        });
-      }
-      if (hasSourceName) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["sourceName"],
-          message: "Notes can't include a source name.",
-        });
-      }
-      if (hasSourceUrl) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["sourceUrl"],
-          message: "Notes can't include a source URL.",
-        });
-      }
-    }
-
-    if (data.format === "link") {
-      if (!hasTitle) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["title"],
-          message: "Link posts need a title.",
-        });
-      }
-      if (!hasUrl) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["url"],
-          message: "Link posts need a URL.",
-        });
-      }
-      if (hasQuoteText) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["quoteText"],
-          message: "Link posts can't include quoted text.",
-        });
-      }
-      if (hasSourceName) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["sourceName"],
-          message: "Link posts can't include a source name.",
-        });
-      }
-      if (hasSourceUrl) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["sourceUrl"],
-          message: "Link posts can't include a source URL.",
-        });
-      }
-    }
-
-    if (data.format === "quote" && !hasQuoteText) {
+    for (const issue of postFormatIssues(data.format, data, {
+      complete: true,
+    })) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["quoteText"],
-        message: "Quote posts need quoted text.",
-      });
-    }
-
-    if (data.format === "quote" && hasTitle) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["title"],
-        message: "Quote posts use sourceName instead of title.",
-      });
-    }
-
-    if (data.format === "quote" && hasUrl) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["url"],
-        message: "Quote posts use sourceUrl instead of url.",
+        path: [issue.path],
+        message: issue.message,
       });
     }
   });
@@ -548,14 +601,31 @@ function refineSlugPathExclusivity<T extends { slug?: string; path?: string }>(
 }
 
 /**
+ * Create only: a post's own record timestamps, in Unix seconds. An import or
+ * a migration restores them, so "last edited" (feed `<updated>`, sitemap
+ * `lastmod`) and Thread order (the root, then replies by creation time, then
+ * ID) survive the move.
+ * Omitted, both are the time of the request; `updatedAt` alone defaults to
+ * `createdAt`.
+ */
+const RestoredTimestampFields = {
+  createdAt: z.number().int().positive().optional(),
+  updatedAt: z.number().int().positive().optional(),
+};
+
+/**
  * API request body schema for creating a post
  */
 export const CreatePostSchema = refineSlugPathExclusivity(
-  refineCreatePostFormatShape(refineBodyExclusivity(PostFieldsSchema)),
+  refineCreatePostFormatShape(
+    refineBodyExclusivity(PostFieldsSchema.extend(RestoredTimestampFields)),
+  ),
 );
 
 export const CreatePostApiSchema = refineSlugPathExclusivity(
-  refineCreatePostFormatShape(refineBodyExclusivity(ApiPostFieldsSchema)),
+  refineCreatePostFormatShape(
+    refineBodyExclusivity(ApiPostFieldsSchema.extend(RestoredTimestampFields)),
+  ),
 );
 
 /**
@@ -588,16 +658,25 @@ const UpdatePostFieldsSchema = PostFieldsSchema.partial().extend({
   rating: createNullableUpdateRatingSchema(),
 });
 
-const UpdatePostApiFieldsSchema = ApiPostFieldsSchema.partial().extend({
-  title: sanitizeNullableUpdateText(300),
-  sourceName: sanitizeNullableUpdateText(300),
-  body: z.string().nullable().optional(),
-  bodyMarkdown: z.string().nullable().optional(),
-  url: sanitizeNullableUpdateUrl(),
-  sourceUrl: sanitizeNullableUpdateUrl(),
-  quoteText: z.string().nullable().optional(),
-  rating: createNullableUpdateRatingSchema(),
-});
+// A post's place in a Thread, its translation link, and its creation path are
+// set when it's created; an update names none of them.
+const UpdatePostApiFieldsSchema = ApiPostFieldsSchema.omit({
+  path: true,
+  replyToId: true,
+  quietReply: true,
+  translationOfId: true,
+})
+  .partial()
+  .extend({
+    title: sanitizeNullableUpdateText(300),
+    sourceName: sanitizeNullableUpdateText(300),
+    body: z.string().nullable().optional(),
+    bodyMarkdown: z.string().nullable().optional(),
+    url: sanitizeNullableUpdateUrl(),
+    sourceUrl: sanitizeNullableUpdateUrl(),
+    quoteText: z.string().nullable().optional(),
+    rating: createNullableUpdateRatingSchema(),
+  });
 
 export const UpdatePostSchema = refineSlugPathExclusivity(
   refineBodyExclusivity(UpdatePostFieldsSchema),
@@ -629,7 +708,7 @@ export const CreateNavItemSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("collection"),
-    collectionId: z.string().min(1),
+    collectionId: CollectionIdSchema,
     label: sanitizeText(100).pipe(z.string().min(1)).optional(),
     placement: z.enum(["header", "more"]).optional(),
   }),
@@ -809,7 +888,8 @@ export const CreateSmartCollectionSchema = z.object({
   description: CollectionDescriptionValueSchema.nullable().optional(),
   // Omitted means no conditions, which is the honest spelling of "every post".
   selection: PostFilterSelectionSchema.optional(),
-  sort: z.enum(SMART_COLLECTION_SORT_ORDERS).optional(),
+  // Named as a collection's is, and taking the same values.
+  sortOrder: z.enum(SMART_COLLECTION_SORT_ORDERS).optional(),
   layout: z.enum(ARCHIVE_LAYOUTS).nullable().optional(),
 });
 
@@ -981,14 +1061,24 @@ export const CreateCustomUrlSchema = z.object({
     .string()
     .min(1)
     .max(512)
-    .regex(
-      /^\/?[a-z0-9][a-z0-9\-/.]*$/,
-      "Path must contain only lowercase alphanumeric characters, hyphens, slashes, and dots",
+    .refine(
+      (p) => AUTHOR_PATH_PATTERN.test(p.replace(/^\//, "")),
+      AUTHOR_PATH_MESSAGE,
     )
     .transform((p) => (p.startsWith("/") ? p : `/${p}`)),
   targetType: CreatableCustomUrlTargetTypeSchema,
   targetId: z.string().optional(),
-  toPath: z.string().optional(),
+  // A path on the site, or an http(s) URL. A path keeps its query string.
+  toPath: z
+    .string()
+    .trim()
+    .min(1)
+    .max(2048)
+    .refine((value) => !isFullUrl(value) || URL.canParse(value), {
+      message:
+        "Enter a path on this site, such as /new-path, or a full http:// or https:// address.",
+    })
+    .optional(),
   redirectType: RedirectTypeSchema.optional(),
 });
 
@@ -1053,6 +1143,30 @@ export const SetupSiteSchema = SetupLanguageSchema.extend({
 
 /** The answers the last setup screen collects from either install kind. */
 export type SetupLanguageAnswers = z.infer<typeof SetupLanguageSchema>;
+
+/**
+ * Both setup screens' answers at once, for `jant setup`: a self-hosted install
+ * set up by its deployment rather than in a browser.
+ *
+ * Only the credentials are required. Everything the second screen asks has
+ * the default an empty answer gets there, and a browser's guesses — its
+ * language, its time zone — have no counterpart here.
+ */
+export const InstanceSetupSchema = SetupAccountSchema.extend({
+  siteId: createTypeIdSchema(ID_PREFIX.site).optional(),
+  siteName: z
+    .string()
+    .trim()
+    .min(1, "Site name cannot be empty")
+    .max(MAX_SITE_NAME_LENGTH)
+    .optional(),
+  siteLanguage: ContentLanguageSchema.optional(),
+  timeZone: z
+    .string()
+    .refine(isSupportedTimeZone, "Choose a valid time zone.")
+    .transform(normalizeTimeZone)
+    .optional(),
+});
 
 /**
  * Sign-in form validation schema
@@ -1148,6 +1262,57 @@ export function validateAttachmentCount(attachments: unknown[]): string | null {
   return null;
 }
 
+// =============================================================================
+// Multipart form fields
+// =============================================================================
+
+/**
+ * A file in a multipart form, or `undefined` when the field is missing or
+ * holds text. A route that needs the file says so itself.
+ */
+export const FormFileSchema = z.preprocess(
+  (value) => (value instanceof File ? value : undefined),
+  z.instanceof(File).optional(),
+);
+
+/** A form field's text, or `undefined` when it is empty or holds a file. */
+export const FormTextSchema = z.preprocess(
+  (value) => (typeof value === "string" && value !== "" ? value : undefined),
+  z.string().optional(),
+);
+
+/**
+ * A positive whole number written in a form field, read as `parseInt` reads
+ * it; anything else is left out rather than refused.
+ */
+export const FormPositiveIntSchema = z.preprocess((value) => {
+  const number = typeof value === "string" ? Number.parseInt(value, 10) : 0;
+  return number > 0 ? number : undefined;
+}, z.number().int().positive().optional());
+
+/**
+ * Read a request's JSON body, answering a body that isn't JSON with a
+ * ValidationError (400) rather than letting the parse error surface as a 500.
+ *
+ * @param c - Anything with Hono's `req.json()`, usually the request context
+ * @returns The parsed body, to validate with {@link parseValidated}
+ * @example
+ * ```ts
+ * const body = parseValidated(CreatePostApiSchema, await readJsonBody(c));
+ * ```
+ */
+export async function readJsonBody(c: {
+  req: { json(): Promise<unknown> };
+}): Promise<unknown> {
+  try {
+    return await c.req.json();
+  } catch {
+    throw new ValidationError(
+      "The request body isn't valid JSON. Send a JSON object with Content-Type: application/json.",
+    );
+  }
+}
+
 /**
  * Parse and validate data against a Zod schema, throwing ValidationError on failure.
  *
@@ -1156,7 +1321,7 @@ export function validateAttachmentCount(attachments: unknown[]): string | null {
  * @returns Validated data
  * @example
  * ```ts
- * const body = parseValidated(CreatePostSchema, await c.req.json());
+ * const body = parseValidated(CreatePostSchema, await readJsonBody(c));
  * ```
  */
 export function parseValidated<T>(schema: z.ZodSchema<T>, data: unknown): T {

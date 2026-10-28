@@ -121,13 +121,11 @@ export interface PostView {
 }
 
 /**
- * Render-ready post data for feeds.
- * Feed timestamps can differ from on-page timestamps when a feed represents a
- * curation event rather than original publication time.
+ * Render-ready post data for feeds. `<updated>` can differ from the post's
+ * own date: a Thread's replies move it, and so does a collection taking the
+ * post in. `<published>` is always the post's.
  */
 export interface FeedPostView extends PostView {
-  /** Optional ISO 8601 timestamp used for Atom `<published>` */
-  feedPublishedAt?: string;
   /** Optional ISO 8601 timestamp used for Atom `<updated>` */
   feedUpdatedAt?: string;
   /** Thread replies to render inline in the feed entry content */
@@ -235,25 +233,42 @@ export interface SearchResultView {
 }
 
 /**
+ * A thread as the timeline folds it: the ranked windows, before overlap is
+ * removed, and the gap's resolved target.
+ */
+export interface ThreadPreviewView {
+  leadingReplies: PostView[];
+  trailingReplies: PostView[];
+  latestReply: PostView;
+  /**
+   * Where the gap link points: the first post the fold hides. `null` when
+   * nothing is hidden, or when that post could not be loaded — the gap is then
+   * left out, as the feed leaves it out.
+   */
+  gapHref: string | null;
+  totalReplyCount: number;
+}
+
+/**
  * Render-ready timeline item for theme components.
  */
 export interface TimelineItemView {
   post: PostView;
-  threadPreview?: {
-    leadingReplies: PostView[];
-    trailingReplies: PostView[];
-    latestReply: PostView;
-    /** Where the gap link points: the first post the fold hides. */
-    gapHref?: string;
-    totalReplyCount: number;
-  };
+  threadPreview?: ThreadPreviewView;
   curatedThread?: {
     rootPost: PostView;
     /** Show ratings on non-highlighted context posts (complete Collection Threads). */
     showContextRatings: boolean;
     segments: {
       post: PostView;
+      /** Posts the Thread leaves out between this one and the one above. */
       hiddenBeforeCount: number;
+      /**
+       * Where the gap above this post points: the first post it hides. `null`
+       * when nothing is hidden, or when that post could not be loaded — the
+       * gap is then left out, as `threadPreview`'s is.
+       */
+      gapHref: string | null;
       highlighted: boolean;
     }[];
   };

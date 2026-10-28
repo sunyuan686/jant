@@ -10,6 +10,13 @@
  * `src/db/migrations/`, must keep canonical numbering, and must update the
  * journal/snapshot metadata in the same change.
  *
+ * A migration that drops a table other tables reference — drizzle-kit's
+ * rebuild when it alters a SQLite column — holds their rows and refills them,
+ * as "Rebuilding a Referenced Table" in `docs/internal/coding-standards.md`
+ * describes. One that rebuilds `post` also points the copy's references to
+ * itself at the copy, keeps `rowid` for `post_fts`, and recreates the search
+ * triggers.
+ *
  * Historical business-data fixes belong in `src/db/backfills/`.
  */
 
@@ -66,13 +73,15 @@ function listBackfillFiles(): string[] {
   }
 }
 
+function readMigrationStatements(filename: string): string[] {
+  return readFileSync(resolve(MIGRATIONS_DIR, filename), "utf-8")
+    .split("--> statement-breakpoint")
+    .map((sql) => sql.trim())
+    .filter(Boolean);
+}
+
 function applyMigration(sqlite: Database.Database, filename: string) {
-  const migration = readFileSync(resolve(MIGRATIONS_DIR, filename), "utf-8");
-  for (const sql of migration.split("--> statement-breakpoint")) {
-    const trimmed = sql.trim();
-    if (!trimmed) continue;
-    sqlite.exec(trimmed);
-  }
+  for (const sql of readMigrationStatements(filename)) sqlite.exec(sql);
 }
 
 function applyMigrationsThrough(
@@ -100,6 +109,186 @@ function applyMigrationsAfter(
   if (!foundPrevious) {
     throw new Error(`Migration not found: ${previousFilename}`);
   }
+}
+
+/**
+ * The last migration written before a rebuild had to keep what its DROP loses:
+ * the rows that reference the table it drops, and for `post` its search. 0034
+ * rebuilt `smart_collection` without holding them; no released site had rows
+ * there yet.
+ */
+const LAST_MIGRATION_BEFORE_HELD_REBUILDS = "0034_cheerful_rumiko_fujikawa.sql";
+
+/**
+ * Every table whose rows a DROP of `table` deletes, nulls or trips over: each
+ * table that references it, directly or through another table that does,
+ * parents before children.
+ */
+function listReferencingTables(
+  sqlite: Database.Database,
+  table: string,
+): string[] {
+  const tables = sqlite
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite%'",
+    )
+    .pluck()
+    .all() as string[];
+  const references = sqlite.prepare(
+    `SELECT 1 FROM pragma_foreign_key_list(?) WHERE "table" = ? COLLATE NOCASE`,
+  );
+
+  const referencing: string[] = [];
+  const parents = [table];
+  // `parents` grows while the loop runs, and the loop visits what it adds.
+  for (const parent of parents) {
+    for (const child of tables) {
+      if (child === table || referencing.includes(child)) continue;
+      if (references.get(child, parent)) {
+        referencing.push(child);
+        parents.push(child);
+      }
+    }
+  }
+  return referencing;
+}
+
+/** The FTS tables that index `table` as their external content. */
+function listFtsIndexes(sqlite: Database.Database, table: string): string[] {
+  const content = new RegExp(
+    String.raw`\bcontent\s*=\s*['"\`]?${table}['"\`]?(?!\w)`,
+    "i",
+  );
+  return (
+    sqlite
+      .prepare(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql LIKE 'CREATE VIRTUAL TABLE%'",
+      )
+      .all() as { name: string; sql: string }[]
+  )
+    .filter(({ sql }) => content.test(sql))
+    .map(({ name }) => name);
+}
+
+function startsWith(statement: string, verb: string, table: string) {
+  return new RegExp(
+    String.raw`^\s*${verb}\s+[\`"]?${table}[\`"]?(?!\w)`,
+    "im",
+  ).test(statement);
+}
+
+/** What each DROP in a migration loses unless the migration keeps it. */
+interface DropLosses {
+  /** `dropped → table`: a table whose rows are left to the DROP. */
+  unheldRows: string[];
+  /** `dropped → __new_dropped`: a copy that references the table it replaces. */
+  selfReferences: string[];
+  /** `dropped: trigger`: a trigger the DROP took with it and nothing recreated. */
+  triggers: string[];
+  /** `dropped → fts`: an FTS index left pointing at rowids the copy renumbered. */
+  rowids: string[];
+}
+
+/**
+ * Run `statements` one by one and name what each DROP among them loses, as
+ * "Rebuilding a Referenced Table" in `docs/internal/coding-standards.md`
+ * describes: the rows of each table that references the dropped one unless
+ * they are emptied before the DROP and refilled after it, the whole rebuild
+ * if its copy references the dropped table, the dropped table's triggers
+ * unless they are recreated, and the FTS index over it unless the copy keeps
+ * `rowid`.
+ */
+function findDropLosses(
+  sqlite: Database.Database,
+  statements: string[],
+): DropLosses {
+  const losses: DropLosses = {
+    unheldRows: [],
+    selfReferences: [],
+    triggers: [],
+    rowids: [],
+  };
+  const droppedTriggers: { table: string; trigger: string }[] = [];
+  statements.forEach((statement, index) => {
+    const dropped = /^\s*DROP TABLE\s+(?:IF EXISTS\s+)?[`"]?(\w+)[`"]?/im.exec(
+      statement,
+    )?.[1];
+    if (dropped) {
+      for (const table of listReferencingTables(sqlite, dropped)) {
+        if (table === `__new_${dropped}`) {
+          losses.selfReferences.push(`${dropped} → ${table}`);
+          continue;
+        }
+        const emptied = statements
+          .slice(0, index)
+          .some((earlier) => startsWith(earlier, "DELETE FROM", table));
+        const refilled = statements
+          .slice(index + 1)
+          .some((later) => startsWith(later, "INSERT INTO", table));
+        if (!emptied || !refilled) {
+          losses.unheldRows.push(`${dropped} → ${table}`);
+        }
+      }
+
+      const triggers = sqlite
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE",
+        )
+        .pluck()
+        .all(dropped) as string[];
+      for (const trigger of triggers) {
+        droppedTriggers.push({ table: dropped, trigger });
+      }
+
+      const copiesRowid = new RegExp(
+        String.raw`^\s*INSERT INTO\s+[\`"]?(?:__new_)?${dropped}[\`"]?\s*\(\s*[\`"]?rowid[\`"]?\s*,`,
+        "im",
+      );
+      if (!statements.some((sql) => copiesRowid.test(sql))) {
+        for (const fts of listFtsIndexes(sqlite, dropped)) {
+          losses.rowids.push(`${dropped} → ${fts}`);
+        }
+      }
+    }
+    sqlite.exec(statement);
+  });
+
+  const recreated = sqlite.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ? AND tbl_name = ? COLLATE NOCASE",
+  );
+  for (const { table, trigger } of droppedTriggers) {
+    if (!recreated.get(trigger, table)) {
+      losses.triggers.push(`${table}: ${trigger}`);
+    }
+  }
+  return losses;
+}
+
+/** {@link findDropLosses} for every migration written after 0034. */
+function findLossesInNewMigrations(): DropLosses {
+  const sqlite = new Database(":memory:");
+  sqlite.pragma("foreign_keys = ON");
+
+  const losses: DropLosses = {
+    unheldRows: [],
+    selfReferences: [],
+    triggers: [],
+    rowids: [],
+  };
+  for (const filename of listMigrationFiles()) {
+    const statements = readMigrationStatements(filename);
+    if (filename <= LAST_MIGRATION_BEFORE_HELD_REBUILDS) {
+      for (const sql of statements) sqlite.exec(sql);
+      continue;
+    }
+    const found = findDropLosses(sqlite, statements);
+    for (const kind of Object.keys(losses) as (keyof DropLosses)[]) {
+      losses[kind].push(...found[kind].map((loss) => `${filename}: ${loss}`));
+    }
+  }
+
+  sqlite.close();
+  return losses;
 }
 
 function insertRootPost(
@@ -348,6 +537,342 @@ describe("migration integrity", () => {
         `Duplicates: ${duplicates.join(" | ")}`,
       ].join("\n"),
     ).toEqual([]);
+  });
+
+  it("holds the rows that reference a table a new migration drops", () => {
+    const unheld = findLossesInNewMigrations().unheldRows;
+
+    expect(
+      unheld,
+      [
+        "These migrations drop a table other tables reference and leave those tables' rows to the DROP.",
+        "`jant migrate` keeps foreign keys on whatever `PRAGMA foreign_keys` says, so the DROP deletes the rows (CASCADE), clears the column (SET NULL), or fails (NO ACTION).",
+        "drizzle-kit writes this DROP when it alters a column on SQLite. Copy each table after the arrow into a `__keep_` table and empty it before the rebuild, then refill it after the RENAME.",
+        'See "Rebuilding a Referenced Table" in docs/internal/coding-standards.md.',
+        `Unheld (dropped → referencing): ${unheld.join(", ")}`,
+      ].join("\n"),
+    ).toEqual([]);
+  });
+
+  it("points the copy of a table that references itself at the copy", () => {
+    const selfReferences = findLossesInNewMigrations().selfReferences;
+
+    expect(
+      selfReferences,
+      [
+        "These migrations rebuild a table that references itself, and the copy's foreign keys still name the table it replaces.",
+        "The copied rows then reference the rows the DROP deletes, so the DROP fails on any site with rows.",
+        "Point the copy's own foreign keys at the copy, and give it a temporary unique index on the columns they reference before the INSERT … SELECT.",
+        'See "Rebuilding a Referenced Table" in docs/internal/coding-standards.md.',
+        `Rebuilt (dropped → copy): ${selfReferences.join(", ")}`,
+      ].join("\n"),
+    ).toEqual([]);
+  });
+
+  it("recreates the triggers on a table a new migration drops", () => {
+    const triggers = findLossesInNewMigrations().triggers;
+
+    expect(
+      triggers,
+      [
+        "These migrations drop a table with triggers and don't recreate them.",
+        "DROP TABLE drops the table's triggers with it, and drizzle-kit doesn't know they exist: for `post`, new and edited posts stop reaching search.",
+        "Recreate each trigger after the RENAME, as the migration that last created it writes it.",
+        'See "Rebuilding a Referenced Table" in docs/internal/coding-standards.md.',
+        `Lost (table: trigger): ${triggers.join(", ")}`,
+      ].join("\n"),
+    ).toEqual([]);
+  });
+
+  it("keeps the rowids an FTS index points at when a new migration rebuilds its table", () => {
+    const rowids = findLossesInNewMigrations().rowids;
+
+    expect(
+      rowids,
+      [
+        "These migrations rebuild a table an FTS index reads by rowid, and the copy doesn't keep `rowid`.",
+        "The copy numbers rows afresh, so after a hard delete every later row moves and search returns the wrong rows.",
+        "Add `rowid` to both column lists of the generated INSERT … SELECT into the `__new_` copy.",
+        'See "Rebuilding a Referenced Table" in docs/internal/coding-standards.md.',
+        `Renumbered (table → FTS index): ${rowids.join(", ")}`,
+      ].join("\n"),
+    ).toEqual([]);
+  });
+
+  it("finds the rows 0034's rebuild left to the DROP, and keeps them once held", () => {
+    const siteId = "sit_held_rebuild";
+    const smartCollectionId = "smc_held_rebuild";
+    const referencing = [
+      "collection_directory_item",
+      "nav_item",
+      "path_registry",
+    ];
+    const statements = readMigrationStatements(
+      LAST_MIGRATION_BEFORE_HELD_REBUILDS,
+    );
+
+    function migrateThrough0033() {
+      const sqlite = new Database(":memory:");
+      sqlite.pragma("foreign_keys = ON");
+      applyMigrationsThrough(sqlite, "0033_busy_johnny_storm.sql");
+      return sqlite;
+    }
+
+    function seedSmartCollection(sqlite: Database.Database) {
+      insertSite(sqlite, { id: siteId, key: "default", createdAt: 1 });
+      sqlite.exec(`
+        INSERT INTO smart_collection (id, site_id, title, sort, created_at, updated_at)
+          VALUES ('${smartCollectionId}', '${siteId}', 'Quotes', 'newest', 1, 1);
+        INSERT INTO collection_directory_item (id, site_id, type, smart_collection_id, position, created_at, updated_at)
+          VALUES ('cdi_held_rebuild', '${siteId}', 'smart_collection', '${smartCollectionId}', 'a0', 1, 1);
+        INSERT INTO nav_item (id, site_id, type, smart_collection_id, label, url, placement, position, created_at, updated_at)
+          VALUES ('nav_held_rebuild', '${siteId}', 'smart_collection', '${smartCollectionId}', '', '/quotes', 'header', 'a0', 1, 1);
+        INSERT INTO path_registry (id, site_id, path, kind, smart_collection_id, created_at, updated_at)
+          VALUES ('pth_held_rebuild', '${siteId}', 'quotes', 'slug', '${smartCollectionId}', 1, 1);
+      `);
+    }
+
+    /** Apply `sql` the way both runners do: in one transaction. */
+    function applyInTransaction(sqlite: Database.Database, sql: string[]) {
+      sqlite.transaction(() => {
+        for (const statement of sql) sqlite.exec(statement);
+      })();
+    }
+
+    function countReferencingRows(sqlite: Database.Database) {
+      return referencing.map(
+        (table) =>
+          sqlite
+            .prepare(`SELECT count(*) FROM ${table}`)
+            .pluck()
+            .get() as number,
+      );
+    }
+
+    // As written, 0034 leaves them to the DROP, and its `PRAGMA
+    // foreign_keys=OFF` changes nothing inside the transaction.
+    const bare = migrateThrough0033();
+    expect(findDropLosses(bare, statements).unheldRows.sort()).toEqual(
+      referencing.map((table) => `smart_collection → ${table}`),
+    );
+    bare.close();
+
+    const unheld = migrateThrough0033();
+    seedSmartCollection(unheld);
+    applyInTransaction(unheld, statements);
+    expect(countReferencingRows(unheld)).toEqual([0, 0, 0]);
+    unheld.close();
+
+    // Held the way the coding standards describe.
+    const columns = (sqlite: Database.Database, table: string) =>
+      (
+        sqlite
+          .prepare("SELECT name FROM pragma_table_info(?)")
+          .pluck()
+          .all(table) as string[]
+      )
+        .map((column) => `\`${column}\``)
+        .join(", ");
+    const shape = migrateThrough0033();
+    const heldStatements = [
+      ...referencing.map(
+        (table) =>
+          `CREATE TABLE \`__keep_${table}\` AS SELECT * FROM \`${table}\`;`,
+      ),
+      ...referencing.map((table) => `DELETE FROM \`${table}\`;`),
+      ...statements,
+      ...referencing.flatMap((table) => [
+        `INSERT INTO \`${table}\` (${columns(shape, table)}) SELECT ${columns(shape, table)} FROM \`__keep_${table}\`;`,
+        `DROP TABLE \`__keep_${table}\`;`,
+      ]),
+    ];
+    expect(findDropLosses(shape, heldStatements).unheldRows).toEqual([]);
+    shape.close();
+
+    const held = migrateThrough0033();
+    seedSmartCollection(held);
+    applyInTransaction(held, heldStatements);
+    expect(countReferencingRows(held)).toEqual([1, 1, 1]);
+    expect(held.pragma("foreign_key_check")).toEqual([]);
+    held.close();
+  });
+
+  it("finds what a rebuild of post loses, and keeps search once rebuilt as described", () => {
+    const siteId = "sit_post_rebuild";
+    const searchTriggers = readMigrationStatements(
+      "0003_fts_site_aware.sql",
+    ).filter((sql) => sql.startsWith("CREATE TRIGGER"));
+
+    function migrateToHead() {
+      const sqlite = new Database(":memory:");
+      sqlite.pragma("foreign_keys = ON");
+      for (const filename of listMigrationFiles()) {
+        applyMigration(sqlite, filename);
+      }
+      return sqlite;
+    }
+
+    function insertPost(sqlite: Database.Database, word: string) {
+      insertRootPost(sqlite, {
+        siteId,
+        id: `pst_${word}`,
+        title: `${word} note`,
+        bodyText: word,
+        createdAt: 1,
+      });
+    }
+
+    /** Three posts, the first hard-deleted, so a copy renumbers the others. */
+    function seedPosts(sqlite: Database.Database) {
+      insertSite(sqlite, { id: siteId, key: "default", createdAt: 1 });
+      for (const word of ["alpha", "beta", "gamma"]) insertPost(sqlite, word);
+      sqlite.prepare("DELETE FROM post WHERE id = ?").run("pst_alpha");
+    }
+
+    /** What drizzle-kit writes when it alters a column of `post`. */
+    function generateRebuild(sqlite: Database.Database): string[] {
+      const create = sqlite
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'post'",
+        )
+        .pluck()
+        .get() as string;
+      const columns = (
+        sqlite
+          .prepare("SELECT name FROM pragma_table_info('post')")
+          .pluck()
+          .all() as string[]
+      )
+        .map((column) => `"${column}"`)
+        .join(", ");
+      const indexes = sqlite
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'post' AND sql IS NOT NULL",
+        )
+        .pluck()
+        .all() as string[];
+      return [
+        create
+          .replace("CREATE TABLE `post`", "CREATE TABLE `__new_post`")
+          .replaceAll('"post".', '"__new_post".'),
+        `INSERT INTO \`__new_post\`(${columns}) SELECT ${columns} FROM \`post\`;`,
+        "DROP TABLE `post`;",
+        "ALTER TABLE `__new_post` RENAME TO `post`;",
+        ...indexes,
+      ];
+    }
+
+    function pointSelfReferencesAtCopy([create, ...rest]: string[]) {
+      return [
+        create!.replaceAll("REFERENCES `post`", "REFERENCES `__new_post`"),
+        "CREATE UNIQUE INDEX `__new_uq_post_site_id_id` ON `__new_post` (`site_id`,`id`);",
+        ...rest,
+        "DROP INDEX `__new_uq_post_site_id_id`;",
+      ];
+    }
+
+    function keepRowidsAndTriggers(statements: string[]) {
+      return statements.flatMap((sql) => {
+        if (sql.startsWith("INSERT INTO `__new_post`")) {
+          return [
+            sql
+              .replace('("id"', '("rowid", "id"')
+              .replace('SELECT "id"', 'SELECT "rowid", "id"'),
+          ];
+        }
+        if (sql.startsWith("ALTER TABLE `__new_post` RENAME")) {
+          return [sql, ...searchTriggers];
+        }
+        return [sql];
+      });
+    }
+
+    const rebuiltAsDescribed = (sqlite: Database.Database) =>
+      keepRowidsAndTriggers(pointSelfReferencesAtCopy(generateRebuild(sqlite)));
+
+    function findLosses(rebuild: (sqlite: Database.Database) => string[]) {
+      const shape = migrateToHead();
+      const { selfReferences, triggers, rowids } = findDropLosses(
+        shape,
+        rebuild(shape),
+      );
+      shape.close();
+      return { selfReferences, triggers: triggers.sort(), rowids };
+    }
+
+    /** Seed posts and rebuild `post` the way both runners apply a migration. */
+    function seedAndRebuild(rebuild: (sqlite: Database.Database) => string[]) {
+      const sqlite = migrateToHead();
+      seedPosts(sqlite);
+      const statements = rebuild(sqlite);
+      sqlite.transaction(() => {
+        for (const sql of statements) sqlite.exec(sql);
+      })();
+      return sqlite;
+    }
+
+    function searchPostIds(sqlite: Database.Database, query: string) {
+      return sqlite
+        .prepare(
+          "SELECT post.id FROM post_fts JOIN post ON post.rowid = post_fts.rowid WHERE post_fts MATCH ? ORDER BY post.id",
+        )
+        .pluck()
+        .all(query);
+    }
+
+    function checkSearchIndex(sqlite: Database.Database) {
+      sqlite.exec(
+        "INSERT INTO post_fts(post_fts, rank) VALUES ('integrity-check', 1)",
+      );
+    }
+
+    // As generated, the copy references `post`, so the DROP fails on its rows.
+    expect(findLosses(generateRebuild)).toEqual({
+      selfReferences: ["post → __new_post"],
+      triggers: ["post: post_ad", "post: post_ai", "post: post_au"],
+      rowids: ["post → post_fts"],
+    });
+    expect(() => seedAndRebuild(generateRebuild)).toThrow(
+      /FOREIGN KEY constraint failed/,
+    );
+
+    // With only that fixed, the rebuild runs and search breaks.
+    const unkept = seedAndRebuild((sqlite) =>
+      pointSelfReferencesAtCopy(generateRebuild(sqlite)),
+    );
+    expect(() => checkSearchIndex(unkept)).toThrow();
+    expect(searchPostIds(unkept, "beta")).toEqual(["pst_gamma"]);
+    insertPost(unkept, "delta");
+    expect(searchPostIds(unkept, "delta")).toEqual([]);
+    unkept.close();
+
+    // Rebuilt the way the coding standards describe.
+    expect(findLosses(rebuiltAsDescribed)).toEqual({
+      selfReferences: [],
+      triggers: [],
+      rowids: [],
+    });
+    const kept = seedAndRebuild(rebuiltAsDescribed);
+    checkSearchIndex(kept);
+    expect(searchPostIds(kept, "beta")).toEqual(["pst_beta"]);
+    insertPost(kept, "delta");
+    expect(searchPostIds(kept, "delta")).toEqual(["pst_delta"]);
+    kept
+      .prepare("UPDATE post SET title = 'epsilon note' WHERE id = ?")
+      .run("pst_gamma");
+    expect(searchPostIds(kept, "epsilon")).toEqual(["pst_gamma"]);
+    kept.prepare("DELETE FROM post WHERE id = ?").run("pst_beta");
+    expect(searchPostIds(kept, "beta")).toEqual([]);
+    checkSearchIndex(kept);
+    expect(
+      kept
+        .prepare(`SELECT DISTINCT "table" FROM pragma_foreign_key_list('post')`)
+        .pluck()
+        .all()
+        .sort(),
+    ).toEqual(["post", "site"]);
+    expect(kept.pragma("foreign_key_check")).toEqual([]);
+    kept.close();
   });
 
   it("adds body_html_version as a legacy-safe projection marker", () => {

@@ -35,7 +35,18 @@ export interface MediaGalleryProps {
 
 const DEFAULT_VISUAL_RATIO = 4 / 3;
 
-function formatSize(bytes: number): string {
+/**
+ * A file size the way the gallery labels documents.
+ *
+ * @param bytes - Size in bytes
+ * @returns "512 B", "3.4 KB" or "2.1 MB"
+ *
+ * @example
+ * ```ts
+ * formatSize(2_200_000); // "2.1 MB"
+ * ```
+ */
+export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -348,7 +359,7 @@ export const MediaGallery: FC<MediaGalleryProps> = ({
       {hasGalleryItems && (
         <div class={`mt-3 ${singleVisual ? "" : "media-gallery-scroll-wrap"}`}>
           <div
-            data-post-media
+            data-media-gallery
             data-lightbox-group={
               lightboxItems.length > 0
                 ? JSON.stringify(lightboxItems)
@@ -449,6 +460,14 @@ export const MediaGallery: FC<MediaGalleryProps> = ({
                    the blurhash fallback is a data URL, and publishing one as
                    a photo would hand a consumer a 20-pixel smear. */
                 const posterClass = item.posterUrl ? "u-photo " : "";
+                /* Fit travels with the size, and `site-media.css` sets none.
+                   In a row the clip is cropped to the strip's height like the
+                   pictures beside it; alone its box already has the clip's
+                   shape, and `contain` letterboxes frames that disagree with
+                   the stored size. */
+                const videoClass = `${posterClass}media-visual w-full ${
+                  singleVisual ? "object-contain" : "object-cover"
+                }`;
                 const aspectRatio =
                   item.width && item.height
                     ? `${item.width}/${item.height}`
@@ -497,11 +516,7 @@ export const MediaGallery: FC<MediaGalleryProps> = ({
                           data-video-src={item.url}
                           data-feed-video-id={item.id}
                           style={videoStyle}
-                          class={`${posterClass}${
-                            singleVisual
-                              ? "media-visual w-full"
-                              : "media-visual w-full object-cover"
-                          }`}
+                          class={videoClass}
                         />
                       </a>
                       <button
@@ -561,11 +576,7 @@ export const MediaGallery: FC<MediaGalleryProps> = ({
                       width={item.width}
                       height={item.height}
                       style={videoStyle}
-                      class={`${posterClass}${
-                        singleVisual
-                          ? "media-visual w-full"
-                          : "media-visual w-full object-cover"
-                      }`}
+                      class={videoClass}
                     />
                     <div class="media-video-play-overlay">
                       <svg viewBox="0 0 24 24" fill="white">

@@ -385,7 +385,6 @@ msgstr "Avatar"
 #. @context: Toast after saving avatar display preference
 #. @context: Toast after saving avatar display preference
 #: src/routes/dash/settings.tsx
-#: src/routes/dash/settings.tsx
 msgid "Avatar display updated."
 msgstr "Avatar display updated."
 
@@ -460,7 +459,6 @@ msgstr "Calm and natural, easy on the eyes."
 #. @context: Dialog cancel button
 #. @context: GitHub sync picker — cancel action
 #: src/routes/dash/custom-urls.tsx
-#: src/routes/dash/custom-urls.tsx
 #: src/routes/dash/settings.tsx
 #: src/ui/dash/ActionButtons.tsx
 #: src/ui/dash/appearance/NavigationContent.tsx
@@ -473,13 +471,11 @@ msgstr "Calm and natural, easy on the eyes."
 #: src/ui/dash/settings/LanguageContent.tsx
 #: src/ui/dash/settings/SessionsContent.tsx
 #: src/ui/dash/settings/TelegramContent.tsx
-#: src/ui/dash/settings/TelegramContent.tsx
 msgid "Cancel"
 msgstr "Cancel"
 
 #. @context: Button to change password
 #. @context: Settings section heading
-#: src/ui/dash/settings/AccountContent.tsx
 #: src/ui/dash/settings/AccountContent.tsx
 msgid "Change Password"
 msgstr "Change Password"
@@ -556,6 +552,11 @@ msgstr "Clean and high-contrast, close to white."
 msgid "Code Injection"
 msgstr "Code Injection"
 
+#. @context: Error shown when saving code injection is blocked in demo mode
+#: src/routes/dash/settings.tsx
+msgid "Code injection is off in demo mode. Every visitor shares the demo site."
+msgstr "Code injection is off in demo mode. Every visitor shares the demo site."
+
 #. @context: Toast after saving Code Injection settings
 #: src/routes/dash/settings.tsx
 msgid "Code injection updated."
@@ -569,7 +570,6 @@ msgstr "collection"
 #. @context: Custom URL target type badge for a collection
 #. @context: Custom URL type option
 #. @context: Suggested navigation link target type
-#: src/routes/dash/custom-urls.tsx
 #: src/routes/dash/custom-urls.tsx
 #: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Collection"
@@ -613,7 +613,6 @@ msgstr "Config Editor"
 
 #. @context: Config Editor linked setting status
 #. @context: Config Editor linked setting status
-#: src/ui/dash/settings/ConfigEditorContent.tsx
 #: src/ui/dash/settings/ConfigEditorContent.tsx
 msgid "Configured"
 msgstr "Configured"
@@ -699,7 +698,6 @@ msgstr "Connecting…"
 #. @context: Setup form field - site content language
 #. @context: Setup form field - site content language
 #: src/routes/auth/setup.tsx
-#: src/routes/auth/setup.tsx
 #: src/ui/dash/settings/LanguageContent.tsx
 msgid "Content language"
 msgstr "Content language"
@@ -737,14 +735,11 @@ msgstr "Copied"
 #. @context: Button to copy the Telegram binding code
 #: src/ui/dash/settings/GeneralContent.tsx
 #: src/ui/dash/settings/TelegramContent.tsx
-#: src/ui/dash/settings/TelegramContent.tsx
-#: src/ui/dash/settings/TelegramContent.tsx
 msgid "Copy"
 msgstr "Copy"
 
 #. @context: Button to copy API token to clipboard
 #. @context: Button to copy API token to clipboard
-#: src/ui/dash/settings/ApiTokensContent.tsx
 #: src/ui/dash/settings/ApiTokensContent.tsx
 msgid "Copy Token"
 msgstr "Copy Token"
@@ -915,6 +910,11 @@ msgstr "Current password doesn't match. Try again."
 msgid "Custom CSS"
 msgstr "Custom CSS"
 
+#. @context: Error shown when saving custom CSS is blocked in demo mode
+#: src/routes/dash/settings.tsx
+msgid "Custom CSS is off in demo mode. Every visitor shares the demo site."
+msgstr "Custom CSS is off in demo mode. Every visitor shares the demo site."
+
 #. @context: Toast after saving custom CSS
 #: src/routes/dash/settings.tsx
 msgid "Custom CSS updated."
@@ -1012,10 +1012,10 @@ msgstr "Demo mode hides sessions, password changes, and account deletion. Export
 msgid "Demo sites always stay hidden from search engines."
 msgstr "Demo sites always stay hidden from search engines."
 
-#. @context: Help text explaining that Discover is locked off in demo mode
+#. @context: Help text under the Jant Discover checkbox explaining that Discover is locked off in demo mode, shown in place of the usual help line. {name} is the directory's name and is rendered as the link to it, so keep it as one run of text.
 #: src/ui/dash/settings/GeneralContent.tsx
-msgid "Demo sites are never listed in Discover."
-msgstr "Demo sites are never listed in Discover."
+msgid "Demo sites are never listed in {name}."
+msgstr "Demo sites are never listed in {name}."
 
 #. @context: Color theme preview collection label
 #: src/ui/dash/appearance/ColorThemeContent.tsx
@@ -1030,7 +1030,6 @@ msgstr "Destination"
 #. @context: Button to disconnect GitHub repository on GitHub Sync settings
 #. @context: Button to disconnect Telegram
 #. @context: Section heading for disconnect action on GitHub Sync settings
-#: src/ui/dash/settings/GitHubSyncContent.tsx
 #: src/ui/dash/settings/GitHubSyncContent.tsx
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Disconnect"
@@ -1683,6 +1682,11 @@ msgstr "Muted red-brown background, earthy and warm."
 msgid "My Collection"
 msgstr "My Collection"
 
+#. @context: GitHub sync picker — hint under the create-on-github entry. Placeholder {name} is the suggested repo name.
+#: src/routes/dash/settings.tsx
+msgid "Name prefilled as {name}. The list refreshes when you return."
+msgstr "Name prefilled as {name}. The list refreshes when you return."
+
 #. @context: Settings item description for general
 #: src/ui/dash/settings/SettingsRootContent.tsx
 msgid "Name, visibility, feeds, and time zone"
@@ -1743,8 +1747,6 @@ msgstr "Neutral gray"
 #. @context: Button to create new custom URL
 #. @context: Button to create new custom URL
 #. @context: Page heading
-#: src/routes/dash/custom-urls.tsx
-#: src/routes/dash/custom-urls.tsx
 #: src/routes/dash/custom-urls.tsx
 msgid "New Custom URL"
 msgstr "New Custom URL"
@@ -1814,7 +1816,6 @@ msgstr "Not announced yet. No directory has been told this site exists."
 #. @context: Config Editor linked setting status
 #. @context: Config Editor linked setting status
 #: src/ui/dash/settings/ConfigEditorContent.tsx
-#: src/ui/dash/settings/ConfigEditorContent.tsx
 msgid "Not configured"
 msgstr "Not configured"
 
@@ -1867,7 +1868,6 @@ msgstr "Open {linkOpen}@{botUsername}{linkClose} and send:"
 
 #. @context: Config Editor link to a dedicated settings page
 #. @context: Config Editor link to a dedicated settings page
-#: src/ui/dash/settings/ConfigEditorContent.tsx
 #: src/ui/dash/settings/ConfigEditorContent.tsx
 msgid "Open setting"
 msgstr "Open setting"
@@ -2019,7 +2019,6 @@ msgstr "Pinned"
 #. @context: Custom URL target type badge for a post
 #. @context: Custom URL type option
 #: src/routes/dash/custom-urls.tsx
-#: src/routes/dash/custom-urls.tsx
 msgid "Post"
 msgstr "Post"
 
@@ -2101,7 +2100,6 @@ msgstr "Recently updated"
 #. @context: Custom URL target type badge for a redirect
 #. @context: Custom URL type option
 #: src/routes/dash/custom-urls.tsx
-#: src/routes/dash/custom-urls.tsx
 msgid "Redirect"
 msgstr "Redirect"
 
@@ -2171,7 +2169,6 @@ msgstr "Remove this page from navigation? The page itself won't be deleted."
 #. @context: Label for GitHub repository input on GitHub Sync settings
 #. @context: Label for connected repository on GitHub Sync status
 #: src/routes/dash/settings.tsx
-#: src/ui/dash/settings/GitHubSyncContent.tsx
 #: src/ui/dash/settings/GitHubSyncContent.tsx
 msgid "Repository"
 msgstr "Repository"
@@ -2281,13 +2278,11 @@ msgstr "Search runtime settings and open advanced configuration"
 #. @context: Config Editor search input placeholder
 #. @context: Config Editor search input placeholder
 #: src/ui/dash/settings/ConfigEditorContent.tsx
-#: src/ui/dash/settings/ConfigEditorContent.tsx
 msgid "Search settings"
 msgstr "Search settings"
 
 #. @context: Toast after saving search settings
 #. @context: Toast after saving search settings
-#: src/routes/dash/settings.tsx
 #: src/routes/dash/settings.tsx
 msgid "Search settings updated."
 msgstr "Search settings updated."
@@ -2469,7 +2464,6 @@ msgstr "Site visibility"
 #. @context: Toast after saving the site visibility settings
 #. @context: Toast after saving the site visibility settings
 #: src/routes/dash/settings.tsx
-#: src/routes/dash/settings.tsx
 msgid "Site visibility updated."
 msgstr "Site visibility updated."
 
@@ -2549,7 +2543,6 @@ msgstr "Target Slug"
 #. @context: Settings section heading for Telegram setup
 #: src/routes/dash/settings.tsx
 #: src/ui/dash/settings/SettingsRootContent.tsx
-#: src/ui/dash/settings/TelegramContent.tsx
 #: src/ui/dash/settings/TelegramContent.tsx
 msgid "Telegram"
 msgstr "Telegram"
@@ -2749,11 +2742,6 @@ msgstr "This setting wasn't saved. Check the value and try again."
 msgid "This site has no directory to announce to."
 msgstr "This site has no directory to announce to."
 
-#. @context: Discover status line for a site that chose the old featured-only mode and has no featured posts. Says how to move to the current setting, which reads every public post.
-#: src/ui/dash/settings/GeneralContent.tsx
-msgid "This site still limits Discover to featured posts, and no post is marked Featured, so your feed carries nothing to show. Untick and tick the box to let Discover read every public post."
-msgstr "This site still limits Discover to featured posts, and no post is marked Featured, so your feed carries nothing to show. Untick and tick the box to let Discover read every public post."
-
 #. @context: Warning text on account deletion page
 #: src/ui/dash/settings/DeleteAccountContent.tsx
 msgid "This will permanently delete all your data — posts, media, collections, settings, and your account. Your blog will be reset to its initial setup state. This cannot be undone."
@@ -2782,7 +2770,6 @@ msgstr "Time zone updated."
 #. @context: Collection title field in Navigation settings
 #. @context: Title field label in quick page creation
 #: src/ui/dash/appearance/NavigationContent.tsx
-#: src/ui/dash/appearance/NavigationContent.tsx
 msgid "Title"
 msgstr "Title"
 
@@ -2801,6 +2788,11 @@ msgstr "Token name"
 msgid "Tokens let you access the API from scripts, shortcuts, and other tools without signing in."
 msgstr "Tokens let you access the API from scripts, shortcuts, and other tools without signing in."
 
+#. @context: Error toast when setup attempts hit the rate limit
+#: src/routes/auth/setup.tsx
+msgid "Too many setup attempts. Wait a few minutes and try again."
+msgstr "Too many setup attempts. Wait a few minutes and try again."
+
 #. @context: GitHub sync picker — retry button
 #: src/routes/dash/settings.tsx
 msgid "Try again"
@@ -2818,7 +2810,6 @@ msgstr "Turn off"
 
 #. @context: Title of the dialog confirming removal of the last additional language
 #. @context: Title of the disable-multilingual dialog
-#: src/ui/dash/settings/LanguageContent.tsx
 #: src/ui/dash/settings/LanguageContent.tsx
 msgid "Turn off multilingual content?"
 msgstr "Turn off multilingual content?"
@@ -3012,11 +3003,6 @@ msgstr "Warm terracotta"
 #: src/ui/dash/appearance/ColorThemeContent.tsx
 msgid "Warm-neutral and easy for long reading."
 msgstr "Warm-neutral and easy for long reading."
-
-#. @context: GitHub sync picker — hint under the create-on-github entry. Placeholder {name} is the suggested repo name.
-#: src/routes/dash/settings.tsx
-msgid "We'll prefill the name {name}. The list refreshes on return."
-msgstr "We'll prefill the name {name}. The list refreshes on return."
 
 #. @context: Setup page welcome heading
 #: src/routes/auth/setup.tsx

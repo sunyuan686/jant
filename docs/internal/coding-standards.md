@@ -19,6 +19,24 @@ routes -> viewmodels -> ui
 - UI/components must not import services, DB modules, or route modules.
 - Feature modules must not import shared types from `src/app.tsx` or other app composition roots.
 
+### API Request Input
+
+A route under `src/routes/api/` declares what it accepts in its registration, with `validate()` from `src/middleware/validate.ts`, and the handler reads the parsed value with `c.req.valid()`:
+
+```ts
+postsApiRoutes.put(
+  "/:id/language",
+  requireAuthApi(),
+  validate("json", SetLanguageSchema),
+  async (c) => {
+    const { language } = c.req.valid("json");
+```
+
+`json` reads the body as JSON whatever its `Content-Type`, `query` the query string, and `form` a multipart body. The public surface manifest reads each route's query parameters and body fields from the schema on its `validate()` middleware. Input a handler parses on its own is left out of the compatibility check.
+
+- A check that must answer before validation, such as a disabled feature answering `404`, is its own middleware ahead of `validate()`.
+- Bodies whose format someone else defines (webhooks, MCP's JSON-RPC, raw upload bytes) and `/api/internal/*` routes read their input in the handler.
+
 ## Versioned Product Defaults
 
 - Built-in navigation metadata and append-only default profiles live in
@@ -93,7 +111,67 @@ Tests run against SQLite only. Raw SQL fragments (`` sql`...` ``) that work on S
 
 **Nullable sort keys**: whenever an `orderBy` references a column (or computed expression) that may be `NULL`, wrap it in `coalesce(expr, <sentinel>)` so the order is identical on SQLite and Postgres. This applies to flags stored as timestamps like `pinnedAt`, `featuredAt`, and nullable activity timestamps. Don't rely on engine defaults — SQLite puts NULLs last on `DESC`, Postgres puts them first, so `desc(posts.pinnedAt)` on Postgres sinks pinned rows to the bottom. Pick a sentinel that loses the comparison (e.g. `-1` for timestamp sort keys where real values are positive). The cursor and list paths in `src/services/post.ts` already follow this pattern (`coalesce(pinnedAt, -1)`, `coalesce(featuredAt, -1)`, `coalesce(sortTimestamp, -1)`); match it when adding new sorts. Aggregate expressions need the same treatment: prefer `MAX(coalesce(col, -1))` over `MAX(col)` when the result feeds an `orderBy`.
 
+**Correlated subqueries in a projection**: Drizzle qualifies projection columns only when the query has a join, so `${posts.id}` inside a subquery in `select({...})` renders as a bare `"id"` and binds to the subquery's own table — on both dialects, with no error. Write the outer column out (`"post"."id"`) and alias the inner table, as `hydratedPostColumns` in `src/services/post.ts` does.
+
 **Rule of thumb**: if you write a raw `sql` template that is more than a simple column reference, mentally run it through Postgres syntax before committing. Drizzle's typed query builder is dialect-safe; the risk lives in `sql` tagged templates and string interpolation inside `where`/`orderBy`. Because tests run on SQLite only, dialect-specific bugs like NULL ordering won't surface locally — they have to be caught by reading the query.
+
+## Migrations and Snapshots
+
+A snapshot's `db.sql` holds rows in the schema of the Jant that wrote it, and restore replays them into the importing Jant's schema. Restore rewrites them only by snapshot format version (`upgradeSnapshotSql` in `bin/lib/site-snapshot.js`), never by migration. A column added with a default replays unchanged. A migration that renames, drops, or retypes a column, splits or merges a table, or changes what a stored value means, in any table `SNAPSHOT_TABLES` lists, breaks every snapshot written before it.
+
+So such a migration ships, in the same change, a rewrite in `site-snapshot.js` that turns an older snapshot's statements into the new shape, keyed by the snapshot's `schema` tag (the last migration its writer had), for both dialects. Snapshots from 0.7.0 on restore on every later release (`docs/compatibility.md`). `release-fixtures.test.ts` replays each release's frozen snapshot, but it only notices the columns those fixtures happen to fill, so the rewrite belongs to writing the migration rather than to a failing test.
+
+## Rebuilding a Referenced Table
+
+SQLite can't change an existing column's type, nullability, default, CHECK, or foreign key in place, so drizzle-kit rebuilds the table: `CREATE TABLE __new_x`, `INSERT … SELECT`, `DROP TABLE x`, `ALTER TABLE __new_x RENAME TO x`. With foreign keys on, `DROP TABLE x` first deletes every row of `x`, and each table that references `x` reacts by its `ON DELETE` action: CASCADE deletes its rows, SET NULL clears the column, NO ACTION fails the migration.
+
+Foreign keys are on in both `jant migrate` runners. The generated `PRAGMA foreign_keys=OFF` does nothing: D1 accepts it and keeps enforcing, and the Node runtime applies pending migrations in one transaction, where SQLite ignores it. `PRAGMA defer_foreign_keys = ON` defers the checks but not the actions, and a NO ACTION violation it deferred still fails at commit. D1 also refuses `CREATE TEMP TABLE`.
+
+So a SQLite migration that drops a table other tables reference holds their rows itself. Find every table that references `x`, directly or through another such table (for `collection`: `thread_collection`, `collection_directory_item`, `nav_item`, `path_registry`; the guard below names them), and edit the generated file:
+
+1. Before the rebuild, copy each of them into an ordinary table named `__keep_<table>`. Once all are copied, empty them, children before parents.
+2. Leave the generated rebuild as it is, unless the table is `post` (below).
+3. After the `RENAME`, refill each from its `__keep_` table with explicit column lists, parents before children, then drop the `__keep_` tables.
+
+```sql
+CREATE TABLE `__keep_thread_collection` AS SELECT * FROM `thread_collection`;--> statement-breakpoint
+-- … the other three copied the same way
+DELETE FROM `thread_collection`;--> statement-breakpoint
+-- … the other three emptied, then the generated rebuild:
+-- CREATE TABLE `__new_collection` … DROP TABLE `collection`; ALTER TABLE `__new_collection` RENAME TO `collection`; …
+INSERT INTO `thread_collection` (`site_id`, `thread_id`, `collection_id`, `created_at`, `position`, `pinned_at`) SELECT `site_id`, `thread_id`, `collection_id`, `created_at`, `position`, `pinned_at` FROM `__keep_thread_collection`;--> statement-breakpoint
+DROP TABLE `__keep_thread_collection`;
+```
+
+Rebuilding `post` takes three more edits. As generated, the rebuild fails on `post`, and once it runs it breaks search:
+
+- `post` references itself (`reply_to_id`, `thread_id`), and the copy's foreign keys name `post` too. The copied rows then reference the rows the DROP deletes, and the DROP fails.
+- `post_fts` reads `post` by rowid, and the `INSERT … SELECT` numbers the copied rows afresh. After a hard delete, every later row moves and search returns the wrong posts.
+- The DROP takes the triggers `post_ai`, `post_ad` and `post_au` with it, and drizzle-kit doesn't know they exist. New and edited posts stop reaching search.
+
+So, besides holding the tables that reference `post`:
+
+1. In `CREATE TABLE __new_post`, point its own two foreign keys at `__new_post`; the `RENAME` turns them back into `post`. Before the `INSERT … SELECT`, give `__new_post` the unique index on `(site_id, id)` those keys need, under a temporary name, and drop it after the generated indexes.
+2. Add `rowid` to both column lists of the `INSERT … SELECT`.
+3. Right after the `RENAME`, recreate the three triggers as `0003_fts_site_aware.sql` writes them.
+
+```sql
+CREATE TABLE `__new_post` (
+	-- … the generated columns, then:
+	FOREIGN KEY (`site_id`,`reply_to_id`) REFERENCES `__new_post`(`site_id`,`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`site_id`,`thread_id`) REFERENCES `__new_post`(`site_id`,`id`) ON UPDATE no action ON DELETE no action,
+	-- … the generated CHECKs
+);--> statement-breakpoint
+CREATE UNIQUE INDEX `__new_uq_post_site_id_id` ON `__new_post` (`site_id`,`id`);--> statement-breakpoint
+INSERT INTO `__new_post`("rowid", "id", …) SELECT "rowid", "id", … FROM `post`;--> statement-breakpoint
+DROP TABLE `post`;--> statement-breakpoint
+ALTER TABLE `__new_post` RENAME TO `post`;--> statement-breakpoint
+CREATE TRIGGER post_ai AFTER INSERT ON post BEGIN … END;--> statement-breakpoint
+-- … post_ad and post_au, then the generated indexes, then:
+DROP INDEX `__new_uq_post_site_id_id`;
+```
+
+`migrations.test.ts` fails a migration after 0034 that drops a referenced table without emptying each referencing table before the DROP and refilling it after, rebuilds a table whose copy still references it, drops a table without recreating its triggers, or rebuilds a table an FTS index reads without copying `rowid`, and names the tables. `release-upgrades.test.ts` runs every frozen release's rows through the new migration on both runners and fails if a row changed. Every site-scoped table references `site`, so change `site` without a rebuild. Postgres alters columns in place, so the Postgres migration needs none of this.
 
 ## URL Naming
 

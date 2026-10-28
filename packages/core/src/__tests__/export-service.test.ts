@@ -8,11 +8,24 @@
  * Jant theme, and the `data/*.toml` files consumed by templates.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { unzipSync } from "fflate";
-import { createExportService } from "../services/export.js";
+import {
+  createExportService,
+  deriveWorkerName,
+  isStoredExportFile,
+  WRANGLER_CONFIG_PATH,
+  type ExportFile,
+} from "../services/export.js";
+import { suggestSyncRepoName } from "../lib/github-sync-repo-name.js";
 import { parseFrontMatter } from "../lib/hugo-markdown.js";
-import type { Collection, Media, Post } from "../types.js";
+import type {
+  Collection,
+  Media,
+  PathRecord,
+  Post,
+  SmartCollectionDirectoryEntry,
+} from "../types.js";
 import {
   makeCollection,
   makeMedia,
@@ -40,6 +53,8 @@ interface FixtureOptions {
   aliasMap?: Map<string, string[]>;
   collectionSlugMap?: Map<string, string>;
   directoryItems?: unknown[];
+  smartCollections?: SmartCollectionDirectoryEntry[];
+  standalonePaths?: PathRecord[];
 }
 
 function buildServices(opts: FixtureOptions): ServicesArg {
@@ -53,21 +68,26 @@ function buildServices(opts: FixtureOptions): ServicesArg {
     aliasMap = new Map(),
     collectionSlugMap = new Map(collections.map((c) => [c.id, c.slug])),
     directoryItems,
+    smartCollections = [],
+    standalonePaths = [],
   } = opts;
 
   return {
     posts: {
-      list: async () => posts,
+      listPage: async () => ({ posts, nextCursor: null }),
     },
     paths: {
       getPostSlugMap: async () => slugMap,
+      listStandalonePaths: async () => standalonePaths,
       getPostAliases: async () => aliasMap,
       getCollectionSlugMap: async () => collectionSlugMap,
+      getCollectionAliases: async () => new Map(),
     },
     collections: {
       list: async () => collections,
       listDirectoryData: async () => ({
         collections: [],
+        smartCollections,
         items:
           directoryItems ??
           collections.map((collection) => ({
@@ -81,7 +101,7 @@ function buildServices(opts: FixtureOptions): ServicesArg {
           })),
         directoryItems: [],
       }),
-      getCollectionsByPostIds: async () => collectionsByPost,
+      getCollectionsByThreadIds: async () => collectionsByPost,
       getCollectionEntriesByThreadIds: async () => collectionEntriesByThread,
     },
     media: {
@@ -90,12 +110,19 @@ function buildServices(opts: FixtureOptions): ServicesArg {
   } as unknown as ServicesArg;
 }
 
-function filesToMap(
-  list: { path: string; content: string | Uint8Array }[],
-): Map<string, string | Uint8Array> {
+function filesToMap(list: ExportFile[]): Map<string, string | Uint8Array> {
   const map = new Map<string, string | Uint8Array>();
-  for (const f of list) map.set(f.path, f.content);
+  for (const f of list) {
+    if (!isStoredExportFile(f)) map.set(f.path, f.content);
+  }
   return map;
+}
+
+/** Read the streamed archive the way a download receives it. */
+async function readArchive(
+  stream: ReadableStream<Uint8Array>,
+): Promise<Record<string, Uint8Array>> {
+  return unzipSync(new Uint8Array(await new Response(stream).arrayBuffer()));
 }
 
 describe("createExportService (Hugo)", () => {
@@ -130,15 +157,19 @@ describe("createExportService (Hugo)", () => {
 
     const files = await createExportService(
       {
-        posts: { list: async () => [long, short] },
+        posts: {
+          listPage: async () => ({ posts: [long, short], nextCursor: null }),
+        },
         paths: {
           getPostSlugMap: async () =>
             new Map([
               ["post-long", "long-read"],
               ["post-short", "short-note"],
             ]),
+          listStandalonePaths: async () => [],
           getPostAliases: async () => new Map(),
           getCollectionSlugMap: async () => new Map(),
+          getCollectionAliases: async () => new Map(),
         },
         collections: {
           list: async () => [],
@@ -147,7 +178,7 @@ describe("createExportService (Hugo)", () => {
             items: [],
             directoryItems: [],
           }),
-          getCollectionsByPostIds: async () => new Map(),
+          getCollectionsByThreadIds: async () => new Map(),
           getCollectionEntriesByThreadIds: async () => new Map(),
         },
         media: { getByPostIds: async () => new Map() },
@@ -324,6 +355,105 @@ describe("createExportService (Hugo)", () => {
     );
   });
 
+  it("emits no aliases for a root that is not published", async () => {
+    // Hugo writes an alias page for every `aliases:` entry whether or not the
+    // page it points at was built. On an unbuilt target `.Permalink` is
+    // empty, `<meta http-equiv=refresh content="0; url=">` means "reload this
+    // page" to a browser, and the old URL becomes an infinite refresh loop.
+    const draftRoot = makePost({
+      id: "d",
+      slug: "secret-plan",
+      threadId: "d",
+      status: "draft",
+    });
+    const reply = makePost({
+      id: "d-rep",
+      slug: "secret-reply",
+      replyToId: "d",
+      threadId: "d",
+      createdAt: 1773018000,
+      publishedAt: 1773018000,
+    });
+
+    const service = createExportService(
+      buildServices({
+        posts: [draftRoot, reply],
+        aliasMap: new Map([["d", ["/blog/old-plan/"]]]),
+      }),
+      makeSiteConfig(),
+    );
+    const files = filesToMap(await service.generateHugoFiles());
+    const { frontMatter } = await parseFrontMatter(
+      files.get("content/secret-plan/_index.md") as string,
+    );
+
+    expect(frontMatter.draft).toBe(true);
+    expect(frontMatter.aliases).toBeUndefined();
+    // The historical slugs still round-trip through import; it is only the
+    // Hugo-facing redirect list that an unpublished thread does not get.
+    expect(frontMatter.root_aliases).toEqual(["/blog/old-plan/"]);
+  });
+
+  it("emits no aliases for a private root either", async () => {
+    const privateRoot = makePost({
+      id: "p",
+      slug: "for-me",
+      threadId: "p",
+      visibility: "private",
+    });
+
+    const service = createExportService(
+      buildServices({
+        posts: [privateRoot],
+        aliasMap: new Map([["p", ["/blog/for-me/"]]]),
+      }),
+      makeSiteConfig(),
+    );
+    const files = filesToMap(await service.generateHugoFiles());
+    const { frontMatter } = await parseFrontMatter(
+      files.get("content/for-me/_index.md") as string,
+    );
+
+    expect(frontMatter.draft).toBe(true);
+    expect(frontMatter.aliases).toBeUndefined();
+  });
+
+  it("writes the entry ID Jant's feeds give each published root", async () => {
+    // `<id>` is the permalink Jant served: the oldest custom path in place of
+    // the slug, under the site path prefix, no trailing slash. The theme's
+    // feed writes it as it is, so subscribers don't see the post again.
+    const plain = makePost({ id: "a", slug: "xta29", threadId: "a" });
+    const custom = makePost({ id: "b", slug: "links-4", threadId: "b" });
+    const draft = makePost({
+      id: "c",
+      slug: "unfinished",
+      threadId: "c",
+      status: "draft",
+    });
+
+    const service = createExportService(
+      buildServices({
+        posts: [plain, custom, draft],
+        aliasMap: new Map([["b", ["/blog/links/4", "/links/four"]]]),
+      }),
+      makeSiteConfig({
+        siteUrl: "https://example.com/journal",
+        sitePathPrefix: "/journal",
+      }),
+    );
+    const files = filesToMap(await service.generateHugoFiles());
+    const feedId = async (slug: string) =>
+      (await parseFrontMatter(files.get(`content/${slug}/_index.md`) as string))
+        .frontMatter.feed_id;
+
+    expect(await feedId("xta29")).toBe("https://example.com/journal/xta29");
+    expect(await feedId("links-4")).toBe(
+      "https://example.com/journal/blog/links/4",
+    );
+    // Not in any feed, so there is no ID to keep.
+    expect(await feedId("unfinished")).toBeUndefined();
+  });
+
   it("merges historical root aliases + reply slugs onto the root", async () => {
     const root = makePost({ id: "r", slug: "new-slug", threadId: "r" });
     const reply = makePost({
@@ -392,7 +522,8 @@ describe("createExportService (Hugo)", () => {
     expect(frontMatter.type).toBe("collection");
     expect(frontMatter.slug).toBe("ideas");
     expect(frontMatter.title).toBe("Ideas");
-    expect(frontMatter.summary_text).toBe("Half-formed thoughts");
+    expect(frontMatter.description).toBe("Half-formed thoughts");
+    expect(frontMatter).not.toHaveProperty("summary_text");
   });
 
   it("writes hugo.toml with baseURL, theme=jant, [permalinks] post=/:slug/, and [params]", async () => {
@@ -412,6 +543,23 @@ describe("createExportService (Hugo)", () => {
     expect(toml).toMatch(/\[permalinks\][\s\S]*post = "\/:slug\/"/);
     expect(toml).toContain("[params]");
     expect(toml).not.toContain("home_default_view");
+  });
+
+  it("omits the site-level paginate key the theme never reads", async () => {
+    const service = createExportService(
+      buildServices({ posts: [] }),
+      makeSiteConfig({ pageSize: 25 }),
+    );
+    const toml = filesToMap(await service.generateHugoFiles()).get(
+      "hugo.toml",
+    ) as string;
+
+    // Every paginated template calls `.Paginate` with `params.page_size`, so
+    // a site-level pager size would never be read — and `paginate` was
+    // removed from Hugo, which fails the build outright rather than warning.
+    expect(toml).not.toMatch(/^paginate\b/m);
+    expect(toml).not.toContain("pagerSize");
+    expect(toml).toContain("page_size = 25");
   });
 
   it("configures hugo.toml for Atom RSS output with per-section opt-in", async () => {
@@ -522,6 +670,254 @@ describe("createExportService (Hugo)", () => {
       const { frontMatter } = await parseFrontMatter(raw);
       expect(frontMatter.outputs).toEqual(["html"]);
     }
+  });
+
+  // An import back into Jant restores navigation from this file, so it names
+  // what the theme doesn't need: the author's own label, the target by slug,
+  // and the settings entry the static site skips.
+  it("writes what an import needs to rebuild navigation", async () => {
+    const collection = makeCollection({
+      id: "col-now",
+      slug: "now",
+      title: "Now",
+    });
+    const about = makePost({ id: "pst-about", slug: "about", title: "About" });
+    const service = createExportService(
+      buildServices({ posts: [about], collections: [collection] }),
+      makeSiteConfig({
+        navItems: [
+          {
+            type: "system",
+            systemKey: "archive",
+            label: "All",
+            url: "/archive",
+            position: 0,
+            placement: "header",
+          },
+          {
+            type: "collection",
+            collectionId: "col-now",
+            label: "",
+            targetTitle: "Now",
+            url: "/now",
+            position: 1,
+            placement: "header",
+          },
+          {
+            type: "page",
+            postId: "pst-about",
+            label: "",
+            targetTitle: "About",
+            url: "/about",
+            position: 2,
+            placement: "more",
+          },
+          {
+            type: "system",
+            systemKey: "settings",
+            label: "",
+            url: "/settings",
+            position: 3,
+            placement: "more",
+          },
+        ],
+      }),
+    );
+    const data = (await service.generateHugoFiles()).find(
+      (file) => file.path === "data/jant.toml",
+    )?.content as string;
+
+    expect(data).toContain(
+      'system_key = "archive"\nplacement = "header"\ncustom_label = "All"',
+    );
+    expect(data).toContain('collection_slug = "now"');
+    expect(data).toContain('placement = "more"\npost_slug = "about"');
+    expect(data).toContain('system_key = "settings"');
+  });
+
+  // The conditions travel, not the matches of the day: an import recreates the
+  // smart collection, and the theme evaluates the conditions against the posts
+  // in the repository. The collection a condition names goes by slug, which is
+  // what another site can resolve.
+  it("exports each smart collection's conditions as a section page", async () => {
+    const ideas = makeCollection({ id: "col-ideas", slug: "ideas" });
+    const smartCollection = (
+      over: Partial<SmartCollectionDirectoryEntry>,
+    ): SmartCollectionDirectoryEntry => ({
+      id: "smc-thoughts",
+      siteId: "site",
+      slug: "thoughts",
+      title: "Thoughts",
+      description: "Short notes.",
+      selection: {},
+      sort: "newest",
+      layout: null,
+      createdAt: 1,
+      updatedAt: 1,
+      threadCount: 4,
+      recentActivityAt: 1773020000,
+      ...over,
+    });
+    const thoughts = smartCollection({
+      selection: { format: "note", title: false },
+    });
+    const pictures = smartCollection({
+      id: "smc-pictures",
+      slug: "pictures",
+      title: "Pictures",
+      description: null,
+      selection: {
+        collection: ["col-ideas"],
+        media: ["image", "video"],
+        year: 2025,
+        replies: true,
+        visibility: "featured",
+      },
+      sort: "rating_desc",
+      layout: "grid",
+    });
+    const orphaned = smartCollection({
+      id: "smc-orphaned",
+      slug: "orphaned",
+      selection: { collection: ["col-gone"] },
+    });
+
+    const files = filesToMap(
+      await createExportService(
+        buildServices({
+          posts: [],
+          collections: [ideas],
+          smartCollections: [thoughts, pictures, orphaned],
+          directoryItems: [
+            {
+              id: "dir-1",
+              type: "smart_collection",
+              smartCollection: thoughts,
+            },
+            {
+              id: "dir-2",
+              type: "smart_collection",
+              smartCollection: orphaned,
+            },
+          ],
+        }),
+        makeSiteConfig({
+          navItems: [
+            {
+              type: "smart_collection",
+              smartCollectionId: "smc-pictures",
+              label: "",
+              targetTitle: "Pictures",
+              url: "/pictures",
+              position: 0,
+              placement: "header",
+            },
+          ],
+        }),
+      ).generateHugoFiles(),
+    );
+
+    const { frontMatter: thoughtsPage } = await parseFrontMatter(
+      files.get("content/thoughts/_index.md") as string,
+    );
+    expect(thoughtsPage).toEqual({
+      title: "Thoughts",
+      slug: "thoughts",
+      type: "smart_collection",
+      description: "Short notes.",
+      sort_order: "newest",
+      selection: { format: "note", title: false },
+      outputs: ["html", "rss"],
+    });
+    const { frontMatter: picturesPage } = await parseFrontMatter(
+      files.get("content/pictures/_index.md") as string,
+    );
+    expect(picturesPage.selection).toEqual({
+      collection: "ideas",
+      media: ["image", "video"],
+      year: 2025,
+      replies: true,
+      visibility: "featured",
+    });
+    expect(picturesPage.sort_order).toBe("rating_desc");
+    expect(picturesPage.display_layout).toBe("grid");
+    expect(files.has("content/orphaned/_index.md")).toBe(false);
+
+    const { parse } = await import("smol-toml");
+    const data = parse(files.get("data/jant.toml") as string) as {
+      directory: Record<string, unknown>[];
+      nav: Record<string, unknown>[];
+    };
+    expect(data.directory).toEqual([
+      expect.objectContaining({
+        type: "smart_collection",
+        slug: "thoughts",
+        title: "Thoughts",
+        entry_count: 4,
+      }),
+    ]);
+    expect(data.nav[0]).toMatchObject({
+      type: "smart_collection",
+      smart_collection_slug: "pictures",
+    });
+  });
+
+  it("carries redirects and archive URLs that name no post", async () => {
+    const record = (over: Partial<PathRecord>): PathRecord => ({
+      id: "pth-1",
+      siteId: "site",
+      path: "",
+      kind: "redirect",
+      postId: null,
+      collectionId: null,
+      smartCollectionId: null,
+      redirectToPath: null,
+      redirectType: null,
+      archiveQuery: null,
+      createdAt: 1,
+      updatedAt: 1,
+      ...over,
+    });
+    const files = filesToMap(
+      await createExportService(
+        buildServices({
+          posts: [],
+          standalonePaths: [
+            record({
+              path: "atom.xml",
+              redirectToPath: "feed",
+              redirectType: 301,
+            }),
+            record({
+              path: "inspires",
+              redirectToPath: "inspired",
+              redirectType: 302,
+            }),
+            record({
+              path: "links",
+              kind: "archive",
+              archiveQuery: "format=link",
+            }),
+          ],
+        }),
+        makeSiteConfig(),
+      ).generateHugoFiles(),
+    );
+    const data = files.get("data/jant.toml") as string;
+    const redirects = files.get("static/_redirects") as string;
+
+    expect(data).toContain(
+      '[[custom_url]]\npath = "/atom.xml"\nkind = "redirect"\nto = "/feed"\nstatus = 301',
+    );
+    expect(data).toContain(
+      'path = "/inspires"\nkind = "redirect"\nto = "/inspired"\nstatus = 302',
+    );
+    expect(data).toContain(
+      'path = "/links"\nkind = "archive"\narchive_query = "format=link"',
+    );
+    expect(redirects).toMatch(/^\/atom\.xml\s+\/feed\s+301$/m);
+    expect(redirects).toMatch(/^\/inspires\s+\/inspired\s+302$/m);
+    expect(redirects).not.toContain("/links");
   });
 
   it("resolves the nav RSS link to /featured/index.xml when mainRssFeed=featured", async () => {
@@ -840,6 +1236,12 @@ describe("createExportService (Hugo)", () => {
       "themes/jant/layouts/partials/reply.html",
       "themes/jant/layouts/partials/featured-thread.html",
       "themes/jant/layouts/partials/feed-post-content.xml",
+      "themes/jant/layouts/partials/collection-threads.html",
+      "themes/jant/layouts/partials/collection-members.html",
+      "themes/jant/layouts/partials/latest-members.html",
+      "themes/jant/layouts/partials/featured-members.html",
+      "themes/jant/layouts/partials/smart-collection-members.html",
+      "themes/jant/layouts/smart_collection/list.html",
     ];
     for (const path of expectedLayouts) {
       expect(files.has(path), `missing ${path}`).toBe(true);
@@ -850,10 +1252,10 @@ describe("createExportService (Hugo)", () => {
     expect(files.has("themes/jant/static/theme.css")).toBe(true);
     expect(files.has("themes/jant/static/custom.css")).toBe(true);
 
-    const collectionList = files.get(
-      "themes/jant/layouts/_default/list.html",
+    const collectionThreads = files.get(
+      "themes/jant/layouts/partials/collection-threads.html",
     ) as string;
-    expect(collectionList).toContain(
+    expect(collectionThreads).toContain(
       'class="thread thread-full{{ if $hasReplies }} thread-has-replies{{ end }}"',
     );
   });
@@ -894,9 +1296,9 @@ describe("createExportService (Hugo)", () => {
       buildServices({ posts: [makePost()] }),
       makeSiteConfig(),
     );
-    const zip = await service.generateHugoSite();
-    expect(zip).toBeInstanceOf(Uint8Array);
-    expect(zip.byteLength).toBeGreaterThan(0);
+    const zip = new Uint8Array(
+      await new Response(await service.generateHugoSite()).arrayBuffer(),
+    );
     // ZIP magic: PK\x03\x04
     expect(zip[0]).toBe(0x50);
     expect(zip[1]).toBe(0x4b);
@@ -987,8 +1389,9 @@ describe("createExportService (Hugo)", () => {
     expect(entry.width).toBe(1024);
     expect(entry.height).toBe(768);
     expect(entry.blurhash).toBe("L6PZfSi_.AyE_3t7t7R**0o#DgR4");
-    expect(entry.provider).toBe("r2");
-    expect(entry.storage_key).toBe("media/med-1.webp");
+    // Where the source stored the bytes stays behind.
+    expect(entry).not.toHaveProperty("provider");
+    expect(entry).not.toHaveProperty("storage_key");
   });
 
   it("bundles media bytes under static/media/ for root and reply media", async () => {
@@ -1041,18 +1444,60 @@ describe("createExportService (Hugo)", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       { storage: storage as any },
     );
-    const files = filesToMap(await service.generateHugoFiles());
-    expect(files.has("static/media/med-root.webp")).toBe(true);
-    expect(files.has("static/media/med-reply.png")).toBe(true);
-    expect(files.get("static/media/med-root.webp")).toEqual(
+    // The file list names the objects; the archive reads them as it goes.
+    const stored = (await service.generateHugoFiles()).filter(
+      isStoredExportFile,
+    );
+    expect(stored).toEqual([
+      { path: "static/media/med-root.webp", storageKey: "media/med-root.webp" },
+      { path: "static/media/med-reply.png", storageKey: "media/med-reply.png" },
+    ]);
+    const archive = await readArchive(await service.generateHugoSite());
+    expect(archive["static/media/med-root.webp"]).toEqual(
       new Uint8Array([1, 2, 3]),
     );
-    expect(files.get("static/media/med-reply.png")).toEqual(
+    expect(archive["static/media/med-reply.png"]).toEqual(
       new Uint8Array([9, 9, 9, 9]),
     );
     // Sanity: the old per-bundle paths are gone.
-    expect(files.has("content/with-media/med-root.webp")).toBe(false);
-    expect(files.has("content/with-media/reply-one/med-reply.png")).toBe(false);
+    expect(archive["content/with-media/med-root.webp"]).toBeUndefined();
+    expect(
+      archive["content/with-media/reply-one/med-reply.png"],
+    ).toBeUndefined();
+  });
+
+  it("leaves a missing object out of the archive and says so", async () => {
+    const root = makePost({ id: "post-root", slug: "with-media" });
+    const service = createExportService(
+      buildServices({
+        posts: [root],
+        mediaByPost: new Map([
+          [
+            "post-root",
+            [
+              makeMedia({
+                id: "med-gone",
+                filename: "gone.webp",
+                storageKey: "media/med-gone.webp",
+              }),
+            ],
+          ],
+        ]),
+      }),
+      makeSiteConfig(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { storage: { get: async () => null } as any },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const archive = await readArchive(await service.generateHugoSite());
+
+    expect(archive["static/media/med-gone.webp"]).toBeUndefined();
+    expect(archive["hugo.toml"]).toBeDefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("media/med-gone.webp is missing from storage"),
+    );
+    warn.mockRestore();
   });
 
   it("emits poster bytes and poster field for video media with posterKey", async () => {
@@ -1092,12 +1537,11 @@ describe("createExportService (Hugo)", () => {
       { storage: storage as any },
     );
     const files = filesToMap(await service.generateHugoFiles());
-    expect(files.has("static/media/med-video.mp4")).toBe(true);
-    expect(files.has("static/media/med-video-poster.webp")).toBe(true);
-    expect(files.get("static/media/med-video.mp4")).toEqual(
+    const archive = await readArchive(await service.generateHugoSite());
+    expect(archive["static/media/med-video.mp4"]).toEqual(
       new Uint8Array([10, 20, 30]),
     );
-    expect(files.get("static/media/med-video-poster.webp")).toEqual(
+    expect(archive["static/media/med-video-poster.webp"]).toEqual(
       new Uint8Array([40, 50, 60, 70]),
     );
 
@@ -1108,7 +1552,7 @@ describe("createExportService (Hugo)", () => {
     expect(entry.kind).toBe("video");
     expect(entry.src).toBe("/media/med-video.mp4");
     expect(entry.poster).toBe("/media/med-video-poster.webp");
-    expect(entry.poster_key).toBe("media/posters/med-video.webp");
+    expect(entry).not.toHaveProperty("poster_key");
   });
 
   it("links to provider public URL instead of inlining bytes when configured", async () => {
@@ -1140,8 +1584,7 @@ describe("createExportService (Hugo)", () => {
     );
     const entry = frontMatter.media![0];
     expect(entry.src).toBe("https://cdn.example.com/media/med-cdn.webp");
-    expect(entry.storage_key).toBe("media/med-cdn.webp");
-    expect(entry.provider).toBe("r2");
+    expect(entry).not.toHaveProperty("storage_key");
   });
 
   it("skips media byte emission when no storage driver is available", async () => {
@@ -1162,6 +1605,30 @@ describe("createExportService (Hugo)", () => {
     );
     const files = filesToMap(await service.generateHugoFiles());
     expect(files.has("static/media/med-x.webp")).toBe(false);
+  });
+
+  it("walks every page of posts rather than stopping at a fixed count", async () => {
+    const first = makePost({ id: "post-a", slug: "first-page" });
+    const second = makePost({ id: "post-b", slug: "second-page" });
+    const services = buildServices({ posts: [first, second] });
+    const listPage = vi.fn(
+      async (_filters: unknown, page: { cursor?: string }) =>
+        page.cursor
+          ? { posts: [second], nextCursor: null }
+          : { posts: [first], nextCursor: "next" },
+    );
+    services.posts.listPage =
+      listPage as unknown as typeof services.posts.listPage;
+
+    const files = filesToMap(
+      await createExportService(services, makeSiteConfig(), {
+        bundleMedia: false,
+      }).generateHugoFiles(),
+    );
+
+    expect(listPage).toHaveBeenCalledTimes(2);
+    expect(files.has("content/first-page/_index.md")).toBe(true);
+    expect(files.has("content/second-page/_index.md")).toBe(true);
   });
 
   it("Sync mode (bundleMedia false) links media by absolute site URL without reading bytes", async () => {
@@ -1193,7 +1660,7 @@ describe("createExportService (Hugo)", () => {
     );
     const entry = frontMatter.media![0];
     expect(entry.src).toBe("https://example.com/media/med-1.webp");
-    expect(entry.storage_key).toBe("media/med-1.webp");
+    expect(entry).not.toHaveProperty("storage_key");
   });
 
   it("Sync mode links the video poster by absolute site URL without bundling", async () => {
@@ -1280,14 +1747,159 @@ describe("createExportService (Hugo)", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       { storage: storage as any, bundleMedia: false },
     );
-    const files = filesToMap(await service.generateHugoFiles());
+    const exportFiles = await service.generateHugoFiles();
+    const files = filesToMap(exportFiles);
     // No resolvable URL — bundling is the only way to avoid a broken link.
-    expect(files.get("static/media/med-1.webp")).toEqual(
-      new Uint8Array([1, 2, 3]),
-    );
+    expect(exportFiles.filter(isStoredExportFile)).toEqual([
+      { path: "static/media/med-1.webp", storageKey: "media/med-1.webp" },
+    ]);
     const { frontMatter } = await parseFrontMatter(
       files.get("content/with-media/_index.md") as string,
     );
     expect(frontMatter.media![0].src).toBe("/media/med-1.webp");
+  });
+});
+
+describe("bundled theme", () => {
+  it("reads site data only through the version-agnostic partial", async () => {
+    const service = createExportService(
+      buildServices({ posts: [] }),
+      makeSiteConfig(),
+    );
+    const layouts = (await service.generateHugoFiles()).filter(
+      (f) =>
+        f.path.startsWith("themes/jant/layouts/") &&
+        typeof f.content === "string",
+    );
+
+    expect(layouts.length).toBeGreaterThan(0);
+    // Hugo has no accessor for `data/` that works on every version: it added
+    // `hugo.Data` in v0.160.0 and deprecated `site.Data` in v0.156.0, so a
+    // template naming either one directly is a build failure on one side of
+    // that line. `partials/jant-data.html` branches on the running version;
+    // everything else goes through it.
+    const offenders = layouts
+      .filter(
+        (f) =>
+          f.path !== "themes/jant/layouts/partials/jant-data.html" &&
+          /\b(?:hugo|site)\.Data\b/.test(f.content as string),
+      )
+      .map((f) => f.path);
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("deriveWorkerName", () => {
+  it("uses the repository name when the export has one", () => {
+    // Cloudflare names a Worker imported from a repository after the
+    // repository, and fails the build when `wrangler.jsonc` disagrees — so
+    // the repo name is the default that needs no editing.
+    expect(
+      deriveWorkerName("owenyoung-blog", "https://notes.example.com"),
+    ).toBe("owenyoung-blog");
+  });
+
+  it.each([
+    ["My_Blog", "my-blog"],
+    ["blog.owenyoung.com", "blog-owenyoung-com"],
+    ["--site--", "site"],
+  ])("normalizes repository name %s into %s", (repoName, expected) => {
+    expect(deriveWorkerName(repoName, "https://example.com")).toBe(expected);
+  });
+
+  it("falls back to the repository name GitHub Sync suggests", () => {
+    // A downloaded export pushed to a repository created with the settings
+    // page's prefilled name then matches the Worker Cloudflare creates.
+    const siteUrl = "https://notes.example.com";
+
+    expect(deriveWorkerName(null, siteUrl)).toBe("notes-jant-sync");
+    expect(deriveWorkerName(undefined, siteUrl)).toBe(
+      suggestSyncRepoName(siteUrl),
+    );
+    expect(deriveWorkerName("___", siteUrl)).toBe("notes-jant-sync");
+  });
+
+  it("skips a leading www in the fallback, as the settings page does", () => {
+    expect(deriveWorkerName(null, "https://www.owenyoung.com")).toBe(
+      "owenyoung-jant-sync",
+    );
+  });
+
+  it("turns the suggestion's underscores into hyphens Cloudflare accepts", () => {
+    expect(deriveWorkerName(null, "https://my_notes.example.com")).toBe(
+      "my-notes-jant-sync",
+    );
+  });
+
+  it("still yields a name when the site URL has no host", () => {
+    expect(deriveWorkerName(null, "")).toBe("jant-site-sync");
+    expect(deriveWorkerName("", "not a url")).toBe("jant-site-sync");
+  });
+
+  it("keeps the name inside Cloudflare's 63-character limit", () => {
+    const name = deriveWorkerName(`${"a".repeat(62)}.long-repo`, "");
+
+    expect(name).toHaveLength(62);
+    expect(name).toMatch(/^[a-z0-9-]+$/);
+    // Cut at 63, the name would end on the hyphen that replaced the dot.
+    expect(name.endsWith("-")).toBe(false);
+  });
+});
+
+describe("wrangler.jsonc", () => {
+  it("declares the Worker name, a compatibility date, the Hugo build, and public/ as the asset directory", async () => {
+    const service = createExportService(
+      buildServices({ posts: [] }),
+      makeSiteConfig({ siteUrl: "https://www.owenyoung.com" }),
+      { repoName: "owenyoung-blog" },
+    );
+    const files = await service.generateHugoFiles();
+    const config = files.find((f) => f.path === WRANGLER_CONFIG_PATH);
+
+    expect(config).toBeDefined();
+    const text = config!.content as string;
+    expect(text).toContain('"name": "owenyoung-blog"');
+    expect(text).toMatch(/"compatibility_date": "\d{4}-\d{2}-\d{2}"/);
+    expect(text).toContain('"directory": "./public"');
+    // Nothing else runs Hugo: Workers Builds detects a framework from a
+    // `package.json`, a Hugo site has none, so the build command it offers
+    // on connect is empty and the deploy uploads a `public/` that was never
+    // built. Wrangler runs this before uploading.
+    expect(text).toContain('"command": "hugo --gc --minify"');
+    // An assets-only Worker needs no script.
+    expect(text).not.toContain('"main"');
+    // The theme emits no 404.html to point it at.
+    expect(text).not.toContain("not_found_handling");
+  });
+
+  it("names the Worker after the suggested repository when there is no repository", async () => {
+    const service = createExportService(
+      buildServices({ posts: [] }),
+      makeSiteConfig({ siteUrl: "https://notes.example.com" }),
+    );
+    const text = (await service.generateHugoFiles()).find(
+      (f) => f.path === WRANGLER_CONFIG_PATH,
+    )!.content as string;
+
+    expect(text).toContain('"name": "notes-jant-sync"');
+  });
+
+  it("is scaffolding the repository owns after the first write", async () => {
+    const service = createExportService(
+      buildServices({ posts: [] }),
+      makeSiteConfig(),
+    );
+    const files = await service.generateHugoFiles();
+
+    // The Worker name is a guess at the site's host; correcting it by hand is
+    // expected, and a later sync must not revert that.
+    expect(
+      files.find((f) => f.path === WRANGLER_CONFIG_PATH)?.scaffoldOnce,
+    ).toBe(true);
+    // Nothing else claims the flag — every other file is Jant's to rewrite.
+    expect(files.filter((f) => f.scaffoldOnce).map((f) => f.path)).toEqual([
+      WRANGLER_CONFIG_PATH,
+    ]);
   });
 });

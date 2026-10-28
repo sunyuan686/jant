@@ -219,25 +219,25 @@ describe("Timeline data assembly", () => {
       );
     }
 
+    const filters = { status: "published" as const, excludeReplies: true };
+
     // First page
-    const page1 = await postService.list({
-      status: "published",
-      excludeReplies: true,
-      limit: 3,
-    });
-    expect(page1).toHaveLength(3);
+    const page1 = await postService.listPage(filters, { limit: 3 });
+    expect(page1.posts).toHaveLength(3);
+    expect(page1.nextCursor).not.toBeNull();
 
     // Second page using cursor
-    const lastPost = page1[page1.length - 1];
-    expect(lastPost).toBeDefined();
-    const page2 = await postService.list({
-      status: "published",
-      excludeReplies: true,
+    const page2 = await postService.listPage(filters, {
+      cursor: page1.nextCursor ?? undefined,
       limit: 3,
-      cursor: lastPost?.id,
     });
-    expect(page2).toHaveLength(2);
-    expect(page2.every((p) => p.id < (lastPost?.id ?? 0))).toBe(true);
+    expect(page2.posts.map((post) => post.id)).toEqual(
+      posts
+        .slice(0, 2)
+        .map((post) => post.id)
+        .reverse(),
+    );
+    expect(page2.nextCursor).toBeNull();
   });
 
   it("supports offset-based pagination for page navigation", async () => {
@@ -620,6 +620,52 @@ describe("Timeline data assembly", () => {
       }),
     ]);
     expect(thread?.featuredPostIds).toEqual([featuredReply.id]);
+    // Each gap points at the first post of its run, read only as far as its
+    // address.
+    expect(thread?.gapTargets).toEqual([
+      { id: hiddenReplyA.id, slug: hiddenReplyA.slug, afterPostId: root.id },
+      {
+        id: hiddenReplyB.id,
+        slug: hiddenReplyB.slug,
+        afterPostId: featuredReply.id,
+      },
+    ]);
+  });
+
+  it("points each Featured gap at the first post of its run", async () => {
+    // root★ · 1★ · [2 · 3] · 4★ · 5
+    const posts = [];
+    for (const [index, featured] of [
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+    ].entries()) {
+      posts.push(
+        await postService.create({
+          format: "note",
+          bodyMarkdown: `Post ${index}`,
+          replyToId: posts.at(-1)?.id,
+          featured,
+          publishedAt: 1000 + index,
+        }),
+      );
+    }
+    const [root, featuredA, hiddenA] = posts;
+    if (!root || !featuredA || !hiddenA) throw new Error("Thread not created");
+
+    const thread = (
+      await postService.getFeaturedThreadTimelineData([root.id])
+    ).get(root.id);
+
+    expect(thread?.posts.map(({ position }) => position)).toEqual([0, 1, 4, 5]);
+    // No gap between the root and the first featured reply, none between the
+    // last featured reply and the final post, and one for the run of two.
+    expect(thread?.gapTargets).toEqual([
+      { id: hiddenA.id, slug: hiddenA.slug, afterPostId: featuredA.id },
+    ]);
   });
 
   it("renders every post in each collected Thread and sorts by Thread activity", async () => {
@@ -728,6 +774,93 @@ describe("Timeline data assembly", () => {
       expect.objectContaining({
         post: expect.objectContaining({ id: uncollectedReply.id }),
         hiddenBeforeCount: 0,
+        highlighted: true,
+      }),
+    ]);
+  });
+
+  // A reply can be older than its root (a post moved into the Thread keeps
+  // its creation time; an export without `created` dates posts by
+  // publication). The Thread still opens on its root.
+  async function createThreadWithOlderReplies() {
+    const root = await postService.create({
+      format: "note",
+      bodyMarkdown: "Root",
+      featured: true,
+      publishedAt: 3000,
+    });
+    const first = await postService.create({
+      format: "note",
+      bodyMarkdown: "First reply",
+      replyToId: root.id,
+      publishedAt: 1000,
+    });
+    const second = await postService.create({
+      format: "note",
+      bodyMarkdown: "Second reply",
+      replyToId: first.id,
+      publishedAt: 2000,
+    });
+    for (const [id, createdAt] of [
+      [root.id, 3000],
+      [first.id, 1000],
+      [second.id, 2000],
+    ] as const) {
+      await db.update(postTable).set({ createdAt }).where(eq(postTable.id, id));
+    }
+    return { root, first, second };
+  }
+
+  it("keeps a Featured Thread whose replies are older than its root", async () => {
+    const { root, second } = await createThreadWithOlderReplies();
+
+    const result = await assembleFeaturedTimeline(createTimelineContext(), {
+      isAuthenticated: true,
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.post.id).toBe(root.id);
+    expect(result.items[0]?.curatedThread?.segments).toEqual([
+      expect.objectContaining({
+        post: expect.objectContaining({ id: root.id }),
+        hiddenBeforeCount: 0,
+        highlighted: true,
+      }),
+      expect.objectContaining({
+        post: expect.objectContaining({ id: second.id }),
+        hiddenBeforeCount: 1,
+        highlighted: false,
+      }),
+    ]);
+  });
+
+  it("renders a collected Thread whose replies are older than its root", async () => {
+    const collection = await collectionService.create({
+      slug: "older-replies",
+      title: "Older replies",
+    });
+    const { root, first, second } = await createThreadWithOlderReplies();
+    await collectionService.addThread(collection.id, root.id);
+
+    const result = await assembleCollectionTimeline(createTimelineContext(), {
+      collectionIds: [collection.id],
+      isAuthenticated: true,
+      sortOrder: "newest",
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.post.id).toBe(root.id);
+    expect(result.items[0]?.curatedThread?.segments).toEqual([
+      expect.objectContaining({
+        post: expect.objectContaining({ id: root.id }),
+        highlighted: false,
+      }),
+      expect.objectContaining({
+        post: expect.objectContaining({ id: first.id }),
+        highlighted: false,
+      }),
+      expect.objectContaining({
+        post: expect.objectContaining({ id: second.id }),
         highlighted: true,
       }),
     ]);

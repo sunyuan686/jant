@@ -47,7 +47,7 @@ import {
 } from "./summary.js";
 import { renderTiptapDocumentAroundBoundary } from "./tiptap-render.js";
 import { highlightText } from "./search-snippet.js";
-import { isFullUrl, toPublicPath, toSameSitePath } from "./url.js";
+import { getPostPath, isFullUrl, toPublicPath, toSameSitePath } from "./url.js";
 
 // =============================================================================
 // Media Context
@@ -260,7 +260,7 @@ export function toPostView(
 ): PostView {
   const id = post.id;
   const permalink = toPublicPath(
-    aliasPath ?? `/${post.slug}`,
+    getPostPath(post.slug, aliasPath),
     ctx.sitePathPrefix,
   );
   const timeZone = ctx.timeZone ?? "UTC";
@@ -707,7 +707,8 @@ export function toSearchResultViews(
   ctx: MediaContext,
   query?: string,
   aliasMap?: Map<string, string>,
-  collectionsMap?: Map<string, Collection[]>,
+  /** Collections by Thread id, `collections.getCollectionsByThreadIds()`'s */
+  collectionsByThread?: Map<string, Collection[]>,
 ): SearchResultView[] {
   return results.map((r) =>
     toSearchResultView(
@@ -715,7 +716,7 @@ export function toSearchResultViews(
       ctx,
       query,
       aliasMap?.get(r.post.id),
-      collectionsMap?.get(r.post.id),
+      collectionsByThread?.get(r.post.threadId),
     ),
   );
 }
@@ -725,34 +726,7 @@ export function toSearchResultViews(
 // =============================================================================
 
 /**
- * Converts a grouped post map to typed ArchiveGroup[].
- */
-export function toArchiveGroups(
-  grouped: Map<string, Post[]>,
-  ctx: MediaContext,
-  aliasMap?: Map<string, string>,
-): ArchiveGroup[] {
-  const groups: ArchiveGroup[] = [];
-  for (const [yearMonth, posts] of grouped) {
-    const [year, month] = yearMonth.split("-");
-    if (!year || !month) continue;
-
-    const label = formatYearMonthLabel(yearMonth);
-    if (!label) continue;
-
-    groups.push({
-      year,
-      month,
-      label,
-      posts: toPostViewsFromPosts(posts, ctx, undefined, aliasMap),
-    });
-  }
-  return groups;
-}
-
-/**
  * Converts a grouped PostWithMedia map to typed ArchiveGroup[].
- * Unlike toArchiveGroups, this preserves media attachments on each post.
  *
  * @param grouped - Map of "YYYY-MM" keys to PostWithMedia arrays
  * @param ctx - Media context for URL computation

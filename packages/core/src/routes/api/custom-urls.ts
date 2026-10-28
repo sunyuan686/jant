@@ -3,70 +3,61 @@
  */
 
 import { Hono } from "hono";
+import { z } from "zod";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { requireAuthApi } from "../../middleware/auth.js";
-import { CreateCustomUrlSchema, parseValidated } from "../../lib/schemas.js";
+import { validate } from "../../middleware/validate.js";
+import { CreateCustomUrlSchema, pageLimitSchema } from "../../lib/schemas.js";
 import { parseIdParam, NotFoundError } from "../../lib/errors.js";
+import { toApiCustomUrl } from "../../lib/api-custom-urls.js";
 import { ID_PREFIX } from "../../lib/ids.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
 export const customUrlsApiRoutes = new Hono<Env>();
 
-// List custom URLs (requires auth)
-customUrlsApiRoutes.get("/", requireAuthApi(), async (c) => {
-  const pageParam = c.req.query("page");
-  const page = Math.max(1, parseInt(pageParam || "1", 10) || 1);
-  const pageSize = c.var.appConfig.pageSize;
-
-  const [total, customUrls] = await Promise.all([
-    c.var.services.customUrls.count(),
-    c.var.services.customUrls.list({
-      limit: pageSize,
-      offset: (page - 1) * pageSize,
-    }),
-  ]);
-
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  return c.json({ customUrls, total, page, totalPages });
+const ListCustomUrlsQuerySchema = z.object({
+  limit: pageLimitSchema(100, 100),
+  cursor: z.string().optional(),
 });
+
+// List custom URLs, newest first (requires auth)
+customUrlsApiRoutes.get(
+  "/",
+  requireAuthApi(),
+  validate("query", ListCustomUrlsQuerySchema),
+  async (c) => {
+    const { limit, cursor } = c.req.valid("query");
+    const page = await c.var.services.customUrls.listPage({ limit, cursor });
+    return c.json({
+      customUrls: page.customUrls.map(toApiCustomUrl),
+      nextCursor: page.nextCursor,
+    });
+  },
+);
 
 // Create custom URL (requires auth)
-customUrlsApiRoutes.post("/", requireAuthApi(), async (c) => {
-  const body = parseValidated(CreateCustomUrlSchema, await c.req.json());
+customUrlsApiRoutes.post(
+  "/",
+  requireAuthApi(),
+  validate("json", CreateCustomUrlSchema),
+  async (c) => {
+    const body = c.req.valid("json");
 
-  const redirectType = body.redirectType
-    ? (parseInt(body.redirectType, 10) as 301 | 302)
-    : undefined;
+    const customUrl = await c.var.services.customUrls.create({
+      path: body.path,
+      targetType: body.targetType,
+      targetId: body.targetId,
+      toPath: body.toPath,
+      redirectType: body.redirectType
+        ? (parseInt(body.redirectType, 10) as 301 | 302)
+        : undefined,
+    });
 
-  // Resolve slug → ID for post/collection targets
-  let targetId = body.targetId;
-  if (body.targetType === "post" && body.targetId) {
-    const post = await c.var.services.posts.getBySlug(body.targetId);
-    if (!post) {
-      throw new NotFoundError(`Post with slug "${body.targetId}"`);
-    }
-    targetId = post.id;
-  }
-  if (body.targetType === "collection" && body.targetId) {
-    const col = await c.var.services.collections.getBySlug(body.targetId);
-    if (!col) {
-      throw new NotFoundError(`Collection with slug "${body.targetId}"`);
-    }
-    targetId = col.id;
-  }
-
-  const customUrl = await c.var.services.customUrls.create({
-    path: body.path,
-    targetType: body.targetType,
-    targetId,
-    toPath: body.toPath,
-    redirectType,
-  });
-
-  return c.json(customUrl, 201);
-});
+    return c.json(toApiCustomUrl(customUrl), 201);
+  },
+);
 
 // Delete custom URL (requires auth)
 customUrlsApiRoutes.delete("/:id", requireAuthApi(), async (c) => {

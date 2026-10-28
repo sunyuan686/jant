@@ -588,7 +588,7 @@ describe("timeline cards", () => {
     );
 
     expect(presetCss).toContain(
-      '[data-post]:not([data-page="post"]) [data-post-body].prose',
+      "[data-post]:not(.post-detail) [data-post-body].prose",
     );
     expect(presetCss).toMatch(
       /:where\(h1,\s*h2\)\s*\{[\s\S]*font-size:\s*calc\(var\(--type-content-body\) \* 1\.12\);/,
@@ -1028,5 +1028,22 @@ describe("timeline cards", () => {
     expect(pinned).toContain("post-status-pinned");
     expect(pinned).not.toContain("post-status-private");
     expect(pinned).not.toContain("post-status-draft");
+  });
+
+  // The theme hooks mark each part once: a rule on [data-post-media] used to
+  // match both the card's wrapper and the gallery row inside it.
+  it("marks a post's media once and a quote's quoted text", () => {
+    for (const card of [
+      NoteCard({ post: createPostView({ format: "note" }), mode: "feed" }),
+      LinkCard({ post: createPostView({ format: "link" }), mode: "detail" }),
+      QuoteCard({ post: createPostView({ format: "quote" }), mode: "feed" }),
+    ]) {
+      const html = renderWithI18n(card);
+      expect(html.match(/data-post-media/g)).toHaveLength(1);
+    }
+    const quoteHtml = renderWithI18n(
+      QuoteCard({ post: createPostView({ format: "quote" }), mode: "feed" }),
+    );
+    expect(quoteHtml).toMatch(/<blockquote[^>]*data-post-quote/);
   });
 });

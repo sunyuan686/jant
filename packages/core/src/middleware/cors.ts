@@ -1,10 +1,10 @@
 /**
  * CORS Middleware
  *
- * Allows cross-origin API requests when `CORS_ORIGINS` is configured.
+ * Answers cross-origin API requests as `CORS_ORIGINS` says.
  *
- * - Not set → CORS disabled
- * - `*` → allow all origins
+ * - Not set, or `*` → allow all origins
+ * - Set but empty → cross-origin access off
  * - Comma-separated origins → allow only those
  *   (e.g. `https://example.com,chrome-extension://abcdef`)
  */
@@ -37,7 +37,7 @@ export function apiCors(): MiddlewareHandler<Env> {
 
     const handler = cors({
       origin: origins,
-      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowHeaders: ["Content-Type", "Authorization", "MCP-Protocol-Version"],
       exposeHeaders: ["Content-Type", "MCP-Protocol-Version"],
       credentials: origins !== "*",

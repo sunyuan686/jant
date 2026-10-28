@@ -70,6 +70,16 @@ To extend a Thread, click "Reply" at the bottom of the post detail page.
 
 On a list page a Thread takes one card, folded: the root post, its first two replies, then the last three with the newest at the bottom. A Thread of six posts or fewer fits and is shown whole. Anything longer collapses the middle into a "3 more posts" link, which opens the first of the posts it hides. The feeds fold the same way, so a Thread reads the same in a reader as it does on the site. The Thread's own page always shows every post.
 
+## Share a post as an image
+
+On a published post that isn't Private, choose **… → Share as image**. Jant draws the post as a picture in your site's fonts and colors, with the site's name and address, and a QR code that opens the post. On a phone, press and hold the picture to save it. On a computer, use **Download**, or **Copy image** and **Share…** where the browser offers them.
+
+Readers get **…** on each post too, holding **Copy link** and **Share as image**. Your own menu has **Copy link** as well, above **Share as image**.
+
+The picture shows what the timeline shows: the same summary and up to four images. Documents, recordings, and text attachments are listed by name. A post taller than a phone screen is cut with a fade.
+
+A post in a Thread is drawn with the root post above it and the next post below, both faded, and its place in the Thread beside the date, such as `6 / 7`.
+
 ## Collections
 
 A Collection is a curated grouping organized under `/{slug}`. The same Thread can belong to multiple Collections; its root and replies always share one membership set.
@@ -192,21 +202,29 @@ This means you can publish small fragments without weight — they appear on you
 
 The table below assumes the default `MAIN_RSS_FEED=featured`.
 
-| Post state            | Direct URL | Latest | `/archive` | Default `/feed` | Collection |
-| --------------------- | ---------- | ------ | ---------- | --------------- | ---------- |
-| `Public` and Featured | Yes        | Yes    | Yes        | Yes             | Yes        |
-| `Public`              | Yes        | Yes    | Yes        | No              | Yes        |
-| `Hidden from Latest`  | Yes        | No     | Yes        | No              | Yes        |
-| `Private`             | Login only | No     | Login only | No              | Login only |
-| `Draft`               | No         | No     | No         | No              | No         |
+| Post state            | Direct URL | Latest | `/archive` | `/search`  | Default `/feed` | Collection |
+| --------------------- | ---------- | ------ | ---------- | ---------- | --------------- | ---------- |
+| `Public` and Featured | Yes        | Yes    | Yes        | Yes        | Yes             | Yes        |
+| `Public`              | Yes        | Yes    | Yes        | Yes        | No              | Yes        |
+| `Hidden from Latest`  | Yes        | No     | Yes        | Yes        | No              | Yes        |
+| `Private`             | Login only | No     | Login only | Login only | No              | Login only |
+| `Draft`               | No         | No     | No         | No         | No              | No         |
 
 If you switch `MAIN_RSS_FEED` to `latest`, the default `/feed` behavior shifts accordingly, but `Hidden from Latest` still keeps those posts out of that stream.
+
+### What stays reachable
+
+`Private` and `Draft` keep a post off every page and feed a visitor can open. Two things work differently:
+
+- **Attachments.** An uploaded file has its own address under `/media/`, and that address opens for anyone who has it. It is long and random, so it can't be guessed, but a file shared while the post was public still opens at that address after the post turns private. Deleting the attachment takes the address down; a copy a browser or CDN already cached can outlive that, for up to a year.
+- **The sitemap.** Search engines read `/sitemap.xml`. A post made private drops out of it within a few minutes, or within a day on a site with more than 500 posts, whose older sitemap pages are cached longer.
 
 ## URLs and browse pages
 
 Jant uses readable URLs:
 
 - Post: `/{slug}`
+- A post's text attachment, as a page of its own: `/{slug}/text/{attachment-id}`
 - Collection: `/{slug}`
 - Combined Collection view: `/collections/{slug1}+{slug2}+{slug3}`
 - Search: `/search`
@@ -218,7 +236,7 @@ Feeds:
 - `/feed` uses your currently configured main feed
 - `/latest/feed` returns posts that appear on the homepage Latest (excludes `Hidden from Latest`)
 - `/featured/feed` returns one entry per Thread containing Featured posts
-- `/archive/feed` returns every public post (including `Hidden from Latest`), and supports filters like `?year=`, `?format=`, `?collection=`, `?media=`
+- `/archive/feed` returns every public post (including `Hidden from Latest`), and takes the [archive filters](#archive-filters)
 - `/{slug}/feed` returns the feed for a single Collection
 - `/collections/{slug1}+{slug2}/feed` returns the feed for a combined Collection view
 
@@ -234,16 +252,57 @@ the published content, fix mistakes, or unpublish it before a feed reader can
 fetch it. See
 [Configuration § Feed defaults](configuration.md#feed-defaults-optional).
 
+### Archive filters
+
+`/archive` and `/archive/feed` take the same query parameters, and a post has
+to match all of them. The archive's filter controls write them, so a filtered
+page's address can be bookmarked or subscribed to as it is.
+
+| Parameter    | Values                                                                                  | Selects                                                                                       |
+| ------------ | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `collection` | Collection slugs, comma-separated                                                       | Threads in any of these Collections                                                           |
+| `format`     | `note`, `link`, `quote`                                                                 | Posts in this format                                                                          |
+| `title`      | `any`, `none`                                                                           | Posts with a title, or without one                                                            |
+| `year`       | A year, such as 2024                                                                    | Posts published that year; with `sort=updated`, Threads last active that year                 |
+| `media`      | `any`, `none`, or kinds, comma-separated: `image`, `video`, `audio`, `text`, `document` | Posts with any attachment, none, or one of these kinds                                        |
+| `replies`    | `any`, `none`                                                                           | Threads with replies, or single posts                                                         |
+| `visibility` | `public`, `featured`, `hidden`, `private`                                               | Public, Featured, or `Hidden from Latest` posts; `private` only while you're signed in        |
+| `sort`       | `published`, `updated`                                                                  | Order and month headings by publication (the default), or by activity, quiet replies included |
+| `layout`     | `list`, `grid`                                                                          | The page's layout; feeds ignore it                                                            |
+| `page`       | A page number                                                                           | Which page; feeds ignore it                                                                   |
+
+Links with older spellings keep working. The archive page redirects them to
+the current one, and feeds read them as they are:
+
+- `hasTitle`, `hasMedia`, and `hasReplies` with `1` or `0` read as `title`,
+  `media`, and `replies` with `any` or `none`.
+- `visibility=latest_hidden` reads as `visibility=hidden`, and `visibility=all`
+  as no visibility filter.
+- `view` reads as `layout`.
+
+### Collection order
+
+A Collection page, a combined Collection view, and a Smart Collection page take
+two parameters:
+
+| Parameter | Values                       | Selects                                                                                                                            |
+| --------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `sort`    | `newest`, `oldest`, `rating` | The order; the Collection's own by default. `rating` needs at least two rated Threads, and without them the page keeps its default |
+| `page`    | A page number                | Which page                                                                                                                         |
+
+`sort=rating_desc` still reads as `rating`, and `sort=updated` as `newest`.
+
 ## Custom URLs
 
-In addition to the default slug, Jant lets you set custom paths for posts, Collections, and archive pages, and lets you configure redirects. Manage all of them in the admin under **Settings → Advanced → Custom URLs** (the route is `/settings/custom-urls`).
+In addition to the default slug, Jant lets you set custom paths for posts and Collections, and lets you configure redirects. Manage all of them in the admin under **Settings → Advanced → Custom URLs** (the route is `/settings/custom-urls`).
 
-There are four types:
+There are three types:
 
 - **Post**: assign a new primary path to a specific post; the original slug auto-redirects with a 301.
 - **Collection**: assign a new primary path to a specific Collection; the original slug auto-redirects with a 301.
-- **Archive**: pin a set of archive filters to a fixed path — for example, `/quotes` actually renders `/archive?format=quote&visibility=public&view=list`.
 - **Redirect**: redirect any path to another path or to an external URL.
+
+Paths made with the retired **Archive** type keep working; see [Custom archive views (retired)](#custom-archive-views-retired).
 
 ### Setting a custom path for a post or Collection
 
@@ -254,6 +313,8 @@ Go to **Settings → Advanced → Custom URLs**, then click **New Custom URL** i
 - **Target Slug**: the slug of the post or Collection to point at
 
 Once set, the new path becomes the canonical URL for that piece of content (permalink, feed, `og:url` all use the new path), and the original slug auto-redirects with a 301 — old links already in circulation keep working.
+
+A post or Collection has one address: its first custom URL, or its slug when it has none. Every other way in redirects there with a 301 — the slug, a custom URL added later, and the same address in different letter case.
 
 Useful when you want to graft content imported from another platform back onto its original URLs.
 
@@ -280,9 +341,7 @@ If you really do edit the slug field directly in the editor, note that Jant won'
 
 ### Reserved paths
 
-The following top-level paths are used by Jant itself and can't be used as custom URLs:
-
-`featured`, `latest`, `signin`, `signout`, `setup`, `settings`, `dash`, `api`, `feed`, `search`, `archive`, `media`, `pages`, `reset`, `collections`, `compose`, `preview`, `new`, `static`, `assets`, `_assets`, `healthz`, `readyz`
+Jant uses some top-level paths itself, such as `archive`, `feed`, and `search`, and an address can't start with one. The full list is in [Configuration § Reserved paths](configuration.md#reserved-paths).
 
 If an older site already uses `/preview` as a post or custom URL, that stored record is left unchanged but the old link becomes a 404. Older custom URLs below that prefix also stop resolving as custom URLs because the whole namespace now belongs to authenticated previews. Jant doesn't generate a replacement slug or redirect; edit the conflicting post or custom URL yourself if you want a new public address.
 

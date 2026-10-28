@@ -24,8 +24,6 @@ interface ThemeModeColors {
   primary: string;
   primaryFg: string;
   siteAccent: string;
-  /** Text on site accent backgrounds (defaults to primaryFg) */
-  siteAccentFg?: string;
   muted: string;
   mutedFg: string;
   border: string;
@@ -70,7 +68,7 @@ const DEFAULTS = {
 /**
  * Create a comprehensive color theme from key colors.
  * Derives card, popover, muted, secondary, accent, and sidebar variables.
- * Also sets --destructive, --success, --search-mark-*, and --dash-bg.
+ * Also sets --destructive, --success, --site-search-mark-*, and --dash-bg.
  */
 function defineTheme(opts: {
   id: string;
@@ -92,7 +90,6 @@ function defineTheme(opts: {
       "--primary": light.primary,
       "--primary-foreground": light.primaryFg,
       "--site-accent": light.siteAccent,
-      "--site-accent-text": light.siteAccentFg ?? light.primaryFg,
       "--secondary": light.muted,
       "--secondary-foreground": light.fg,
       "--muted": light.muted,
@@ -112,8 +109,9 @@ function defineTheme(opts: {
       "--sidebar-accent-foreground": light.fg,
       "--sidebar-border": light.border,
       "--sidebar-ring": light.primary,
-      "--search-mark-bg": light.searchMarkBg ?? DEFAULTS.light.searchMarkBg,
-      "--search-mark-color":
+      "--site-search-mark-bg":
+        light.searchMarkBg ?? DEFAULTS.light.searchMarkBg,
+      "--site-search-mark-color":
         light.searchMarkColor ?? DEFAULTS.light.searchMarkColor,
       "--dash-bg": light.dashBg ?? DEFAULTS.light.dashBg,
       ...(light.readingTitle
@@ -139,7 +137,6 @@ function defineTheme(opts: {
       "--primary": dark.primary,
       "--primary-foreground": dark.primaryFg,
       "--site-accent": dark.siteAccent,
-      "--site-accent-text": dark.siteAccentFg ?? dark.primaryFg,
       "--secondary": dark.muted,
       "--secondary-foreground": dark.fg,
       "--muted": dark.muted,
@@ -159,8 +156,8 @@ function defineTheme(opts: {
       "--sidebar-accent-foreground": dark.fg,
       "--sidebar-border": dark.border,
       "--sidebar-ring": dark.primary,
-      "--search-mark-bg": dark.searchMarkBg ?? DEFAULTS.dark.searchMarkBg,
-      "--search-mark-color":
+      "--site-search-mark-bg": dark.searchMarkBg ?? DEFAULTS.dark.searchMarkBg,
+      "--site-search-mark-color":
         dark.searchMarkColor ?? DEFAULTS.dark.searchMarkColor,
       "--dash-bg": dark.dashBg ?? DEFAULTS.dark.dashBg,
       ...(dark.readingTitle

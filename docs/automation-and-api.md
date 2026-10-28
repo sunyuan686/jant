@@ -9,26 +9,19 @@ Jant provides two channels:
 
 For full field definitions and request bodies, see the [API Reference](API.md).
 
-If you scaffolded the site with `create-jant`, the project also ships with:
-
-- `AGENTS.md`
-- `.agents/skills/`
-- `.claude/skills/`
-- `examples/agent-content-automation/README.md`
-
-So an agent working inside the generated project gets more than an API token — it sees the project conventions and ready-to-run examples directly.
+A project created with `create-jant` also has `AGENTS.md`, which points an agent at the running site's `/skill.md`, at `npx jant --help`, and at these docs, and `examples/agent-content-automation/README.md` with ready-to-run requests.
 
 ## Which path first
 
 - Scripts, scheduled jobs, external integrations: use the **HTTP API**.
 - The caller is itself an MCP client: use **MCP**.
-- An AI assistant working with one site: hand it that site's `/skill.md` URL (for example, `https://example.com/skill.md`) — a site-bound guide to reading, publishing, organizing, and migrating content through HTTP or MCP. For migrations, follow its dedicated import workflow and see [Export and import](export-and-import.md#coming-from-another-blog-or-cms).
+- An AI assistant working with one site: hand it that site's `/skill.md` URL (for example, `https://example.com/skill.md`), a site-bound guide to reading, publishing, organizing, and migrating content through HTTP or MCP. To move an old blog in, see [Export and import](export-and-import.md#coming-from-another-blog-or-cms).
 
 Default to HTTP. MCP only beats it when the caller already speaks the tool-calling protocol.
 
 ## Local CLI
 
-Operations that touch the local environment or the database stay on the CLI: `migrate`, `deploy`, `reset-password`, `site snapshot`, `site export`, `site import`, `db export`, and so on. These commands read and write the database or site deployment directly — no HTTP, no API token. See [Export and import](export-and-import.md).
+Setting up, deploying, moving, and backing up a site stay on the CLI: `setup`, `migrate`, `deploy`, `reset-password`, `site export`, `site import`, `site snapshot`, `db export`, and so on. `site export` and `site import` call the site's API with an API token; the rest read and write the database directly. See [Command line](cli.md).
 
 Content automation (publishing posts, uploading media, updating settings) goes through HTTP or MCP.
 
@@ -52,23 +45,25 @@ Send the header:
 Authorization: Bearer jnt_...
 ```
 
-A few public read endpoints don't need a token by default: `GET /api/collections`, `GET /api/collections/:id`, `GET /api/nav-items`, `GET /api/search`, `GET /api/public/posts`, `GET /api/public/posts/:slug`, `GET /api/public/archive`. When `PUBLIC_API_ENABLED=false`, `/api/public/*` returns `404` to every caller; Collection, navigation, and search JSON reads require a browser session or Bearer token. Public HTML pages, including `/search`, remain available.
+A few public read endpoints don't need a token by default: `GET /api/public/threads`, `GET /api/public/threads/:slug`, `GET /api/public/threads/:slug/posts`, and `GET /api/public/posts/:slug`. When `PUBLIC_API_ENABLED=false`, `/api/public/*` returns `404` to every caller. Public HTML pages, including `/search`, remain available.
 
 ### Common endpoints
 
-| Endpoint                 | Methods                     | Purpose                                                                                                                             |
-| ------------------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/posts`             | GET / POST / PUT / DELETE   | List, read, create, update, delete posts                                                                                            |
-| `/api/public/posts`      | GET                         | Public read of published posts (no token)                                                                                           |
-| `/api/public/archive`    | GET                         | Public archive feed — includes `latest_hidden`, supports year/collection/language/media/title/replies/visibility filters (no token) |
-| `/api/upload`            | POST / GET / PATCH / DELETE | One-shot multipart upload, single file per call — preferred for scripts                                                             |
-| `/api/uploads`           | POST → PUT → POST           | Multipart upload session — for large files or unstable networks                                                                     |
-| `/api/attachments`       | GET                         | Fetch raw attachment content by id                                                                                                  |
-| `/api/collections`       | GET / POST / PUT / DELETE   | Collections (GET needs no token)                                                                                                    |
-| `/api/smart-collections` | GET / POST / PUT / DELETE   | Smart collections — collections whose members come from conditions (token required, including reads)                                |
-| `/api/settings`          | GET / PUT                   | Site settings                                                                                                                       |
-| `/api/search`            | GET                         | Full-text search (public, IP-rate-limited)                                                                                          |
-| `/api/mcp`               | POST                        | MCP JSON-RPC (`initialize` / `tools/list`, etc.)                                                                                    |
+| Endpoint                 | Methods                   | Purpose                                                                                                      |
+| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `/api/posts`             | GET / POST / PUT / DELETE | List, read, create, update, delete posts                                                                     |
+| `/api/threads`           | GET                       | List Threads, read one, and page through its posts, drafts and private Threads included                      |
+| `/api/public/threads`    | GET                       | Public read of Threads — the homepage's list by default, with the archive's filters (no token)               |
+| `/api/public/posts`      | GET                       | Public read of one published post by slug (no token). Lists of posts are Thread lists: `/api/public/threads` |
+| `/api/upload`            | POST                      | One-shot multipart upload, single file per call — preferred for scripts                                      |
+| `/api/media`             | GET / PUT / DELETE        | List, read, update the alt text of, and delete uploaded files                                                |
+| `/api/uploads`           | POST → PUT → POST         | Multipart upload session — for large files or unstable networks                                              |
+| `/api/attachments`       | GET                       | Fetch raw attachment content by id                                                                           |
+| `/api/collections`       | GET / POST / PUT / DELETE | Collections                                                                                                  |
+| `/api/smart-collections` | GET / POST / PUT / DELETE | Smart collections — collections whose members come from conditions                                           |
+| `/api/settings`          | GET / PUT                 | Site settings                                                                                                |
+| `/api/search`            | GET                       | Full-text search of published posts, private ones included                                                   |
+| `/api/mcp`               | POST                      | MCP JSON-RPC (`initialize` / `tools/list`, etc.)                                                             |
 
 `/api/upload` and `/api/uploads` differ by a single `s` but mean different things — the first is a one-shot single-file multipart upload, the second is a three-step init/part/complete session. Default to `/api/upload`; reach for `/api/uploads` only when files are large or the connection is unreliable.
 
@@ -80,18 +75,18 @@ curl -X POST "$JANT_URL/api/posts" \
   -H "Content-Type: application/json" \
   -d '{
     "format": "note",
-    "body": "Hello from curl."
+    "bodyMarkdown": "Hello from curl."
   }'
 ```
 
-For more formats (`link`, `quote`) and advanced fields (`collections`, `publishedAt`, `slug`, `pinned`, `featured`), see `examples/agent-content-automation/`.
+`examples/agent-content-automation/` has a `quote` post and a settings update to start from. Every field, including `collectionIds`, `publishedAt`, `slug`, `pinned`, and `featured`, is in the [API reference](API.md#create-a-post).
 
 ### Upload an image
 
 ```bash
 curl -X POST "$JANT_URL/api/upload" \
   -H "Authorization: Bearer $JANT_API_TOKEN" \
-  -F "file=@./path/to/photo.webp" \
+  -F "file=@./path/to/photo.webp;type=image/webp" \
   -F "alt=Cover image"
 ```
 
@@ -112,11 +107,14 @@ Every failure under `/api` returns JSON with a fixed shape:
 {
   "error": "human readable message",
   "code": "ERROR_CODE",
-  "details": "..."
+  "details": {
+    "formErrors": [],
+    "fieldErrors": { "title": ["..."] }
+  }
 }
 ```
 
-`details` is present only on 400 validation failures and carries the field-level information. Common status codes:
+`details` is present only on 400 validation failures and names the fields that failed. Common status codes:
 
 | Status | `code`                         | Meaning and handling                                                                 |
 | ------ | ------------------------------ | ------------------------------------------------------------------------------------ |
@@ -125,12 +123,11 @@ Every failure under `/api` returns JSON with a fixed shape:
 | 403    | `FORBIDDEN`                    | Token is valid but lacks access to the resource                                      |
 | 404    | `NOT_FOUND`                    | Resource doesn't exist                                                               |
 | 409    | `CONFLICT` and friends         | State conflict (slug collision, hosted media quota, etc.)                            |
-| 429    | `RATE_LIMIT`                   | Rate-limited; see below                                                              |
 | 500    | `EXTERNAL_SERVICE_ERROR`, etc. | Server error; retry, and if it keeps failing, send the request details for debugging |
 
 ### Rate limiting
 
-Today only `/api/search` enforces a per-IP per-minute limit (controlled by the deployment's `appConfig.rateLimit.searchPerMinute`; for the default see [Configuration](configuration.md)). Other endpoints have no hard rate limit, but a single Cloudflare Workers instance has limited concurrency — for bulk writes, keep calls sequential and add a small gap between writes when needed. If more rate limits are introduced later, they'll return `429` with `Retry-After`, and this section will be updated.
+The API has no hard rate limit. The search limit, `RATE_LIMIT_SEARCH_PER_MIN` in [Configuration](configuration.md), applies to signed-out readers on the `/search` page, not to `/api/search`. A single Cloudflare Workers instance has limited concurrency, though — for bulk writes, keep calls sequential and add a small gap between writes when needed. If rate limits are added to the API later, they'll return `429` with `Retry-After`, and this section will be updated.
 
 ## MCP interface
 
@@ -138,10 +135,10 @@ For agents that already support MCP. The transport is HTTP JSON-RPC:
 
 - **Path**: `/api/mcp`
 - **Authentication**: scripts and agents send `Authorization: Bearer jnt_...`; same-origin browser extensions can reuse the session cookie.
-- **Protocol header**: `MCP-Protocol-Version: 2025-06-18`. This page is updated when the version changes.
+- **Protocol header**: `MCP-Protocol-Version: 2025-06-18`. A request without it is read as that version; any other version answers `400`. This page is updated when the version changes.
 - **Methods**: `initialize`, `ping`, `tools/list`, `tools/call`.
 
-Tools are grouped by resource: `posts`, `media`, `attachments`, `collections`, `settings`, `search`. Get the exact tool names and parameters from `tools/list`; they map one-to-one with the HTTP endpoints.
+The tools cover posts, Threads, media, attachments, collections, settings, and search, and each does what its HTTP endpoint does. Navigation, custom URLs, smart collections, the collections directory, pinning a Thread in a collection, translations, avatar and icon uploads, and export are HTTP-only. Get the exact tool names and parameters from `tools/list`.
 
 Minimal initialization request:
 

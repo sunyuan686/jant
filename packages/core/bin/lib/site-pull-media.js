@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative } from "node:path";
-import { unzipSync, zipSync } from "fflate";
+import { assertPublicUrl, resolveInside } from "./import-sources.js";
 import { parse, stringify } from "smol-toml";
 import {
   collectMediaReferences as collectParsedMediaReferences,
@@ -20,6 +20,7 @@ import {
   rewriteMediaReferences,
 } from "./site-media-parser.js";
 import { formatFrontMatter, parseFrontMatter } from "./hugo-markdown.js";
+import { extractZipFile, writeDirectoryToZip } from "./zip-archive.js";
 
 export function getSitePathPrefix(baseUrl) {
   if (typeof baseUrl !== "string" || baseUrl.trim() === "") {
@@ -168,7 +169,33 @@ function formatAssetRequestError(error) {
   return "Download failed";
 }
 
-function requestAssetWithNode(url, redirectCount = 0) {
+/**
+ * Downloads one asset an export links to. Every hop, the first and each
+ * redirect, must be a public address (see `lib/import-sources.js`): the
+ * bytes end up in the export, and importing it publishes them. The one
+ * exception is the site being exported, which the person running the export
+ * named, and which can well be `http://127.0.0.1:3000`.
+ */
+async function requestAssetWithNode(url, redirectCount = 0, siteOrigin = "") {
+  if (!siteOrigin || originOf(url) !== siteOrigin) {
+    try {
+      await assertPublicUrl(url);
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  return requestPublicAsset(url, redirectCount, siteOrigin);
+}
+
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+}
+
+function requestPublicAsset(url, redirectCount, siteOrigin) {
   const maxRedirects = 5;
 
   return new Promise((resolve) => {
@@ -213,6 +240,7 @@ function requestAssetWithNode(url, redirectCount = 0) {
             requestAssetWithNode(
               new URL(location, parsedUrl).toString(),
               redirectCount + 1,
+              siteOrigin,
             ),
           );
           return;
@@ -275,7 +303,11 @@ async function fetchAsset(resolvedUrl, options = {}) {
   let lastError = "Unknown download failure";
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const result = await requestAssetWithNode(resolvedUrl);
+    const result = await requestAssetWithNode(
+      resolvedUrl,
+      0,
+      options.siteOrigin,
+    );
     if (!("error" in result)) {
       return result;
     }
@@ -468,7 +500,10 @@ async function resolveExistingPulledPath(
     return null;
   }
 
-  const fullPath = join(rootDir, "static", pathname);
+  const fullPath = resolveInside(join(rootDir, "static"), pathname);
+  if (!fullPath) {
+    return null;
+  }
   const fileStat = await stat(fullPath).catch(() => null);
   if (!fileStat?.isFile()) {
     return null;
@@ -477,29 +512,21 @@ async function resolveExistingPulledPath(
   return toPulledPublicPath(pathname, sitePathPrefix);
 }
 
-async function packDirectoryToZip(rootDir) {
-  const files = {};
-  const allFiles = await walkFiles(rootDir);
-
-  for (const fullPath of allFiles) {
-    const relPath = relative(rootDir, fullPath).replace(/\\/g, "/");
-    files[relPath] = new Uint8Array(await readFile(fullPath));
-  }
-
-  return zipSync(files);
-}
-
-async function unpackZipToDirectory(zipBytes, rootDir) {
-  const files = unzipSync(zipBytes);
-  await Promise.all(
-    Object.entries(files).map(async ([relPath, bytes]) => {
-      const fullPath = join(rootDir, relPath);
-      await mkdir(dirname(fullPath), { recursive: true });
-      await writeFile(fullPath, bytes);
-    }),
-  );
-}
-
+/**
+ * Download the media an unpacked site export links to into its `static/`
+ * directory, and point the export at the local copies.
+ *
+ * @param {string} rootDir - The unpacked export
+ * @param {{
+ *   assetLoader?: ((asset: object) => Promise<object | null>) | null,
+ *   logger?: (event: object) => void,
+ *   siteOrigin?: string,
+ * }} [options] - `siteOrigin` names the site being exported, whose files
+ *   are fetched even from a private address; everything else has to be public
+ * @returns {Promise<object>} What was downloaded, reused, and failed
+ * @example
+ * await pullSiteExportDirectory(dir, { siteOrigin: "http://127.0.0.1:3000" });
+ */
 export async function pullSiteExportDirectory(rootDir, options = {}) {
   const logger =
     typeof options.logger === "function" ? options.logger : () => {};
@@ -589,7 +616,9 @@ export async function pullSiteExportDirectory(rootDir, options = {}) {
       });
     }
     if (!asset) {
-      const fetched = await fetchAsset(resolvedUrl);
+      const fetched = await fetchAsset(resolvedUrl, {
+        siteOrigin: options.siteOrigin,
+      });
       if ("error" in fetched) {
         assetError = fetched.error;
       } else {
@@ -681,14 +710,30 @@ export async function pullSiteExportDirectory(rootDir, options = {}) {
   return stats;
 }
 
-export async function pullSiteExportZipBytes(zipBytes, options = {}) {
+/**
+ * Pull media into an export ZIP: extract it to a temporary directory, pull
+ * there, and write the result as a new archive. Nothing is held in memory
+ * beyond one media file at a time, so the archive can be any size.
+ *
+ * @param {string} inputZipPath - Export archive to read
+ * @param {string} outputZipPath - Archive to write; may be the input
+ * @param {Parameters<typeof pullSiteExportDirectory>[1]} [options]
+ * @returns {Promise<Awaited<ReturnType<typeof pullSiteExportDirectory>>>} Pull stats
+ * @example
+ * await pullSiteExportZipFile("export.zip", "export.zip", { logger });
+ */
+export async function pullSiteExportZipFile(
+  inputZipPath,
+  outputZipPath,
+  options = {},
+) {
   const tempDir = await mkdtemp(join(tmpdir(), "jant-site-pull-"));
 
   try {
-    await unpackZipToDirectory(zipBytes, tempDir);
+    await extractZipFile(inputZipPath, tempDir);
     const stats = await pullSiteExportDirectory(tempDir, options);
-    const pulledZip = await packDirectoryToZip(tempDir);
-    return { zipBytes: pulledZip, stats };
+    await writeDirectoryToZip(tempDir, outputZipPath);
+    return stats;
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

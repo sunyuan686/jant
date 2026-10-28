@@ -44,7 +44,7 @@ Cloudflare 是 Jant 推荐的部署平台。两条路径任选其一：
 | **Git account**            | 选你的 GitHub 账号。首次使用时点 **New GitHub Connection** 完成授权，Cloudflare 会自动创建仓库。                                    |
 | **Project name**           | 默认为 `my-site`。这个值同时是站点子域 `<project>.<account>.workers.dev` 和 GitHub 仓库名。现在就改成你要用的名字，例如 `my-blog`。 |
 | **D1 database**            | 保持默认 **Create new**，名称用默认值。                                                                                             |
-| **Database location hint** | 选离你近的区域，保持默认也行。                                                                                                      |
+| **Database location hint** | 选大多数读者所在的区域。每个页面都要等这个数据库，见 [启用 D1 读复制](#3-启用-d1-读复制)。                                          |
 | **R2 bucket**              | 保持默认 **Create new**，名称用默认值。                                                                                             |
 | **AUTH_SECRET**            | 保留自动生成的值，或换成自己的 32 字节以上随机字符串。它用于会话签名，上线后不要修改。                                              |
 
@@ -68,7 +68,7 @@ npm install
 
 ## 上线前必做
 
-完成下面三步后再创建管理员账号。
+完成下面四步后再创建管理员账号。
 
 ### 1. 绑定自定义域名
 
@@ -95,7 +95,7 @@ npm install
 
 **把 URL 配给 Worker**，任选其一：
 
-- **控制台**：[Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) → 选中 Worker → **Settings** → **Variables and Secrets** → **Add**。名称 `R2_PUBLIC_URL`，值 `https://<media-domain>`。保存后会自动重新部署。
+- **控制台**：[Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) → 选中 Worker → **Settings** → **Variables and Secrets** → **Add**。名称 `R2_PUBLIC_URL`，值 `https://<media-domain>`。保存后会自动重新部署。项目的 `wrangler.toml` 设了 `keep_vars = true`，以后部署时这个变量才会保留；没有这一行，每次部署都会删掉文件里没列出的变量。
 - **代码**：在 `wrangler.toml` 的 `[vars]` 段下加：
 
   ```toml
@@ -107,13 +107,41 @@ npm install
 
 验证：打开一张已上传的图片，页面源码里的 `<img src>` 应该是 `https://<media-domain>/...`，而不是 `<project>.<account>.workers.dev/...`。
 
-### 3. 启用图片自动缩放（可选）
+### 3. 启用 D1 读复制
+
+Jant 渲染一个页面要依次执行十来次 D1 查询，Worker 和数据库之间的一次往返因此要付十来次。不开读复制（read replication）时，所有查询都发往数据库所在的那一个区域，离它远的读者打开每个页面都要等。两个版本相同的 Jant 站点，数据库都在北美西部，从东京测得：
+
+| 读复制 | 单次查询  | 首页     |
+| ------ | --------- | -------- |
+| 关     | 约 125 ms | 约 1.0 s |
+| 开     | 约 20 ms  | 约 0.4 s |
+
+开启读复制后，D1 会在它的每个区域各放一份只读副本，读请求交给最近的那一份。副本不额外收费，D1 照常按读写的行数计费。
+
+开启方法：
+
+1. 打开 [D1](https://dash.cloudflare.com/?to=/:account/workers/d1)，选中数据库。
+2. **Settings** → **Enable Read Replication**。
+
+用 API 开启时，把 `read_replication.mode` 设为 `"auto"`，做法见 Cloudflare 的 [读复制文档](https://developers.cloudflare.com/d1/best-practices/read-replication/)。`wrangler.toml` 不用改：读复制要求通过 D1 Sessions API 读取数据，Jant 已经这样做了。
+
+写入仍然发往主库；登录后发出的请求也从主库开始读，以免落后的副本把你登出，所以你看到的页面会比读者慢。
+
+检查一个站点：对比不访问数据库的 `/healthz` 和执行一次 D1 查询的 `/readyz`。下面五个请求，curl 会复用同一个连接：
+
+```bash
+curl -s -o /dev/null -w '%{url_effective}  %{time_total}s\n' 'https://<your-domain>/{healthz,healthz,readyz,readyz,readyz}'
+```
+
+第一行包含建立连接的时间。最快的那次 `readyz` 减去第二次 `healthz`，就是你所在位置的读者一次查询的耗时：上面两个站点分别约 125 ms 和 20 ms。
+
+### 4. 启用图片自动缩放（可选）
 
 开启 [Image Transformations](https://developers.cloudflare.com/images/transform-images/) 后，Jant 会按访问者的屏幕宽度和像素密度请求对应尺寸，避免手机加载 4000px 原图。
 
 每月前 5000 次变换免费，超出后约 $0.50 / 1000 次。每张原图按需衍生 3–5 个尺寸，个人站基本不会触发付费。
 
-> 图片变换是域名（zone）级功能，需要先按上一步配置好 R2 自定义域名。
+> 图片变换是域名（zone）级功能，需要先按第 2 步配置好 R2 自定义域名。
 
 1. 在 [Cloudflare 控制台](https://dash.cloudflare.com/) 选中你绑定的域名。
 2. 左侧菜单 → **Images** → **Transformations**。
@@ -147,7 +175,13 @@ pnpm create jant@latest jant-site
 yarn create jant@latest jant-site
 ```
 
-`create-jant` 会安装依赖、初始化 git、生成本地 `.dev.vars`（含本地 `AUTH_SECRET`），并创建已绑定 D1 和 R2 的 Wrangler 项目。
+要建在当前目录，传 `.`：
+
+```bash
+npm create jant@latest .
+```
+
+`create-jant` 会安装依赖、初始化 git（目录已在仓库中时跳过）、生成本地 `.dev.vars`（含本地 `AUTH_SECRET`），并创建已绑定 D1 和 R2 的 Wrangler 项目。
 
 ### 本地启动
 
@@ -192,6 +226,8 @@ PORT=8787 npm run dev
 
    `database_name` 必须与刚才传给 `d1 create` 的名字一致。
 
+   想让数据库靠近读者，加上 `--location` 指定读者所在的区域：`wnam`、`enam`、`weur`、`eeur`、`apac` 或 `oc`。不加时 D1 会选离你近的区域。
+
 3. **创建 R2 存储桶**
 
    ```bash
@@ -232,7 +268,7 @@ PORT=8787 npm run dev
 
 ### 通过 GitHub Actions 自动部署
 
-`create-jant` 创建的项目里已内置 `.github/workflows/deploy.yml`。在 GitHub 仓库加两个 Secret，之后每次推送 `main` 都会自动部署：
+`create-jant` 创建的项目里已内置 `.github/workflows/deploy.yml`。它安装依赖后运行 `jant deploy --ci`，用的是 lockfile 里的 `@jant/core` 版本，所以检查和部署本身会随升级更新。先在自己电脑上运行一次 `npm run deploy`，再提交 `wrangler.toml`：`database_id` 还是 `"local"` 时，workflow 会停下并说明原因，不会部署。然后在 GitHub 仓库加两个 Secret，之后每次推送 `main` 都会自动部署。没加 Secret 时，workflow 跳过部署，运行结果仍是通过：
 
 - `CF_API_TOKEN`
 - `CF_ACCOUNT_ID`
@@ -243,6 +279,8 @@ PORT=8787 npm run dev
 - **`CF_API_TOKEN`**：[API Tokens 页面](https://dash.cloudflare.com/profile/api-tokens) → **Create Token** → 选 **Edit Cloudflare Workers** 模板（已包含部署 Worker、读写 D1、读写 R2 所需权限）。按提示选账号和域名（如果用了自定义域名），生成后**立即复制**——关闭页面后无法再次查看。
 
 添加到 GitHub：仓库 → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**。
+
+一键部署创建的仓库里也有这个 workflow。Cloudflare 已经会在每次推送时部署它，所以这种仓库不要加这两个 Secret，加了每次推送会部署两次。
 
 ### 部署在子路径下
 
@@ -259,21 +297,11 @@ PORT=8787 npm run dev
 
 2. 在 [Cloudflare 控制台](https://dash.cloudflare.com/) → 选中你的域名 → **Workers Routes** → **Add route**，填 `<your-domain>/blog*`，Worker 选你的 Jant Worker。
 
-`SITE_PATH_PREFIX` 与 `SITE_ORIGIN` 是两个独立变量。`SITE_ORIGIN` 只接受 origin（scheme + host + port），路径部分会被忽略——子路径必须通过 `SITE_PATH_PREFIX` 设置。详细说明见 [配置 § 公开 URL 和子路径](configuration.md#公开-url-和子路径)。
+`SITE_PATH_PREFIX` 与 `SITE_ORIGIN` 是两个独立变量。`SITE_ORIGIN` 只接受 origin（scheme + host + port），带路径时站点会在启动时停下——子路径必须通过 `SITE_PATH_PREFIX` 设置。详细说明见 [配置 § 公开 URL 和子路径](configuration.md#公开-url-和子路径)。
 
 ## 升级
 
-升级前先读 [发布说明](https://github.com/jant-me/jant/releases)，留意破坏性变更。然后更新 `@jant/core` 并部署：
-
-```bash
-npm install @jant/core@latest
-npm run dev      # 本地验证；新迁移会应用到本地 D1
-npm run deploy   # 部署到 Cloudflare；远端迁移在部署时应用
-```
-
-如果你的仓库已配置 push 自动部署（一键部署，或上面的 GitHub Actions 工作流），可以跳过本地命令：提交更新后的 `package.json` 与 lockfile，推送到 `main` 即可。远端迁移会作为部署的一部分自动执行。
-
-涉及替换或删除数据库表的升级，先读发布说明。`jant deploy` 会先执行迁移，再上传新版 Worker，因此破坏性的 schema 切换可能需要短暂停写。在迁移、Worker 上传和部署后检查全部完成前，停掉或排空旧版本的写入实例。迁移校验能发现脏数据和数量对不上，但表替换期间的并发写入仍然不安全。
+用 `npm install @jant/core@latest` 安装新版本，然后推送到 `main`，或者运行 `npm run deploy`。升级前要备份什么、0.x 的站点要改什么，见[升级](upgrading.md)。
 
 ## 常见错误
 

@@ -11,22 +11,44 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { __test__ } from "../../bin/commands/import-site.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __test__,
+  SUPPORTED_SITE_EXPORT_VERSION,
+} from "../../bin/commands/site/import.js";
+import {
+  partitionApiSettingUpdates,
+  partitionLanguageSettingUpdates,
+} from "../lib/api-settings.js";
+import { normalizeEditableSettingValue } from "../lib/schemas.js";
+import { SITE_EXPORT_FORMAT_VERSION } from "../services/export.js";
+import type { ConfigKey } from "../types/config.js";
 
 const {
   walkHugoContent,
   loadSiteConfig,
+  checkSiteExportVersion,
   buildSettingsUpdatesFromConfig,
+  splitSettingsUpdatesForImport,
+  buildSiteAvatarImport,
   mediaSpecFromJantMedia,
   resolveCollectionMemberships,
   resolveThreadCollectionMemberships,
   buildPostPayloadFromBundle,
   getRootAliasPathsForImport,
   uploadMediaList,
+  uploadBundleResources,
+  normalizeImportedNavItems,
+  buildNavItemCreateRequest,
+  buildSmartCollectionCreateRequest,
+  normalizeImportedCollectionDirectory,
+  syncImportedCollectionDirectory,
+  normalizeImportedCustomUrls,
+  buildImportedAttachments,
   normalizeTextAttachmentSpec,
   isAbsoluteImportUrl,
   shouldImportReplyQuietly,
+  getNextThreadTail,
 } = __test__;
 
 async function writeFileTree(
@@ -51,6 +73,32 @@ describe("Hugo import CLI helpers", () => {
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("reads the export format version the exporter writes", () => {
+    expect(SUPPORTED_SITE_EXPORT_VERSION).toBe(SITE_EXPORT_FORMAT_VERSION);
+  });
+
+  it("refuses an export in a newer format version, and accepts older or unversioned ones", async () => {
+    const withVersion = async (line: string) => {
+      await writeFileTree(tempDir, {
+        "data/jant.toml": `format = "jant-site"\n${line}site_name = "Test"\n`,
+      });
+      return checkSiteExportVersion(await loadSiteConfig(tempDir));
+    };
+
+    expect(
+      await withVersion(`version = ${SUPPORTED_SITE_EXPORT_VERSION + 1}\n`),
+    ).toMatch(
+      new RegExp(
+        `format version ${SUPPORTED_SITE_EXPORT_VERSION + 1}.*Upgrade @jant/core`,
+      ),
+    );
+    expect(
+      await withVersion(`version = ${SUPPORTED_SITE_EXPORT_VERSION}\n`),
+    ).toBeNull();
+    expect(await withVersion("version = 1\n")).toBeNull();
+    expect(await withVersion("")).toBeNull();
   });
 
   it("walkHugoContent classifies root posts, replies, and collection bundles", async () => {
@@ -152,6 +200,160 @@ describe("Hugo import CLI helpers", () => {
     expect(siteConfig.extra.jant.collections_directory).toHaveLength(2);
   });
 
+  it("takes the site's settings from data/jant.toml over an edited hugo.toml", async () => {
+    await writeFileTree(tempDir, {
+      "hugo.toml": [
+        'title = "Renamed for the Hugo build"',
+        'languageCode = "fr"',
+        "[params]",
+        'theme_id = "paper"',
+        "noindex = true",
+        "",
+      ].join("\n"),
+      "data/jant.toml": [
+        'format = "jant-site"',
+        "version = 1",
+        'site_name = "Example Site"',
+        'site_language = "en"',
+        'theme_id = "tufte"',
+        "noindex = false",
+        "",
+      ].join("\n"),
+    });
+
+    const siteConfig = await loadSiteConfig(tempDir);
+    expect(siteConfig.title).toBe("Example Site");
+    expect(siteConfig.default_language).toBe("en");
+    expect(siteConfig.extra.jant.theme_id).toBe("tufte");
+    expect(siteConfig.extra.jant.noindex).toBe(false);
+  });
+
+  it.each([true, false])(
+    "sends settings the settings API accepts when every flag is %s",
+    async (flag) => {
+      // The Config Editor (6c79f0b4) made boolean settings "true" or "false".
+      // The importer kept sending "" for a false flag, the settings route
+      // answered 400, and the import stopped before it created anything.
+      await writeFileTree(tempDir, {
+        "data/jant.toml": [
+          'format = "jant-site"',
+          "version = 1",
+          'site_name = "Example Site"',
+          'site_language = "en"',
+          `show_jant_branding_on_home = ${flag}`,
+          `show_header_avatar = ${flag}`,
+          `noindex = ${flag}`,
+          `public_api_enabled = ${flag}`,
+          `rss_feeds_enabled = ${flag}`,
+          'theme_id = "paper"',
+          'default_theme_id = "tufte"',
+          'font_theme_id = "classic"',
+          'theme_mode = "dark"',
+          'time_zone = "Asia/Shanghai"',
+          'main_rss_feed = "latest"',
+          `multilingual_enabled = ${flag}`,
+          'additional_languages = "ja"',
+          "",
+        ].join("\n"),
+      });
+
+      const siteConfig = await loadSiteConfig(tempDir);
+      expect(buildSettingsUpdatesFromConfig(siteConfig)).toMatchObject({
+        TIME_ZONE: "Asia/Shanghai",
+        MAIN_RSS_FEED: "latest",
+        ADDITIONAL_LANGUAGES: "ja",
+        MULTILINGUAL_ENABLED: String(flag),
+      });
+      const { editable, appearance, languages } = splitSettingsUpdatesForImport(
+        buildSettingsUpdatesFromConfig(siteConfig, "body { color: red; }"),
+      );
+
+      // The requests the importer makes, as the routes take them: which keys
+      // each accepts, then the value check `settings.setMany` runs.
+      const settingsRoute = partitionApiSettingUpdates(
+        { ...editable, ...appearance },
+        false,
+      );
+      const importRoute = partitionLanguageSettingUpdates(languages);
+      expect(settingsRoute.rejectedKeys).toEqual([]);
+      expect(importRoute.rejectedKeys).toEqual([]);
+
+      const accepted = {
+        ...settingsRoute.filteredUpdates,
+        ...importRoute.filteredUpdates,
+      };
+      for (const [key, value] of Object.entries(accepted)) {
+        expect(
+          () => normalizeEditableSettingValue(key as ConfigKey, value),
+          `${key}=${JSON.stringify(value)}`,
+        ).not.toThrow();
+      }
+    },
+  );
+
+  it("buildSiteAvatarImport reads exported icons from the theme's static directory", async () => {
+    // The export writes favicon.ico and apple-touch-icon.png under
+    // themes/jant/static/. Looking only in static/ sent the importer to the
+    // source site for them, and an unreachable source dropped the avatar too.
+    await writeFileTree(tempDir, {
+      "data/jant.toml": [
+        'format = "jant-site"',
+        'site_avatar_mode = "custom"',
+        'favicon_mode = "custom"',
+        'apple_touch_mode = "custom"',
+        'favicon_path = "/favicon.ico"',
+        'apple_touch_icon_path = "/apple-touch-icon.png"',
+        'site_avatar_url = "/media/avatar.png"',
+        "",
+      ].join("\n"),
+      "hugo.toml": 'baseURL = "https://gone.example/"\n',
+      "static/media/avatar.png": new Uint8Array([1]),
+      "themes/jant/static/favicon.ico": new Uint8Array([2]),
+      "themes/jant/static/apple-touch-icon.png": new Uint8Array([3]),
+    });
+
+    const avatarImport = await buildSiteAvatarImport(
+      await loadSiteConfig(tempDir),
+      tempDir,
+    );
+
+    expect(avatarImport).toMatchObject({
+      mode: "set",
+      avatarFilePath: join(tempDir, "static/media/avatar.png"),
+      faviconFilePath: join(tempDir, "themes/jant/static/favicon.ico"),
+      appleTouchFilePath: join(
+        tempDir,
+        "themes/jant/static/apple-touch-icon.png",
+      ),
+    });
+  });
+
+  it("buildSiteAvatarImport prefers an icon in the root static directory", async () => {
+    // Hugo serves the site's own static/ over the theme's, so a file placed
+    // there after export is the one the site shows.
+    await writeFileTree(tempDir, {
+      "data/jant.toml": [
+        'format = "jant-site"',
+        'site_avatar_mode = "custom"',
+        'favicon_mode = "custom"',
+        'site_avatar_url = "/media/avatar.png"',
+        "",
+      ].join("\n"),
+      "static/media/avatar.png": new Uint8Array([1]),
+      "static/favicon.ico": new Uint8Array([4]),
+      "themes/jant/static/favicon.ico": new Uint8Array([2]),
+    });
+
+    const avatarImport = await buildSiteAvatarImport(
+      await loadSiteConfig(tempDir),
+      tempDir,
+    );
+
+    expect(avatarImport).toMatchObject({
+      faviconFilePath: join(tempDir, "static/favicon.ico"),
+    });
+  });
+
   it("mediaSpecFromJantMedia resolves site-relative src under static/", async () => {
     await mkdir(join(tempDir, "static", "media"), { recursive: true });
     await writeFile(join(tempDir, "static/media/med-1.webp"), "PHOTO");
@@ -235,6 +437,383 @@ describe("Hugo import CLI helpers", () => {
     expect(result.urlMap.get("/media/inline.png")).toBe(
       "https://target.example/media/med_new.png",
     );
+  });
+
+  it("rebuilds navigation with its placement, labels, and targets", () => {
+    const siteConfig = {
+      extra: {
+        jant: {
+          nav: [
+            {
+              type: "system",
+              label: "All",
+              url: "/archive/",
+              system_key: "archive",
+              placement: "header",
+              custom_label: "All",
+            },
+            {
+              type: "collection",
+              label: "Now",
+              url: "/now",
+              system_key: "",
+              placement: "header",
+              collection_slug: "now",
+            },
+            // An export from before `collection_slug`: the URL names it.
+            {
+              type: "collection",
+              label: "Books",
+              url: "/books/",
+              system_key: "",
+              placement: "more",
+            },
+            {
+              type: "page",
+              label: "About",
+              url: "/about",
+              system_key: "",
+              placement: "more",
+              post_slug: "about",
+            },
+            {
+              type: "link",
+              label: "More Quotes",
+              url: "https://jant.me/quotes",
+              system_key: "",
+              placement: "more",
+            },
+            {
+              type: "collection",
+              label: "Gone",
+              url: "/gone",
+              system_key: "",
+              placement: "header",
+              collection_slug: "gone",
+            },
+            {
+              type: "smart_collection",
+              label: "Thoughts",
+              url: "/thoughts",
+              system_key: "",
+              placement: "header",
+              smart_collection_slug: "thoughts",
+            },
+          ],
+        },
+      },
+    };
+    const targets = {
+      collectionSlugToId: new Map([
+        ["now", "col-now"],
+        ["books", "col-books"],
+      ]),
+      smartCollectionSlugToId: new Map([["thoughts", "smc-thoughts"]]),
+      postSlugToId: new Map([["about", "pst-about"]]),
+    };
+
+    const requests = normalizeImportedNavItems(siteConfig).items.map((item) =>
+      buildNavItemCreateRequest(item, targets),
+    );
+
+    expect(requests.map((request) => request.payload)).toEqual([
+      { type: "system", systemKey: "archive", placement: "header" },
+      { type: "collection", collectionId: "col-now", placement: "header" },
+      { type: "collection", collectionId: "col-books", placement: "more" },
+      { type: "page", postId: "pst-about", placement: "more" },
+      {
+        type: "link",
+        label: "More Quotes",
+        url: "https://jant.me/quotes",
+        placement: "more",
+      },
+      { type: "link", label: "Gone", url: "/gone", placement: "header" },
+      {
+        type: "smart_collection",
+        smartCollectionId: "smc-thoughts",
+        placement: "header",
+      },
+    ]);
+    expect(requests[0]?.customLabel).toBe("All");
+    expect(requests[5]?.warning).toContain('"Gone"');
+  });
+
+  it("reads a description under its current name and the one before 1.0", () => {
+    const request = (frontMatter: Record<string, unknown>) =>
+      buildSmartCollectionCreateRequest(
+        {
+          slug: "notes",
+          frontMatter: {
+            title: "Notes",
+            type: "smart_collection",
+            selection: { format: "note" },
+            ...frontMatter,
+          },
+        },
+        new Map(),
+      ).payload?.description;
+
+    expect(request({ description: "Short notes." })).toBe("Short notes.");
+    expect(request({ summary_text: "Short notes." })).toBe("Short notes.");
+  });
+
+  it("recreates a smart collection from its exported conditions", () => {
+    const bundle = {
+      slug: "pictures",
+      frontMatter: {
+        title: "Pictures",
+        type: "smart_collection",
+        summary_text: "Photos from the ideas collection.",
+        sort_order: "rating_desc",
+        display_layout: "grid",
+        selection: {
+          collection: "ideas",
+          media: ["image", "video"],
+          year: 2025,
+          title: false,
+        },
+      },
+    };
+
+    expect(
+      buildSmartCollectionCreateRequest(
+        bundle,
+        new Map([["ideas", "col-ideas"]]),
+      ),
+    ).toEqual({
+      payload: {
+        slug: "pictures",
+        title: "Pictures",
+        description: "Photos from the ideas collection.",
+        selection: {
+          collection: ["col-ideas"],
+          media: ["image", "video"],
+          year: 2025,
+          title: false,
+        },
+        // Both names, so a site before and after the rename reads it.
+        sortOrder: "rating_desc",
+        sort: "rating_desc",
+        layout: "grid",
+      },
+      warning: null,
+    });
+
+    // Without the collection it names, the smart collection would gather
+    // every post the other conditions match; it is skipped instead.
+    const skipped = buildSmartCollectionCreateRequest(bundle, new Map());
+    expect(skipped.payload).toBeNull();
+    expect(skipped.warning).toContain('"ideas"');
+
+    expect(
+      buildSmartCollectionCreateRequest(
+        { slug: "everything", frontMatter: { type: "smart_collection" } },
+        new Map(),
+      ).payload,
+    ).toEqual({ slug: "everything", title: "everything", selection: {} });
+  });
+
+  it("finds smart collection pages in the content tree", async () => {
+    await writeFileTree(tempDir, {
+      "content/thoughts/_index.md": [
+        "---",
+        'title: "Thoughts"',
+        'slug: "thoughts"',
+        'type: "smart_collection"',
+        "selection:",
+        '  format: "note"',
+        "---",
+        "",
+      ].join("\n"),
+      "content/ideas/_index.md": [
+        "---",
+        'title: "Ideas"',
+        'type: "collection"',
+        "---",
+        "",
+      ].join("\n"),
+    });
+
+    const { rootBundles, collectionBundles, smartCollectionBundles } =
+      await walkHugoContent(tempDir);
+
+    expect(rootBundles).toHaveLength(0);
+    expect(collectionBundles.map((bundle) => bundle.slug)).toEqual(["ideas"]);
+    expect(smartCollectionBundles).toMatchObject([
+      { slug: "thoughts", frontMatter: { selection: { format: "note" } } },
+    ]);
+  });
+
+  // Creating a collection or smart collection gives it a directory row;
+  // dividers and links are rebuilt. The sync keeps the first kind and puts
+  // every row in the exported order.
+  it("restores the directory order with smart collections in it", async () => {
+    let rows = [
+      { id: "dir-col", type: "collection", collectionId: "col-ideas" },
+      {
+        id: "dir-smc",
+        type: "smart_collection",
+        smartCollectionId: "smc-thoughts",
+      },
+      { id: "dir-old-divider", type: "divider" },
+    ];
+    let nextId = 0;
+    const target = {
+      async listCollectionDirectoryItems() {
+        return rows;
+      },
+      async deleteCollectionDirectoryItem(id: string) {
+        rows = rows.filter((row) => row.id !== id);
+      },
+      async createCollectionDirectoryItem(data: { type: string }) {
+        const row = { id: `dir-new-${nextId++}`, type: data.type };
+        rows = [...rows, row];
+        return row;
+      },
+      async moveCollectionDirectoryItem(
+        id: string,
+        afterId: string | null,
+        beforeId: string | null,
+      ) {
+        const moving = rows.find((row) => row.id === id)!;
+        const rest = rows.filter((row) => row.id !== id);
+        const index =
+          afterId !== null
+            ? rest.findIndex((row) => row.id === afterId) + 1
+            : beforeId !== null
+              ? rest.findIndex((row) => row.id === beforeId)
+              : 0;
+        rest.splice(index, 0, moving);
+        rows = rest;
+      },
+    };
+    const directory = normalizeImportedCollectionDirectory({
+      extra: {
+        jant: {
+          collections_directory: [
+            { type: "smart_collection", slug: "thoughts" },
+            { type: "divider", label: "Topics" },
+            { type: "collection", slug: "ideas" },
+          ],
+        },
+      },
+    });
+
+    const result = await syncImportedCollectionDirectory(
+      target,
+      directory,
+      new Map([["ideas", "col-ideas"]]),
+      new Map([["thoughts", "smc-thoughts"]]),
+    );
+
+    expect(rows.map((row) => row.id)).toEqual([
+      "dir-smc",
+      "dir-new-0",
+      "dir-col",
+    ]);
+    expect(result).toMatchObject({ created: 1, deleted: 1 });
+  });
+
+  // The API refuses a reply to anything but the Thread's end, which the site
+  // reads as the last post in Thread order: the root first whatever its
+  // creation time, then replies by creation time, then ID. A reply can be
+  // older than its root (moved into the Thread, or dated by publish time in
+  // an older export) and still end the Thread.
+  it("follows the Thread's end the way the site reads it", () => {
+    const root = { id: "pst_05", createdAt: 1_000, replyToId: null };
+    const older = { id: "pst_06", createdAt: 500, replyToId: root.id };
+    const oldest = { id: "pst_07", createdAt: 400, replyToId: older.id };
+    const tiedLowerId = { id: "pst_04", createdAt: 500, replyToId: older.id };
+    const tiedHigherId = { id: "pst_08", createdAt: 500, replyToId: older.id };
+    const newer = { id: "pst_09", createdAt: 2_000, replyToId: older.id };
+
+    expect(getNextThreadTail(root, older)).toBe(older);
+    expect(getNextThreadTail(older, oldest)).toBe(older);
+    expect(getNextThreadTail(older, tiedLowerId)).toBe(older);
+    expect(getNextThreadTail(older, tiedHigherId)).toBe(tiedHigherId);
+    expect(getNextThreadTail(older, newer)).toBe(newer);
+    expect(getNextThreadTail(root, null)).toBe(root);
+  });
+
+  it("reads the redirects and archive URLs an export lists", () => {
+    expect(
+      normalizeImportedCustomUrls({
+        extra: {
+          jant: {
+            custom_urls: [
+              { path: "atom.xml", kind: "redirect", to: "/feed", status: 301 },
+              {
+                path: "/inspires",
+                kind: "redirect",
+                to: "/inspired",
+                status: 302,
+              },
+              { path: "links", kind: "archive", archive_query: "format=link" },
+              { path: "", kind: "redirect", to: "/x" },
+            ],
+          },
+        },
+      }),
+    ).toEqual([
+      { path: "atom.xml", kind: "redirect", to: "/feed", status: 301 },
+      { path: "inspires", kind: "redirect", to: "/inspired", status: 302 },
+      { path: "links", kind: "archive", archiveQuery: "format=link" },
+    ]);
+  });
+
+  it("uploadMediaList keeps a body image as a link when its upload fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const target = {
+      uploadMedia: async () => {
+        throw new Error("Couldn't read https://gone.example/a.png");
+      },
+    };
+
+    const result = await uploadMediaList(
+      [{ src: "https://gone.example/a.png" }],
+      target,
+      { base_url: "https://origin.example/" },
+      tempDir,
+    );
+
+    expect(result.uploaded).toBe(0);
+    expect(result.urlMap.size).toBe(0);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("kept https://gone.example/a.png as a link"),
+    );
+    warn.mockRestore();
+  });
+
+  it("uploadBundleResources stops when a post's own file can't be uploaded", async () => {
+    const target = {
+      uploadMedia: async () => {
+        throw new Error("The site refused /media/a.webp: HTTP 413");
+      },
+    };
+
+    await expect(
+      uploadBundleResources(
+        [{ src: "/media/a.webp", srcFilePath: join(tempDir, "a.webp") }],
+        target,
+      ),
+    ).rejects.toThrow("Couldn't upload /media/a.webp: The site refused");
+  });
+
+  it("buildImportedAttachments stops when an attachment can't be uploaded", async () => {
+    const target = {
+      uploadMedia: async () => {
+        throw new Error("The site refused /media/b.jpg: HTTP 500");
+      },
+    };
+
+    await expect(
+      buildImportedAttachments(
+        [{ src: "https://origin.example/media/b.jpg" }],
+        target,
+        { base_url: "https://origin.example/" },
+        tempDir,
+      ),
+    ).rejects.toThrow("Couldn't upload https://origin.example/media/b.jpg");
   });
 
   it("isAbsoluteImportUrl distinguishes absolute URLs from relative paths for --skip-remote-media", () => {

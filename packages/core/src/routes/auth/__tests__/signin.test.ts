@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { createI18n } from "../../../i18n/index.js";
 import { attachSession } from "../../../middleware/session.js";
 import { requireAuth } from "../../../middleware/auth.js";
-import { signinRoutes } from "../signin.js";
+import { limitApiSignin, signinRoutes } from "../signin.js";
+import { createApp } from "../../../app.js";
+import { createTestDatabase } from "../../../__tests__/helpers/db.js";
+import { createMemoryRateLimiter } from "../../../lib/rate-limit-memory.js";
 import type { Bindings } from "../../../types.js";
 import type { AppVariables } from "../../../types/app-context.js";
 
@@ -131,5 +134,167 @@ describe("stale session redirect loop", () => {
     const signin = await app.request(signinLocation!, { redirect: "manual" });
     expect(signin.status).toBe(200);
     expect(await signin.text()).toContain(SIGNIN_FORM_MARKER);
+  });
+});
+
+describe("POST /signin rate limit", () => {
+  // better-auth's own sign-in takes the same password, so its limiter has to
+  // run before the better-auth handler, which answers without yielding.
+  it("limits better-auth's sign-in ahead of the better-auth handler", () => {
+    const routes = createApp().routes;
+    const limiter = routes.findIndex(
+      (route) =>
+        route.method === "POST" && route.path === "/api/auth/sign-in/email",
+    );
+    // The last match: `noStore()` is mounted on the same path first.
+    const handler = routes.findLastIndex(
+      (route) => route.method === "ALL" && route.path === "/api/auth/*",
+    );
+    expect(limiter).toBeGreaterThanOrEqual(0);
+    expect(limiter).toBeLessThan(handler);
+  });
+
+  function createGuessingApp({ demoMode = false } = {}) {
+    const signInEmail = vi.fn(async () => {
+      throw new Error("Invalid email or password");
+    });
+    const rateLimiter = createMemoryRateLimiter();
+    const app = new Hono<Env>();
+    app.use("*", async (c, next) => {
+      c.env = {} as Bindings;
+      c.set("auth", {
+        api: { signInEmail },
+      } as unknown as AppVariables["auth"]);
+      c.set("rateLimiter", rateLimiter);
+      c.set("appConfig", {
+        siteName: "Jant",
+        sitePathPrefix: "",
+        rateLimit: { enabled: true, searchPerMinute: 30 },
+        demoMode,
+      } as AppVariables["appConfig"]);
+      c.set("lang", "en");
+      c.set("i18n", createI18n("en"));
+      await next();
+    });
+    app.route("/", signinRoutes);
+    // Mounted as `app.tsx` mounts it, with a stand-in for better-auth that
+    // reads the body it was sent.
+    const betterAuthSignIn = vi.fn(async (request: Request) =>
+      Response.json({
+        email: ((await request.json()) as { email: string }).email,
+      }),
+    );
+    app.post("/api/auth/sign-in/email", limitApiSignin);
+    app.all("/api/auth/*", (c) => betterAuthSignIn(c.req.raw));
+    return { app, signInEmail, betterAuthSignIn };
+  }
+
+  function attempt(app: Hono<Env>, email: string, ip: string) {
+    return app.request("/signin", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "CF-Connecting-IP": ip,
+      },
+      body: JSON.stringify({ email, password: "guess-password" }),
+    });
+  }
+
+  it("stops password guesses at one account from many clients", async () => {
+    const { app, signInEmail } = createGuessingApp();
+
+    for (let i = 0; i < 10; i++) {
+      await attempt(app, "owner@example.com", `203.0.113.${i}`);
+    }
+    const res = await attempt(app, "Owner@Example.com", "203.0.113.99");
+
+    await expect(res.text()).resolves.toContain("Too many sign-in attempts");
+    expect(signInEmail).toHaveBeenCalledTimes(10);
+  });
+
+  it("stops one client guessing across many accounts", async () => {
+    const { app, signInEmail } = createGuessingApp();
+
+    for (let i = 0; i < 20; i++) {
+      await attempt(app, `user${i}@example.com`, "203.0.113.1");
+    }
+    const res = await attempt(app, "another@example.com", "203.0.113.1");
+
+    await expect(res.text()).resolves.toContain("Too many sign-in attempts");
+    expect(signInEmail).toHaveBeenCalledTimes(20);
+  });
+
+  it("counts better-auth's sign-in against the same limits", async () => {
+    const { app, betterAuthSignIn } = createGuessingApp();
+    const apiAttempt = (ip: string) =>
+      app.request("/api/auth/sign-in/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "CF-Connecting-IP": ip },
+        body: JSON.stringify({ email: "owner@example.com", password: "guess" }),
+      });
+
+    const passed = await apiAttempt("203.0.113.1");
+    await expect(passed.json()).resolves.toEqual({
+      email: "owner@example.com",
+    });
+    for (let i = 0; i < 9; i++) {
+      await attempt(app, "owner@example.com", `203.0.113.${i + 10}`);
+    }
+    const limited = await apiAttempt("203.0.113.99");
+
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("X-Retry-After")).toMatch(/^[1-9]\d*$/);
+    expect(betterAuthSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  // Every demo visitor signs in to the one published account.
+  it("lets many clients sign in to the demo account", async () => {
+    const { app, signInEmail } = createGuessingApp({ demoMode: true });
+
+    for (let i = 0; i < 30; i++) {
+      await attempt(app, "demo@jant.me", `203.0.113.${i}`);
+    }
+
+    expect(signInEmail).toHaveBeenCalledTimes(30);
+  });
+});
+
+describe("POST /api/auth/sign-in/email in the full app", () => {
+  it("answers 429 once one client passes the sign-in limit", async () => {
+    const { sqlite } = createTestDatabase();
+    const app = createApp();
+    const env = {
+      SITE_ORIGIN: "https://blog.example",
+      AUTH_SECRET: "x".repeat(40),
+      NODE_SQLITE: sqlite,
+    } as unknown as Bindings;
+    const executionCtx = {
+      waitUntil() {},
+      passThroughOnException() {},
+      props: {},
+    } as unknown as Parameters<typeof app.fetch>[2];
+    const signIn = (n: number) =>
+      app.fetch(
+        new Request("https://blog.example/api/auth/sign-in/email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: `guess${n}@example.com`,
+            password: "guess-password",
+          }),
+        }),
+        env,
+        executionCtx,
+      );
+
+    for (let n = 0; n < 20; n++) {
+      expect((await signIn(n)).status, `attempt ${n + 1}`).not.toBe(429);
+    }
+    const limited = await signIn(20);
+
+    expect(limited.status).toBe(429);
+    await expect(limited.json()).resolves.toMatchObject({
+      message: expect.stringContaining("Too many sign-in attempts"),
+    });
   });
 });

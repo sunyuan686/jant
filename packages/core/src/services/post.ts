@@ -13,6 +13,7 @@ import {
   type SQL,
   type SQLWrapper,
   isNull,
+  ne,
   desc,
   inArray,
   notInArray,
@@ -37,9 +38,19 @@ import {
   buildRootActivityExpr,
   rootActivityColumns,
 } from "../db/thread-activity.js";
-import { buildReaderVisibilityConditions } from "../db/post-visibility.js";
+import {
+  buildReaderVisibilityConditions,
+  type ReaderVisibilityOptions,
+} from "../db/post-visibility.js";
 import { createEntityId } from "../lib/ids.js";
-import { now } from "../lib/time.js";
+import {
+  decodePostListCursor,
+  encodePostListCursor,
+  THREAD_POSTS_SORT_MODE,
+  type PostListCursorKeyKind,
+  type PostListCursorValue,
+} from "../lib/post-list-cursor.js";
+import { calendarPeriodsIn, now, type CalendarPeriod } from "../lib/time.js";
 import { trimTiptapBody } from "../lib/tiptap-render.js";
 import {
   POST_BODY_HTML_VERSION,
@@ -53,7 +64,6 @@ import {
   THREAD_TRAILING_REPLIES,
 } from "../lib/thread-fold.js";
 import { markdownToTiptapJson } from "../lib/markdown-to-tiptap.js";
-import { tiptapJsonToMarkdown } from "../lib/tiptap-to-markdown.js";
 import { generatePostSlug } from "../lib/slug.js";
 import { getSlugValidationIssue } from "../lib/slug-format.js";
 import { isReservedPath } from "../lib/constants.js";
@@ -216,8 +226,25 @@ export interface PostFilters {
   /** Ignore global pinned ordering when results must remain chronological. */
   ignorePinnedSort?: boolean;
   limit?: number;
-  cursor?: string;
   offset?: number; // offset for page-based pagination
+}
+
+/** Where `PostService.listPage` starts, and how much it returns. */
+export interface PostListPageOptions {
+  /** `nextCursor` from the previous page; omit for the first. */
+  cursor?: string;
+  /** Posts per page. */
+  limit: number;
+}
+
+/**
+ * One page of Posts, and the cursor that continues it. See
+ * `PostService.listPage` and `PostService.listCollectionThreadRootPage`.
+ */
+export interface PostListPage {
+  posts: Post[];
+  /** Opaque. `null` when no further page exists. */
+  nextCursor: string | null;
 }
 
 /** What one filter measured over a set of Posts. See `aggregateMany`. */
@@ -247,6 +274,13 @@ export interface ThreadRootPageOptions {
   rootFormat?: Format;
   /** Restrict to Threads with at least one rated published post. */
   hasRating?: true;
+  /**
+   * Restrict to Threads whose root matches these filters, the way a list of
+   * roots would (`excludeReplies` is implied). Lets a Thread-grouped order,
+   * such as a collection's, take the same filter dimensions `list()` does.
+   * Sorting and paging fields are ignored.
+   */
+  rootFilters?: PostFilters;
   limit?: number;
   offset?: number;
 }
@@ -258,14 +292,30 @@ interface CollectionFeedEntryOptions extends ThreadRootPageOptions {
 
 interface CollectionThreadRootPageOptions extends ThreadRootPageOptions {
   sortOrder?: CollectionSortOrder;
-  /** Root Post ID returned by the previous page. */
-  cursor?: string;
 }
 
 interface CursorSortKey {
   direction: "asc" | "desc";
   expr: SQLWrapper;
   value: number | string;
+}
+
+/**
+ * How `list()` orders Posts: `sortOrder` on the `sortBy` axis, pinned Posts
+ * first unless `pinned` is off.
+ */
+interface ListSort {
+  order: SortOrder;
+  axis: NonNullable<PostFilters["sortBy"]>;
+  pinned: boolean;
+}
+
+/** One term of a paged ORDER BY: `list()`'s, a collection's, or a Thread's. */
+interface ListSortKey {
+  /** Selectable as a column, so a page's cursor is read from SQL. */
+  expr: SQL;
+  direction: "asc" | "desc";
+  kind: PostListCursorKeyKind;
 }
 
 export interface CollectionFeedEntry {
@@ -275,8 +325,21 @@ export interface CollectionFeedEntry {
 
 export interface FeaturedThreadTimelinePost {
   post: Post;
-  /** Zero-based position among the Thread's published Posts. */
+  /** Zero-based position among the Thread's published Posts; the root is 0. */
   position: number;
+}
+
+/**
+ * Where one gap in a curated Featured Thread points: the first Post of the run
+ * it hides, as `lib/thread-fold.ts` has every gap do. Only its address is
+ * loaded, since nothing renders it.
+ */
+export interface FeaturedThreadGapTarget {
+  id: string;
+  /** Canonical slug from `path_registry`. */
+  slug: string;
+  /** The shown Post the hidden run starts right after. */
+  afterPostId: string;
 }
 
 /**
@@ -289,15 +352,8 @@ export interface FeaturedThreadTimelinePost {
 export interface FeaturedThreadTimelineData {
   posts: FeaturedThreadTimelinePost[];
   featuredPostIds: string[];
-}
-
-export interface PostBodyContent {
-  id: string;
-  type: "post";
-  format: Format;
-  contentFormat: "markdown";
-  content: string;
-  chars: number;
+  /** The first hidden Post of each run between two shown ones. */
+  gapTargets: FeaturedThreadGapTarget[];
 }
 
 /** Minimal projection used by the sitemap renderer. */
@@ -344,9 +400,37 @@ export type TranslationCandidateResolution =
   /** Its group already holds this Thread's language. */
   | { status: "group_language_taken"; language: string };
 
+/** A Post together with the custom URL that has taken over as its address. */
+export interface PostWithCanonicalAlias {
+  post: Post;
+  /**
+   * The newest registered `alias`, which is the address a slug URL redirects
+   * to. Null when the Post still answers at its slug.
+   */
+  canonicalAlias: string | null;
+}
+
 export interface PostService {
   getById(id: string): Promise<Post | null>;
-  getBodyContent(id: string): Promise<PostBodyContent | null>;
+  /**
+   * The Post a resolved path points at, plus its canonical address, in one
+   * read.
+   *
+   * Serving a Post URL needs three things the registry and the Post row hold
+   * between them: the row, the Post's slug, and whether a custom URL has taken
+   * over as its address. Asking for those separately put three round trips at
+   * the head of every Post page, so they come back together.
+   *
+   * @param postId - TypeID of the Post
+   * @returns The hydrated Post and its canonical alias, or null when no such
+   *   Post exists or it has no slug
+   * @example
+   * ```ts
+   * const loaded = await posts.getWithCanonicalAlias(resolved.postId);
+   * if (loaded?.canonicalAlias) redirect(loaded.canonicalAlias);
+   * ```
+   */
+  getWithCanonicalAlias(postId: string): Promise<PostWithCanonicalAlias | null>;
   getBySlug(slug: string): Promise<Post | null>;
   suggestSlug(input: {
     title?: string;
@@ -354,7 +438,40 @@ export interface PostService {
     excludePostId?: string;
   }): Promise<string>;
   checkSlugAvailability(slug: string, excludePostId?: string): Promise<boolean>;
+  /**
+   * Posts matching `filters`, in the order `sortOrder`, `sortBy`, `featured`,
+   * and `ignorePinnedSort` select. Pages by `limit` and `offset`; a caller
+   * handing pages to a client that walks them uses {@link listPage} instead.
+   */
   list(filters?: PostFilters): Promise<Post[]>;
+  /**
+   * One page of {@link list}, and an opaque cursor for the next.
+   *
+   * The cursor carries the sort mode and the sort-key values of the page's
+   * last row, so the next page resumes from that position without looking the
+   * row up again. A Post that exists for the whole walk and keeps its place in
+   * the order is returned exactly once, whatever else is created, deleted, or
+   * edited in between. A Post whose sort key changes mid-walk can be skipped
+   * or repeated.
+   *
+   * @param filters - What to list and in which order, as for {@link list}
+   * @param page - The previous page's `nextCursor`, and the page size
+   * @returns The page's Posts and the cursor after them, `null` on the last page
+   * @throws {ValidationError} When the cursor can't be read or was taken in
+   *   another sort mode
+   * @example
+   * ```ts
+   * const first = await posts.listPage({ status: "published" }, { limit: 20 });
+   * const second = await posts.listPage(
+   *   { status: "published" },
+   *   { cursor: first.nextCursor ?? undefined, limit: 20 },
+   * );
+   * ```
+   */
+  listPage(
+    filters: Omit<PostFilters, "limit" | "offset">,
+    page: PostListPageOptions,
+  ): Promise<PostListPage>;
   /**
    * List minimal fields needed to render sitemap entries, paginated by `id`
    * (ascending). Excludes replies, private posts, deleted posts, and drafts.
@@ -384,9 +501,9 @@ export interface PostService {
    * SQLite/D1 scan only the index for this, not the row data.
    */
   getSitemapIdAt(offset: number): Promise<string | null>;
-  /** Count posts matching filters (ignores cursor, offset, limit) */
+  /** Count posts matching filters (ignores offset, limit) */
   count(filters?: PostFilters): Promise<number>;
-  /** Count posts matching filters up to a fixed limit (ignores cursor, offset, limit) */
+  /** Count posts matching filters up to a fixed limit (ignores offset, limit) */
   countUpTo(filters: PostFilters | undefined, limit: number): Promise<number>;
   /**
    * Measure several filters at once, in a single round trip.
@@ -420,9 +537,13 @@ export interface PostService {
     filters: readonly PostFilters[],
     base: PostFilters,
   ): Promise<PostFilterAggregate[]>;
-  /** Count posts grouped by year-month (YYYY-MM) on the `sortBy` time axis */
+  /**
+   * Count posts grouped by year-month (YYYY-MM) on the `sortBy` time axis, as
+   * the site's wall clock in `timeZone` reads it.
+   */
   countByYearMonth(
-    filters?: PostFilters,
+    filters: PostFilters,
+    timeZone: string,
   ): Promise<{ yearMonth: string; count: number }[]>;
   create(data: CreatePost, summaryConfig?: SummaryConfig): Promise<Post>;
   createWithAttachments(
@@ -472,11 +593,69 @@ export interface PostService {
    */
   delete(id: string, deps?: PostDeleteDeps): Promise<boolean>;
   /**
-   * Delete a thread draft and release its slug paths so they can be reused.
-   * Used when replacing a saved thread draft with a new version.
+   * Replace a saved Thread draft with a new version of it.
+   *
+   * The old Thread is deleted first, which releases its paths for the new
+   * one. Its attachments are detached before that, since the new version
+   * sends back the ones it keeps by ID; once the new Thread is created, the
+   * ones it left out are deleted.
+   *
+   * @param id - The old Thread's root, or the one post to replace
+   * @param items - The new version, as `createThreadWithAttachments` takes it
+   * @param deps - Media/storage dependencies
+   * @param summaryConfig - Optional summary extraction config
+   * @returns Ordered list of created posts; posts[0] is the root
    */
-  deleteThreadDraft(id: string, deps?: PostDeleteDeps): Promise<boolean>;
+  replaceThreadDraft(
+    id: string,
+    items: Array<{
+      data: CreatePost;
+      attachments: PostAttachmentInput[] | undefined;
+    }>,
+    deps: PostAttachmentDeps,
+    summaryConfig?: SummaryConfig,
+  ): Promise<Post[]>;
+  /**
+   * Every Post in a Thread, drafts included, in Thread order: the root first,
+   * then replies by creation time, then ID.
+   */
   getThread(rootId: string): Promise<Post[]>;
+  /**
+   * One page of a Thread's Posts in Thread order, and an opaque cursor for the
+   * next.
+   *
+   * Pages like {@link listPage}. A new reply joins the end of the Thread, so a
+   * walk that is still going when one is published reaches it rather than
+   * skipping it. A fold's gap carries a cursor from
+   * `encodeThreadPostsCursorAfter`, which opens the run the fold hides.
+   *
+   * @param threadId - The Thread root's ID
+   * @param options - Which Posts to include; `status` defaults to `published`
+   * @param page - The previous page's `nextCursor`, and the page size
+   * @returns The page's Posts and the cursor after them, `null` on the last page
+   * @throws {ValidationError} When the cursor can't be read or was taken in
+   *   another order
+   * @example
+   * ```ts
+   * const first = await posts.listThreadPostsPage(root.id, {}, { limit: 100 });
+   * ```
+   */
+  listThreadPostsPage(
+    threadId: string,
+    options: { status?: Status },
+    page: PostListPageOptions,
+  ): Promise<PostListPage>;
+  /**
+   * How many published Posts each Thread holds, its root included.
+   *
+   * @param threadIds - Thread root IDs; duplicates are fine
+   * @returns Map of Thread root ID to its published Post count; a Thread with
+   *   nothing published is absent
+   * @example
+   * const counts = await posts.countThreadPosts([root.id]);
+   * counts.get(root.id); // 12
+   */
+  countThreadPosts(threadIds: string[]): Promise<Map<string, number>>;
   /**
    * 1-based position of a Post in the reply chain running from its Thread root
    * down to it: a root is 1, a reply to it is 2, a reply to that is 3.
@@ -537,13 +716,27 @@ export interface PostService {
   /**
    * List the Thread roots that are translations of the given Post, excluding
    * the Post itself. Empty when it belongs to no translation group.
+   *
+   * @param postId - The Post whose translations to list
+   * @param reader - What the audience may see. Omit it for the author's view,
+   *   which includes drafts and private translations.
    */
-  listTranslations(postId: string): Promise<Post[]>;
+  listTranslations(
+    postId: string,
+    reader?: ReaderVisibilityOptions,
+  ): Promise<Post[]>;
   /**
    * List translations for many Thread roots in one round trip, keyed by the
-   * root ID that was asked about. Roots with no group are omitted.
+   * root ID that was asked about. Roots with no group, or none the audience
+   * may see, are omitted.
+   *
+   * @param postIds - Thread roots to look up
+   * @param reader - What the audience may see. Omit it for the author's view.
    */
-  getTranslationsMap(postIds: string[]): Promise<Map<string, Post[]>>;
+  getTranslationsMap(
+    postIds: string[],
+    reader?: ReaderVisibilityOptions,
+  ): Promise<Map<string, Post[]>>;
   /**
    * Find published Thread roots this Post could be linked to as a translation.
    *
@@ -648,11 +841,39 @@ export interface PostService {
     collectionIds: string[],
     options?: CollectionThreadRootPageOptions,
   ): Promise<string[]>;
-  /** List and hydrate collection Thread roots using Thread-level ordering. */
-  listCollectionThreadRootsForCollections(
+  /**
+   * One page of a collection's Thread roots, in the order
+   * {@link listCollectionThreadRootIdsForCollections} returns them, and an
+   * opaque cursor for the next.
+   *
+   * Pages the way {@link listPage} does: the cursor records the sort order and
+   * the sort-key values of the page's last Thread, so a Thread that is
+   * deleted, unpublished, or taken out of the collection between requests
+   * doesn't end the walk. A Thread that stays listed and keeps its place is
+   * returned exactly once; one whose activity, rating, or pin changes mid-walk
+   * can be skipped or repeated.
+   *
+   * @param collectionIds - The collection, or the union of collections, to list
+   * @param options - Which Threads to list and in which order
+   * @param page - The previous page's `nextCursor`, and the page size
+   * @returns The page's Thread roots and the cursor after them, `null` on the
+   *   last page
+   * @throws {ValidationError} When the cursor can't be read or was taken in
+   *   another order
+   * @example
+   * ```ts
+   * const first = await posts.listCollectionThreadRootPage(
+   *   [collection.id],
+   *   { status: "published", excludePrivate: true, sortOrder: "newest" },
+   *   { limit: 20 },
+   * );
+   * ```
+   */
+  listCollectionThreadRootPage(
     collectionIds: string[],
-    options?: CollectionThreadRootPageOptions,
-  ): Promise<Post[]>;
+    options: Omit<CollectionThreadRootPageOptions, "limit" | "offset">,
+    page: PostListPageOptions,
+  ): Promise<PostListPage>;
   /** List collection feed entries ordered by latest added-at timestamp */
   listCollectionFeedEntries(
     collectionId: string,
@@ -663,15 +884,22 @@ export interface PostService {
     collectionIds: string[],
     options?: CollectionFeedEntryOptions,
   ): Promise<CollectionFeedEntry[]>;
-  /** Fetch published Posts for each requested Thread root. */
+  /**
+   * Fetch published Posts for each requested Thread root, in Thread order: the
+   * root first, then replies by creation time, then ID.
+   */
   getPublishedThreads(
     rootIds: string[],
     options?: Pick<PostFilters, "publishedBefore">,
   ): Promise<Map<string, Post[]>>;
-  /** Get distinct years with posts, bucketed on the `sortBy` time axis */
-  getDistinctYears(filters?: PostFilters): Promise<number[]>;
   /**
-   * For each Thread ID, resolve the Post that currently ends the chain.
+   * Get distinct years with posts, bucketed on the `sortBy` time axis as the
+   * site's wall clock in `timeZone` reads it.
+   */
+  getDistinctYears(filters: PostFilters, timeZone: string): Promise<number[]>;
+  /**
+   * For each Thread ID, resolve the Post that currently ends the chain: the
+   * last in Thread order, so the root only while it has no replies.
    *
    * Two callers need two different answers. Readers ask what the audience can
    * see, so drafts must not count — the Reply affordance belongs on the last
@@ -756,6 +984,9 @@ export async function rebuildPostBodyHtmlWithRuntimeSettings(
 }
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
+
+const INVALID_POST_BODY_MESSAGE =
+  "The body isn't a TipTap JSON document. Send a doc node as a JSON string, or send Markdown as bodyMarkdown.";
 
 function isValidSlug(value: string): boolean {
   return SLUG_RE.test(value);
@@ -952,16 +1183,105 @@ export function createPostService(
     return posts.publishedAt;
   }
 
-  function buildYearMonthExpr(column: SQLWrapper): SQL<string> {
-    return databaseDialect === "pg"
-      ? sql<string>`to_char(timezone('UTC', to_timestamp(${column})), 'YYYY-MM')`
-      : sql<string>`strftime('%Y-%m', ${column}, 'unixepoch')`;
+  /**
+   * Thread order: the root first, then replies by creation time, then ID.
+   *
+   * The root leads whatever its own `createdAt` says. A reply can be older
+   * than its root — a post moved into a Thread keeps its creation time, and an
+   * export without `created` dates every post by publication — and ordering
+   * on time alone would open such a Thread on a reply. Every surface that
+   * reads the first post as the root would then lose it: the Thread page's
+   * canonical URL, Featured, Collections, the feeds, and the reply guard's
+   * idea of where the Thread ends. Every query that orders a Thread's posts
+   * goes through here so they agree.
+   *
+   * @param direction - `desc` walks from the Thread's end back to its root
+   * @returns ORDER BY terms, placed after any partitioning column
+   * @example
+   * db.select().from(posts).orderBy(posts.threadId, ...threadOrder());
+   * sql`ROW_NUMBER() OVER (ORDER BY ${sql.join(threadOrder(), sql`, `)})`;
+   */
+  function threadOrder(direction: "asc" | "desc" = "asc"): SQL[] {
+    const terms = threadSortKeys().map((key) => key.expr);
+    return direction === "asc" ? terms : terms.map((term) => desc(term));
   }
 
-  function buildYearExpr(column: SQLWrapper): SQL<string> {
-    return databaseDialect === "pg"
-      ? sql<string>`to_char(timezone('UTC', to_timestamp(${column})), 'YYYY')`
-      : sql<string>`strftime('%Y', ${column}, 'unixepoch')`;
+  /**
+   * {@link threadOrder} as paged sort keys, for walking one Thread with a
+   * cursor. The one definition both read, so a page of a Thread and the
+   * Thread page itself cannot order its posts differently.
+   */
+  /** Thread order; `encodeThreadPostsCursorAfter` writes the same tuple. */
+  function threadSortKeys(): ListSortKey[] {
+    return [
+      {
+        expr: sql<number>`CASE WHEN ${posts.replyToId} IS NULL THEN 0 ELSE 1 END`.mapWith(
+          Number,
+        ),
+        direction: "asc",
+        kind: "number",
+      },
+      {
+        expr: sql<number>`${posts.createdAt}`.mapWith(Number),
+        direction: "asc",
+        kind: "number",
+      },
+      { expr: sql<string>`${posts.id}`, direction: "asc", kind: "id" },
+    ];
+  }
+
+  /**
+   * The calendar periods, on the site's wall clock, that the posts matching
+   * `filters` fall in, with the time axis and condition that select them.
+   * `null` when no post matches.
+   *
+   * Neither SQLite nor D1 knows IANA time zones, so the period boundaries are
+   * worked out here from the earliest and latest matching post, and the query
+   * sorts each row into one by comparing against them.
+   */
+  async function calendarPeriodsOf(
+    filters: PostFilters,
+    unit: "year" | "month",
+    timeZone: string,
+  ) {
+    const axis = timeAxisColumn(filters);
+    const where = and(...buildFilterConditions(filters), isNotNull(axis));
+    const [span] = await db
+      .select({
+        from: sql<number | null>`min(${axis})`,
+        to: sql<number | null>`max(${axis})`,
+      })
+      .from(posts)
+      .where(where);
+    if (span?.from == null || span.to == null) return null;
+    const periods = calendarPeriodsIn(
+      Number(span.from),
+      Number(span.to),
+      unit,
+      timeZone,
+    );
+    return { expr: buildPeriodExpr(axis, periods), where };
+  }
+
+  /**
+   * A column's period key: the latest of `periods` (oldest first, the first
+   * beginning at or before every value) that begins at or before it. Every
+   * branch reads the column, even with one period: Postgres refuses to group
+   * or order by a bare constant. Boundaries and keys are generated digits,
+   * written as literals because D1 takes at most 100 bound parameters and a
+   * long archive has more month boundaries than that.
+   */
+  function buildPeriodExpr(
+    column: SQLWrapper,
+    periods: readonly CalendarPeriod[],
+  ): SQL<string> {
+    const branches = [...periods]
+      .reverse()
+      .map(
+        (period) =>
+          sql`WHEN ${column} >= ${sql.raw(String(period.start))} THEN ${sql.raw(`'${period.key}'`)}`,
+      );
+    return sql<string>`CASE ${sql.join(branches, sql` `)} END`;
   }
 
   /** Check if a slug is available (not used by posts or path_registry) */
@@ -1338,38 +1658,144 @@ export function createPostService(
     return conditions;
   }
 
-  function getCursorSortTimestamp(
-    row: typeof posts.$inferSelect,
-    filters: PostFilters,
-  ): number {
-    if (filters.sortBy === "published") {
-      return row.publishedAt ?? row.createdAt;
+  /**
+   * How `list()` orders a set of filters.
+   *
+   * A Featured list runs newest-published-first whatever `sortOrder` and
+   * `sortBy` say. It is that order and no variant of it, so a cursor moves
+   * between a Featured list and any other newest-published one. Everything
+   * else takes both from the filters, defaulting to newest by announced
+   * activity.
+   */
+  function resolveListSort(filters: PostFilters): ListSort {
+    const pinned = !filters.ignorePinnedSort;
+    if (filters.featured) {
+      return { order: "newest", axis: "published", pinned };
     }
-    if (filters.sortBy === "thread_updated") {
-      return row.threadUpdatedAt ?? -1;
-    }
-    return row.status === "draft" ? row.updatedAt : (row.lastActivityAt ?? -1);
+    return {
+      order: filters.sortOrder ?? "newest",
+      axis: filters.sortBy ?? "activity",
+      pinned,
+    };
   }
 
   /**
-   * Chronological sort key for `list()`.
-   *
-   * Shared by the ORDER BY and the keyset cursor comparison — they must read
-   * the same expression or pagination silently skips or repeats rows.
+   * The sort mode a cursor records. Two requests share a mode exactly when
+   * their ORDER BY reads the same keys in the same directions, so a position
+   * taken in one resumes the other.
    */
-  function buildSortTimestampExpr(filters: PostFilters): SQLWrapper {
-    if (filters.sortBy === "published") {
-      return sql<number>`coalesce(${posts.publishedAt}, ${posts.createdAt})`;
+  function listSortMode(sort: ListSort): string {
+    return `${sort.order}:${sort.axis}:${sort.pinned ? "pinned" : "unpinned"}`;
+  }
+
+  /**
+   * Where a Post sits on one of `list()`'s time axes. See `PostFilters.sortBy`.
+   *
+   * On the activity axis a draft, which has announced nothing, sits at its last
+   * edit. When the status filter already settles which case applies, only
+   * that column is read.
+   */
+  function listAxisExpr(
+    axis: ListSort["axis"],
+    status: Status | undefined,
+  ): SQL {
+    switch (axis) {
+      case "published":
+        return sql`coalesce(${posts.publishedAt}, ${posts.createdAt})`;
+      case "thread_updated":
+        return sql`${posts.threadUpdatedAt}`;
+      case "activity":
+        if (status === "draft") return sql`${posts.updatedAt}`;
+        if (status === "published") return sql`${posts.lastActivityAt}`;
+        return sql`CASE
+          WHEN ${posts.status} = 'draft' THEN ${posts.updatedAt}
+          ELSE ${posts.lastActivityAt}
+        END`;
     }
-    if (filters.sortBy === "thread_updated") {
-      return posts.threadUpdatedAt;
+  }
+
+  /**
+   * `list()`'s sort keys, in ORDER BY order — the one definition of it.
+   *
+   * The ORDER BY, the keyset condition that resumes after a cursor, and the
+   * values a cursor records are all built from this list, so they cannot read
+   * different expressions. Two of them used to, and a page boundary then
+   * skipped or repeated Posts.
+   *
+   * Every nullable key is wrapped in `coalesce(…, -1)`. SQLite sorts NULLs
+   * last under DESC and Postgres sorts them first, and a keyset comparison
+   * against NULL is never true on either; with the wrap both engines order,
+   * compare, and return the same values. The Post ID ends every list, so no
+   * two rows share a tuple.
+   */
+  function listSortKeys(
+    sort: ListSort,
+    status: Status | undefined,
+  ): ListSortKey[] {
+    const numberKey = (expr: SQL, direction: "asc" | "desc"): ListSortKey => ({
+      expr: sql<number>`coalesce(${expr}, -1)`.mapWith(Number),
+      direction,
+      kind: "number",
+    });
+    const idKey = (direction: "asc" | "desc"): ListSortKey => ({
+      expr: sql<string>`${posts.id}`,
+      direction,
+      kind: "id",
+    });
+    const pinnedKeys = sort.pinned
+      ? [numberKey(sql`${posts.pinnedAt}`, "desc")]
+      : [];
+    const time = listAxisExpr(sort.axis, status);
+
+    // One case per order and no default: an order added to `SortOrder`
+    // doesn't compile until it has keys, rather than falling into another's.
+    switch (sort.order) {
+      case "oldest":
+        return [...pinnedKeys, numberKey(time, "asc"), idKey("asc")];
+      case "rating_desc":
+        // Ratings run 1 to 5, so -1 puts unrated Posts after every rated one.
+        return [
+          ...pinnedKeys,
+          numberKey(sql`${posts.rating}`, "desc"),
+          numberKey(time, "desc"),
+          idKey("desc"),
+        ];
+      case "newest":
+        return [...pinnedKeys, numberKey(time, "desc"), idKey("desc")];
     }
-    if (filters.status === "draft") return posts.updatedAt;
-    if (filters.status === "published") return posts.lastActivityAt;
-    return sql<number>`CASE
-      WHEN ${posts.status} = 'draft' THEN ${posts.updatedAt}
-      ELSE ${posts.lastActivityAt}
-    END`;
+  }
+
+  function listOrderBy(keys: readonly ListSortKey[]): SQL[] {
+    return keys.map((key) =>
+      key.direction === "desc" ? desc(key.expr) : asc(key.expr),
+    );
+  }
+
+  /** The sort keys as select fields, `k0`, `k1`, …, in ORDER BY order. */
+  function listSortKeyFields(
+    keys: readonly ListSortKey[],
+  ): Record<string, SQL> {
+    return Object.fromEntries(
+      keys.map((key, index) => [`k${index}`, key.expr]),
+    );
+  }
+
+  /** Read back the tuple {@link listSortKeyFields} selected. */
+  function readListSortKeyValues(
+    keys: readonly ListSortKey[],
+    fields: Record<string, unknown>,
+  ): PostListCursorValue[] {
+    return keys.map((key, index) => {
+      const value = fields[`k${index}`];
+      if (key.kind === "number") {
+        if (typeof value === "number" && Number.isSafeInteger(value)) {
+          return value;
+        }
+      } else if (typeof value === "string") {
+        return value;
+      }
+      throw new Error(`Sort key ${index} read back as ${String(value)}`);
+    });
   }
 
   function buildLexicographicCursorCondition(
@@ -1393,106 +1819,38 @@ export function createPostService(
     )`;
   }
 
-  async function buildListCursorCondition(
-    filters: PostFilters,
-  ): Promise<SQL<unknown> | null> {
-    if (!filters.cursor) {
-      return null;
+  /** Rows strictly after `values` in the order `keys` describe. */
+  function buildListKeysetCondition(
+    keys: readonly ListSortKey[],
+    values: readonly PostListCursorValue[],
+  ): SQL<unknown> {
+    const cursorKeys = keys.map((key, index): CursorSortKey => {
+      const value = values[index];
+      if (value === undefined) {
+        throw new Error(`Cursor holds no value for sort key ${index}`);
+      }
+      return { direction: key.direction, expr: key.expr, value };
+    });
+    const [first, ...rest] = cursorKeys;
+    if (!first) {
+      throw new Error("A list has at least one sort key");
     }
+    return buildLexicographicCursorCondition([first, ...rest]);
+  }
 
-    const cursorRow = await db
-      .select()
-      .from(posts)
-      .where(and(eq(posts.siteId, siteId), eq(posts.id, filters.cursor)))
-      .limit(1);
-    const cursorPost = cursorRow[0];
-
-    if (!cursorPost) {
-      return null;
-    }
-
-    const sortTimestampExpr = buildSortTimestampExpr(filters);
-    const pinnedSortExpr = sql<number>`coalesce(${posts.pinnedAt}, -1)`;
-    const featuredPublishedSortExpr = sql<number>`coalesce(
-      ${posts.publishedAt}, ${posts.createdAt}, -1
-    )`;
-    const sortTimestampSortExpr = sql<number>`coalesce(${sortTimestampExpr}, -1)`;
-    const ratingPresenceExpr = sql<number>`CASE
-      WHEN ${posts.rating} IS NULL THEN 0
-      ELSE 1
-    END`;
-    const ratingSortExpr = sql<number>`coalesce(${posts.rating}, -1)`;
-    const cursorPinnedAt = cursorPost.pinnedAt ?? -1;
-    const cursorFeaturedPublishedAt =
-      cursorPost.publishedAt ?? cursorPost.createdAt;
-    const cursorSortTimestamp = getCursorSortTimestamp(cursorPost, filters);
-    const cursorRatingPresence = cursorPost.rating === null ? 0 : 1;
-    const cursorRating = cursorPost.rating ?? -1;
-    const withPinnedSortKey = (
-      keys: [CursorSortKey, ...CursorSortKey[]],
-    ): [CursorSortKey, ...CursorSortKey[]] =>
-      filters.ignorePinnedSort
-        ? keys
-        : [
-            { direction: "desc", expr: pinnedSortExpr, value: cursorPinnedAt },
-            ...keys,
-          ];
-
-    if (filters.featured) {
-      return buildLexicographicCursorCondition(
-        withPinnedSortKey([
-          {
-            direction: "desc",
-            expr: featuredPublishedSortExpr,
-            value: cursorFeaturedPublishedAt,
-          },
-          { direction: "desc", expr: posts.id, value: cursorPost.id },
-        ]),
-      );
-    }
-
-    // One case per sort order, mirroring `list()` key for key.
-    switch (filters.sortOrder ?? "newest") {
-      case "oldest":
-        return buildLexicographicCursorCondition(
-          withPinnedSortKey([
-            {
-              direction: "asc",
-              expr: sortTimestampSortExpr,
-              value: cursorSortTimestamp,
-            },
-            { direction: "asc", expr: posts.id, value: cursorPost.id },
-          ]),
-        );
-      case "rating_desc":
-        return buildLexicographicCursorCondition(
-          withPinnedSortKey([
-            {
-              direction: "desc",
-              expr: ratingPresenceExpr,
-              value: cursorRatingPresence,
-            },
-            { direction: "desc", expr: ratingSortExpr, value: cursorRating },
-            {
-              direction: "desc",
-              expr: sortTimestampSortExpr,
-              value: cursorSortTimestamp,
-            },
-            { direction: "desc", expr: posts.id, value: cursorPost.id },
-          ]),
-        );
-      case "newest":
-        return buildLexicographicCursorCondition(
-          withPinnedSortKey([
-            {
-              direction: "desc",
-              expr: sortTimestampSortExpr,
-              value: cursorSortTimestamp,
-            },
-            { direction: "desc", expr: posts.id, value: cursorPost.id },
-          ]),
-        );
-    }
+  /**
+   * The position a cursor names, as the tuple of sort-key values after which
+   * the page starts. The cursor must come from a list in the same order.
+   */
+  function resolveListCursor(
+    cursor: string,
+    sort: ListSort,
+    keys: readonly ListSortKey[],
+  ): PostListCursorValue[] {
+    return decodePostListCursor(cursor, {
+      mode: listSortMode(sort),
+      kinds: keys.map((key) => key.kind),
+    });
   }
 
   function toPost(
@@ -1542,36 +1900,58 @@ export function createPostService(
     };
   }
 
-  async function hydratePost(
-    row: typeof posts.$inferSelect | undefined,
-  ): Promise<Post | null> {
-    if (!row) return null;
-    const slug = await resolvedPaths.getPostSlug(row.id);
-    if (!slug) return null;
-    const rootVisibilityMap = await getThreadVisibilityMap([row.threadId]);
-    const visibility = rootVisibilityMap.get(row.threadId) ?? row.visibility;
+  /**
+   * A post row together with what turning it into a {@link Post} takes from
+   * other rows: its slug, from `path_registry`, and its Thread's visibility,
+   * which a reply inherits from the root (a reply's own column is null).
+   *
+   * Both ride along as correlated subqueries, so reading posts is one
+   * statement. On D1 each follow-up lookup was one more round trip on every
+   * page that shows a post.
+   *
+   * The outer columns are written out rather than interpolated: Drizzle only
+   * qualifies projection columns when the query has a join, so `${posts.id}`
+   * would render as a bare "id" and bind to the subquery's own table.
+   */
+  const hydratedPostColumns = {
+    ...getTableColumns(posts),
+    slug: sql<string | null>`(
+      SELECT post_slug.path
+      FROM path_registry AS post_slug
+      WHERE post_slug.site_id = ${siteId}
+        AND post_slug.post_id = "post"."id"
+        AND post_slug.kind = 'slug'
+    )`.as("post_slug"),
+    threadVisibility: sql<string | null>`(
+      SELECT thread_root.visibility
+      FROM post AS thread_root
+      WHERE thread_root.site_id = ${siteId}
+        AND thread_root.id = "post"."thread_id"
+    )`.as("thread_visibility"),
+  };
+
+  type HydratedPostRow = typeof posts.$inferSelect & {
+    slug: string | null;
+    threadVisibility: string | null;
+  };
+
+  /**
+   * Turn a row read with {@link hydratedPostColumns} into a `Post`.
+   *
+   * Null for a row with no slug — a Post with no address — or with no
+   * visibility on its Thread root.
+   */
+  function hydratePost(row: HydratedPostRow | undefined): Post | null {
+    if (!row?.slug) return null;
+    const visibility = row.threadVisibility ?? row.visibility;
     if (!visibility) return null;
-    return toPost(row, slug, visibility);
+    return toPost(row, row.slug, visibility);
   }
 
-  async function hydratePosts(
-    rows: (typeof posts.$inferSelect)[],
-  ): Promise<Post[]> {
-    if (rows.length === 0) return [];
-    const slugMap = await resolvedPaths.getPostSlugMap(
-      rows.map((row) => row.id),
-    );
-    const rootVisibilityMap = await getThreadVisibilityMap(
-      rows.map((row) => row.threadId),
-    );
+  function hydratePosts(rows: HydratedPostRow[]): Post[] {
     return rows
-      .map((row) => {
-        const slug = slugMap.get(row.id);
-        const visibility =
-          rootVisibilityMap.get(row.threadId) ?? row.visibility;
-        return slug && visibility ? toPost(row, slug, visibility) : null;
-      })
-      .filter((row): row is Post => row !== null);
+      .map((row) => hydratePost(row))
+      .filter((post): post is Post => post !== null);
   }
 
   async function hydratePostsById(ids: string[]): Promise<Map<string, Post>> {
@@ -1584,7 +1964,7 @@ export function createPostService(
 
     const rows = await batchQueryRows(uniqueIds, (chunk) =>
       db
-        .select()
+        .select(hydratedPostColumns)
         .from(posts)
         .where(
           and(
@@ -1595,31 +1975,8 @@ export function createPostService(
         ),
     );
 
-    for (const post of await hydratePosts(rows)) {
+    for (const post of hydratePosts(rows)) {
       result.set(post.id, post);
-    }
-
-    return result;
-  }
-
-  async function getThreadVisibilityMap(
-    threadIds: string[],
-  ): Promise<Map<string, Visibility>> {
-    const uniqueThreadIds = [...new Set(threadIds)];
-    const result = new Map<string, Visibility>();
-    if (uniqueThreadIds.length === 0) return result;
-
-    const rows = await batchQueryRows(uniqueThreadIds, (chunk) =>
-      db
-        .select({ id: posts.id, visibility: posts.visibility })
-        .from(posts)
-        .where(and(eq(posts.siteId, siteId), inArray(posts.id, chunk))),
-    );
-
-    for (const row of rows) {
-      if (row.visibility) {
-        result.set(row.id, ensurePostVisibility(row.visibility, Error));
-      }
     }
 
     return result;
@@ -1657,6 +2014,26 @@ export function createPostService(
     if (options?.threadIds !== undefined) {
       conditions.push(inArray(posts.threadId, options.threadIds));
     }
+    if (options?.rootFilters) {
+      // Uncorrelated: the inner `post` shadows the outer one, so every column
+      // the filters name reads the root row being matched.
+      conditions.push(
+        inArray(
+          posts.threadId,
+          db
+            .select({ id: posts.id })
+            .from(posts)
+            .where(
+              and(
+                ...buildFilterConditions({
+                  ...options.rootFilters,
+                  excludeReplies: true,
+                }),
+              ),
+            ),
+        ),
+      );
+    }
 
     return conditions;
   }
@@ -1684,43 +2061,64 @@ export function createPostService(
     )`.as(alias);
   }
 
-  function buildCollectionThreadSortQuery(
+  /**
+   * The sort mode a collection cursor records. Distinct from every
+   * {@link listSortMode}: a collection orders Threads by its own pins, so a
+   * position in `list()` never resumes a collection or the other way round.
+   */
+  function collectionThreadSortMode(order: CollectionSortOrder): string {
+    return `collection:${order}`;
+  }
+
+  /**
+   * A collection's matching Threads, one row per Thread with its sort keys as
+   * columns, those keys in ORDER BY order, and the sort mode a cursor taken
+   * in that order records — the one definition of how a collection orders
+   * its Threads. `options.sortOrder` defaults to `newest`.
+   *
+   * The keys are aggregates over the Thread's matching members, computed once
+   * in the grouped subquery; the ORDER BY, the keyset condition that resumes
+   * after a cursor, and the values a cursor records all read the subquery's
+   * columns through `keys`. As in {@link listSortKeys}, no key is ever NULL,
+   * so SQLite and Postgres order and compare alike: a missing pin, rating, or
+   * publication time folds to -1, and Thread activity falls back to the
+   * member's own times.
+   *
+   * - `newest`: pinned in the collection first, then Thread activity, newest
+   *   first.
+   * - `oldest`: pinned first, then the Thread's first publication, oldest
+   *   first. A new reply doesn't move a Thread.
+   * - `rating_desc`: pinned first, then the Thread's highest rating (unrated
+   *   last, since ratings run 1 to 5), then Thread activity.
+   *
+   * The Thread root ID ends every order, so no two rows share a tuple.
+   */
+  function buildCollectionThreadSort(
     collectionIds: string[],
     options: CollectionThreadRootPageOptions,
   ) {
+    const order = options.sortOrder ?? "newest";
     const conditions = [
       ...buildThreadRootPageConditions(options),
       buildCollectionMembershipCondition(collectionIds),
     ];
-    const sortOrder = options.sortOrder ?? "newest";
-    const publishedAt =
-      sortOrder === "oldest"
-        ? sql<number>`MIN(${posts.publishedAt})`.as("published_at")
-        : sql<number>`MAX(${posts.publishedAt})`.as("published_at");
-    const threadActivityAt =
-      buildCollectionThreadActivityExpr("thread_activity_at");
-    const ratingPresence = sql<number>`MAX(
-      CASE
-        WHEN ${posts.rating} IS NULL THEN 0
-        ELSE 1
-      END
-    )`.as("rating_presence");
-    const ratingValue = sql<number>`MAX(coalesce(${posts.rating}, -1))`.as(
-      "rating_value",
-    );
-    const collectionPinnedAt =
-      sql<number>`MAX(coalesce(${threadCollections.pinnedAt}, -1))`.as(
-        "collection_pinned_at",
-      );
 
     const sortedThreads = db
       .select({
         threadId: posts.threadId,
-        publishedAt,
-        threadActivityAt,
-        collectionPinnedAt,
-        ratingPresence,
-        ratingValue,
+        collectionPinnedAt:
+          sql<number>`MAX(coalesce(${threadCollections.pinnedAt}, -1))`.as(
+            "collection_pinned_at",
+          ),
+        firstPublishedAt:
+          sql<number>`coalesce(MIN(${posts.publishedAt}), -1)`.as(
+            "first_published_at",
+          ),
+        threadActivityAt:
+          buildCollectionThreadActivityExpr("thread_activity_at"),
+        ratingValue: sql<number>`MAX(coalesce(${posts.rating}, -1))`.as(
+          "rating_value",
+        ),
       })
       .from(posts)
       .innerJoin(
@@ -1734,7 +2132,58 @@ export function createPostService(
       .groupBy(posts.threadId)
       .as("collection_thread_sort");
 
-    return { sortOrder, sortedThreads };
+    const numberKey = (
+      column: SQLWrapper,
+      direction: "asc" | "desc",
+    ): ListSortKey => ({
+      expr: sql<number>`${column}`.mapWith(Number),
+      direction,
+      kind: "number",
+    });
+    const idKey = (direction: "asc" | "desc"): ListSortKey => ({
+      expr: sql<string>`${sortedThreads.threadId}`,
+      direction,
+      kind: "id",
+    });
+    const pinned = numberKey(sortedThreads.collectionPinnedAt, "desc");
+    const activity = numberKey(sortedThreads.threadActivityAt, "desc");
+
+    // One case per order and no default, as in `listSortKeys`.
+    const keys = ((): ListSortKey[] => {
+      switch (order) {
+        case "oldest":
+          return [
+            pinned,
+            numberKey(sortedThreads.firstPublishedAt, "asc"),
+            idKey("asc"),
+          ];
+        case "rating_desc":
+          return [
+            pinned,
+            numberKey(sortedThreads.ratingValue, "desc"),
+            activity,
+            idKey("desc"),
+          ];
+        case "newest":
+          return [pinned, activity, idKey("desc")];
+      }
+    })();
+
+    return { sortedThreads, keys, mode: collectionThreadSortMode(order) };
+  }
+
+  /**
+   * The position a collection cursor names, as the tuple of sort-key values
+   * after which the page starts.
+   */
+  function resolveCollectionThreadCursor(
+    cursor: string,
+    sort: ReturnType<typeof buildCollectionThreadSort>,
+  ): PostListCursorValue[] {
+    return decodePostListCursor(cursor, {
+      mode: sort.mode,
+      kinds: sort.keys.map((key) => key.kind),
+    });
   }
 
   function isMediaAttachmentInput(
@@ -1743,9 +2192,19 @@ export function createPostService(
     return attachment.type === "media";
   }
 
+  /** IDs of the uploaded media that attachment inputs reference. */
+  function referencedMediaIds(
+    attachments: PostAttachmentInput[] | undefined,
+  ): string[] {
+    return (attachments ?? [])
+      .filter(isMediaAttachmentInput)
+      .map((attachment) => attachment.mediaId);
+  }
+
   async function createAttachmentMediaIds(
     attachments: PostAttachmentInput[],
     deps: PostAttachmentDeps,
+    postId?: string,
   ) {
     if (attachments.length > MAX_MEDIA_ATTACHMENTS) {
       throw new ValidationError(
@@ -1755,11 +2214,7 @@ export function createPostService(
 
     const orderedMediaIds: string[] = [];
     const createdTextMediaIds: string[] = [];
-    const referencedMediaIds = attachments
-      .filter(isMediaAttachmentInput)
-      .map((attachment) => attachment.mediaId);
-
-    await deps.media.validateIds(referencedMediaIds);
+    await deps.media.validateIds(referencedMediaIds(attachments), postId);
 
     try {
       for (const attachment of attachments) {
@@ -1876,24 +2331,43 @@ export function createPostService(
   return {
     async getById(id) {
       const result = await db
-        .select()
+        .select(hydratedPostColumns)
         .from(posts)
         .where(and(eq(posts.siteId, siteId), eq(posts.id, id)))
         .limit(1);
       return hydratePost(result[0]);
     },
 
-    async getBodyContent(id) {
-      const post = await this.getById(id);
-      if (!post) return null;
+    async getWithCanonicalAlias(postId) {
+      // The oldest alias is the post's address, as feeds, the sitemap, and
+      // the export name it: a second custom URL is another way in, not a new
+      // identity. Ties within a second fall to the lower id, not to the
+      // storage engine's order.
+      const rows = await db
+        .select({
+          ...hydratedPostColumns,
+          canonicalAlias: sql<string | null>`(
+            SELECT post_alias.path
+            FROM path_registry AS post_alias
+            WHERE post_alias.site_id = ${siteId}
+              AND post_alias.post_id = "post"."id"
+              AND post_alias.kind = 'alias'
+            ORDER BY post_alias.created_at, post_alias.id
+            LIMIT 1
+          )`.as("canonical_alias"),
+        })
+        .from(posts)
+        .where(and(eq(posts.siteId, siteId), eq(posts.id, postId)))
+        .limit(1);
 
+      const row = rows[0];
+      // A Post with no slug row has no address, which is what `hydratePost`
+      // says by returning null for it.
+      const post = hydratePost(row);
+      if (!row || !post) return null;
       return {
-        id: post.id,
-        type: "post",
-        format: post.format,
-        contentFormat: "markdown",
-        content: post.body ? tiptapJsonToMarkdown(post.body) : "",
-        chars: post.bodyText?.length ?? 0,
+        post,
+        canonicalAlias: row.canonicalAlias ? `/${row.canonicalAlias}` : null,
       };
     },
 
@@ -1902,7 +2376,12 @@ export function createPostService(
       if (!resolved || resolved.kind !== "slug" || !resolved.postId) {
         return null;
       }
-      return this.getById(resolved.postId);
+      const result = await db
+        .select(hydratedPostColumns)
+        .from(posts)
+        .where(and(eq(posts.siteId, siteId), eq(posts.id, resolved.postId)))
+        .limit(1);
+      return hydratePost(result[0]);
     },
 
     async suggestSlug(input) {
@@ -1928,75 +2407,15 @@ export function createPostService(
     },
 
     async list(filters = {}) {
+      const keys = listSortKeys(resolveListSort(filters), filters.status);
       const conditions = buildFilterConditions(filters);
-      const cursorCondition = await buildListCursorCondition(filters);
-      if (filters.cursor && !cursorCondition) {
-        return [];
-      }
-      const sortTimestamp = buildSortTimestampExpr(filters);
 
-      if (cursorCondition) {
-        conditions.push(cursorCondition);
-      }
-
-      const ratingPresence = sql<number>`CASE
-          WHEN ${posts.rating} IS NULL THEN 0
-          ELSE 1
-        END`;
-
-      // NULL-sort order differs between dialects: SQLite puts NULLs last for
-      // DESC, Postgres puts them first. Wrap nullable sort keys in COALESCE
-      // so pinned and nullable timeline values sort identically under both
-      // engines. Mirrors the
-      // expressions used by `buildListCursorCondition` above.
-      const pinnedSortExpr = sql<number>`coalesce(${posts.pinnedAt}, -1)`;
-      const featuredPublishedSortExpr = sql<number>`coalesce(
-        ${posts.publishedAt}, ${posts.createdAt}, -1
-      )`;
-      const sortTimestampSortExpr = sql<number>`coalesce(${sortTimestamp}, -1)`;
-      const pinnedOrder = filters.ignorePinnedSort
-        ? []
-        : [desc(pinnedSortExpr)];
-
-      const baseQuery = db
-        .select()
+      let query = db
+        .select(hydratedPostColumns)
         .from(posts)
         .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .orderBy(...listOrderBy(keys))
         .limit(filters.limit ?? 100);
-
-      // A case per sort order, and no shared fallthrough. This was an if/else
-      // chain whose last branch was written for one order and silently caught
-      // another, so `newest` ordered by rating instead of by time wherever it
-      // was passed explicitly — a smart collection page, most visibly.
-      const buildOrderBy = (): SQL<unknown>[] => {
-        if (filters.featured) {
-          return [
-            ...pinnedOrder,
-            desc(featuredPublishedSortExpr),
-            desc(posts.id),
-          ];
-        }
-        switch (filters.sortOrder ?? "newest") {
-          case "oldest":
-            return [...pinnedOrder, asc(sortTimestampSortExpr), asc(posts.id)];
-          case "rating_desc":
-            return [
-              ...pinnedOrder,
-              desc(ratingPresence),
-              desc(posts.rating),
-              desc(sortTimestampSortExpr),
-              desc(posts.id),
-            ];
-          case "newest":
-            return [
-              ...pinnedOrder,
-              desc(sortTimestampSortExpr),
-              desc(posts.id),
-            ];
-        }
-      };
-
-      let query = baseQuery.orderBy(...buildOrderBy());
 
       if (filters.offset !== undefined) {
         query = query.offset(filters.offset) as typeof query;
@@ -2004,6 +2423,46 @@ export function createPostService(
 
       const rows = await query;
       return hydratePosts(rows);
+    },
+
+    async listPage(filters, { cursor, limit }) {
+      const sort = resolveListSort(filters);
+      const keys = listSortKeys(sort, filters.status);
+      const conditions = buildFilterConditions(filters);
+      // An empty cursor has always meant the first page — a client that sends
+      // `?cursor=` before it has one keeps working.
+      if (cursor) {
+        conditions.push(
+          buildListKeysetCondition(keys, resolveListCursor(cursor, sort, keys)),
+        );
+      }
+
+      // One row past the page says whether another page exists, so the last
+      // page carries a null cursor rather than one that leads to an empty page.
+      const rows = await db
+        .select({ post: hydratedPostColumns, sortKey: listSortKeyFields(keys) })
+        .from(posts)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .orderBy(...listOrderBy(keys))
+        .limit(limit + 1);
+
+      const pageRows = rows.slice(0, limit);
+      // The cursor comes from the last row read, not the last Post returned:
+      // hydration drops a row it can't give a slug, and a page cut short that
+      // way must not end the walk.
+      const lastRow = pageRows[pageRows.length - 1];
+      const nextCursor =
+        rows.length > limit && lastRow
+          ? encodePostListCursor(
+              listSortMode(sort),
+              readListSortKeyValues(keys, lastRow.sortKey),
+            )
+          : null;
+
+      return {
+        posts: hydratePosts(pageRows.map((row) => row.post)),
+        nextCursor,
+      };
     },
 
     async listForSitemap({ afterId, limit }) {
@@ -2187,20 +2646,19 @@ export function createPostService(
       return rows.length;
     },
 
-    async countByYearMonth(filters = {}) {
-      const axis = timeAxisColumn(filters);
-      const conditions = [...buildFilterConditions(filters), isNotNull(axis)];
-      const publishedYearMonthExpr = buildYearMonthExpr(axis);
+    async countByYearMonth(filters, timeZone) {
+      const months = await calendarPeriodsOf(filters, "month", timeZone);
+      if (!months) return [];
 
       return db
         .select({
-          yearMonth: publishedYearMonthExpr.as("year_month"),
+          yearMonth: months.expr.as("year_month"),
           count: sql<number>`CAST(count(*) AS INTEGER)`.as("count"),
         })
         .from(posts)
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .groupBy(publishedYearMonthExpr)
-        .orderBy(desc(publishedYearMonthExpr));
+        .where(months.where)
+        .groupBy(months.expr)
+        .orderBy(desc(months.expr));
     },
 
     async create(data, summaryConfig) {
@@ -2224,6 +2682,9 @@ export function createPostService(
       const preparedBody = trimmedBody
         ? tryPreparePostBodyHtml(id, trimmedBody)
         : null;
+      if (preparedBody && !preparedBody.ok) {
+        throw new ValidationError(INVALID_POST_BODY_MESSAGE);
+      }
       const body = preparedBody?.ok ? preparedBody.body : trimmedBody;
       const title = data.title?.trim() || null;
       const quoteText = data.quoteText?.trim() || null;
@@ -2404,6 +2865,8 @@ export function createPostService(
       assertDraftPublishedAt(status, data.publishedAt);
       const publishedAt =
         status === "published" ? (data.publishedAt ?? timestamp) : null;
+      const createdAt = data.createdAt ?? timestamp;
+      const updatedAt = data.updatedAt ?? createdAt;
 
       // Resolve slug from slug, path, or title
       let slug: string;
@@ -2563,10 +3026,10 @@ export function createPostService(
               translationGroupId,
               quietReply: isQuietReply,
               publishedAt,
-              lastActivityAt: publishedAt ?? timestamp,
-              threadUpdatedAt: publishedAt ?? timestamp,
-              createdAt: timestamp,
-              updatedAt: timestamp,
+              lastActivityAt: publishedAt ?? updatedAt,
+              threadUpdatedAt: publishedAt ?? updatedAt,
+              createdAt,
+              updatedAt,
             }),
           );
 
@@ -2657,10 +3120,10 @@ export function createPostService(
               translationGroupId,
               quietReply: isQuietReply,
               publishedAt,
-              lastActivityAt: publishedAt ?? timestamp,
-              threadUpdatedAt: publishedAt ?? timestamp,
-              createdAt: timestamp,
-              updatedAt: timestamp,
+              lastActivityAt: publishedAt ?? updatedAt,
+              threadUpdatedAt: publishedAt ?? updatedAt,
+              createdAt,
+              updatedAt,
             });
 
             await tx.insert(pathRegistry).values({
@@ -2787,8 +3250,8 @@ export function createPostService(
         // A reply with no date of its own belongs to the root's moment, not to
         // whenever the request happened to run. Without this, backdating the
         // root leaves its replies stamped today and the thread reads as if it
-        // spanned years. Thread order is by `createdAt`/`id` (see the thread
-        // queries), so sharing one `publishedAt` cannot reorder anything.
+        // spanned years. Thread order is the root, then `createdAt`/`id` (see
+        // `threadOrder`), so sharing one `publishedAt` cannot reorder anything.
         const rootPublishedAt = created[0]?.publishedAt ?? undefined;
         const postData: CreatePost = {
           ...data,
@@ -2811,8 +3274,23 @@ export function createPostService(
           );
           created.push(post);
         } catch (error) {
-          // Rollback: delete all already-created posts in reverse order
+          // Roll back the posts created so far, in reverse order. Uploads they
+          // reference by ID are detached first rather than deleted with them:
+          // the composer keeps those in its local draft, and a retry attaches
+          // them again.
+          const uploadIds = new Set(
+            items.flatMap((entry) => referencedMediaIds(entry.attachments)),
+          );
           for (const p of [...created].reverse()) {
+            const attached = await deps.media.getByPostId(p.id).catch(() => []);
+            await deps.media
+              .attachToPost(
+                p.id,
+                attached
+                  .filter((item) => !uploadIds.has(item.id))
+                  .map((item) => item.id),
+              )
+              .catch(() => undefined);
             await this.delete(p.id, {
               media: deps.media,
               storage: deps.storage,
@@ -2948,6 +3426,9 @@ export function createPostService(
         const preparedBody = normalizedBody
           ? tryPreparePostBodyHtml(existing.id, normalizedBody)
           : null;
+        if (preparedBody && !preparedBody.ok) {
+          throw new ValidationError(INVALID_POST_BODY_MESSAGE);
+        }
         updatedBody = preparedBody?.ok ? preparedBody.body : normalizedBody;
         updates.body = updatedBody;
         updates.bodyHtml = preparedBody?.ok
@@ -3050,9 +3531,10 @@ export function createPostService(
           .returning();
         if (needsThreadActivityRecalc) {
           await recalculateThreadActivity(existing.threadId);
-          return this.getById(id);
         }
-        return hydratePost(result[0]);
+        // A row from RETURNING has no slug or Thread visibility with it, so
+        // the post is read back whole.
+        return result[0] ? this.getById(id) : null;
       }
 
       // Complex case: cascade + update + Thread collection sync atomically.
@@ -3284,9 +3766,8 @@ export function createPostService(
 
       if (needsThreadActivityRecalc) {
         await recalculateThreadActivity(existing.threadId);
-        return this.getById(id);
       }
-      return hydratePost(updateResult?.[0]);
+      return updateResult?.[0] ? this.getById(id) : null;
     },
 
     async updateWithAttachments(id, data, attachments, deps, summaryConfig) {
@@ -3340,7 +3821,7 @@ export function createPostService(
         ]),
       );
       const { orderedMediaIds, createdTextMediaIds } =
-        await createAttachmentMediaIds(attachments, deps);
+        await createAttachmentMediaIds(attachments, deps, id);
       const post = await this.update(id, data, summaryConfig);
 
       if (!post) {
@@ -3477,18 +3958,115 @@ export function createPostService(
       return true;
     },
 
-    async deleteThreadDraft(id, deps) {
-      return this.delete(id, deps);
+    async replaceThreadDraft(id, items, deps, summaryConfig) {
+      const existing = await this.getById(id);
+      const oldPosts = !existing
+        ? []
+        : isThreadReply(existing)
+          ? [existing]
+          : await this.getThread(id);
+      const oldMedia = [
+        ...(
+          await deps.media.getByPostIds(oldPosts.map((post) => post.id))
+        ).values(),
+      ].flat();
+      for (const post of oldPosts) {
+        await deps.media.detachFromPost(post.id);
+      }
+      if (existing) {
+        await this.delete(id, { media: deps.media, storage: deps.storage });
+      }
+
+      const created = await this.createThreadWithAttachments(
+        items,
+        deps,
+        summaryConfig,
+      );
+
+      const kept = new Set(
+        items.flatMap((item) => referencedMediaIds(item.attachments)),
+      );
+      await deps.media
+        .deleteByIds(
+          oldMedia.filter((item) => !kept.has(item.id)).map((item) => item.id),
+          deps.storage,
+        )
+        .catch(() => undefined);
+      return created;
     },
 
     async getThread(rootId) {
       const rows = await db
-        .select()
+        .select(hydratedPostColumns)
         .from(posts)
         .where(and(eq(posts.siteId, siteId), eq(posts.threadId, rootId)))
-        .orderBy(posts.createdAt, posts.id);
+        .orderBy(...threadOrder());
 
       return hydratePosts(rows);
+    },
+
+    async listThreadPostsPage(threadId, options, { cursor, limit }) {
+      const keys = threadSortKeys();
+      const conditions: SQL[] = [
+        eq(posts.siteId, siteId),
+        eq(posts.threadId, threadId),
+        eq(posts.status, options.status ?? "published"),
+      ];
+
+      if (cursor) {
+        const values = decodePostListCursor(cursor, {
+          mode: THREAD_POSTS_SORT_MODE,
+          kinds: keys.map((key) => key.kind),
+        });
+        conditions.push(buildListKeysetCondition(keys, values));
+      }
+
+      const rows = await db
+        .select({ post: hydratedPostColumns, sortKey: listSortKeyFields(keys) })
+        .from(posts)
+        .where(and(...conditions))
+        .orderBy(...listOrderBy(keys))
+        .limit(limit + 1);
+
+      const pageRows = rows.slice(0, limit);
+      const lastRow = pageRows[pageRows.length - 1];
+      return {
+        posts: hydratePosts(pageRows.map((row) => row.post)),
+        nextCursor:
+          rows.length > limit && lastRow
+            ? encodePostListCursor(
+                THREAD_POSTS_SORT_MODE,
+                readListSortKeyValues(keys, lastRow.sortKey),
+              )
+            : null,
+      };
+    },
+
+    async countThreadPosts(threadIds) {
+      const counts = new Map<string, number>();
+      if (threadIds.length === 0) return counts;
+
+      const rows = await batchQueryRows([...new Set(threadIds)], (chunk) =>
+        db
+          .select({
+            threadId: posts.threadId,
+            count: sql<number>`CAST(count(*) AS INTEGER)`.as("count"),
+          })
+          .from(posts)
+          .where(
+            and(
+              eq(posts.siteId, siteId),
+              inArray(posts.threadId, chunk),
+              eq(posts.status, "published"),
+            ),
+          )
+          .groupBy(posts.threadId),
+      );
+
+      for (const row of rows) {
+        counts.set(row.threadId, row.count);
+      }
+      return counts;
     },
 
     async getThreadPosition(postId) {
@@ -3719,8 +4297,8 @@ export function createPostService(
         .map((row) => ({ language: row.language, count: Number(row.count) }));
     },
 
-    async listTranslations(postId) {
-      const map = await this.getTranslationsMap([postId]);
+    async listTranslations(postId, reader) {
+      const map = await this.getTranslationsMap([postId], reader);
       return map.get(postId) ?? [];
     },
 
@@ -3777,7 +4355,7 @@ export function createPostService(
       }
 
       const rows = await db
-        .select()
+        .select(hydratedPostColumns)
         .from(posts)
         .where(and(...conditions))
         .orderBy(desc(posts.publishedAt))
@@ -3837,40 +4415,62 @@ export function createPostService(
       return { status: "ok", post: candidate };
     },
 
-    async getTranslationsMap(postIds) {
+    async getTranslationsMap(postIds, reader) {
       const result = new Map<string, Post[]>();
       const uniqueIds = [...new Set(postIds)].filter(Boolean);
       if (uniqueIds.length === 0) return result;
 
-      const seedRows = await db
-        .select({ id: posts.id, translationGroupId: posts.translationGroupId })
-        .from(posts)
-        .where(
-          and(
-            eq(posts.siteId, siteId),
-            inArray(posts.id, uniqueIds),
-            isNotNull(posts.translationGroupId),
-          ),
+      // The members query finds the seeds' groups itself, through a
+      // subquery, so it does not wait for the seeds to come back: both reads
+      // go out together. The seeds are still read on their own, because the
+      // reader's view may leave a seed out of the members, and its group is
+      // what names its siblings. A sitemap shard asks about hundreds of
+      // posts, past what one D1 statement may bind, hence the chunks.
+      const seedConditions = (chunk: string[]) =>
+        and(
+          eq(posts.siteId, siteId),
+          inArray(posts.id, chunk),
+          isNotNull(posts.translationGroupId),
         );
+      const [seedRows, memberRows] = await Promise.all([
+        batchQueryRows(uniqueIds, (chunk) =>
+          db
+            .select({
+              id: posts.id,
+              translationGroupId: posts.translationGroupId,
+            })
+            .from(posts)
+            .where(seedConditions(chunk)),
+        ),
+        batchQueryRows(uniqueIds, (chunk) =>
+          db
+            .select(hydratedPostColumns)
+            .from(posts)
+            .where(
+              and(
+                eq(posts.siteId, siteId),
+                inArray(
+                  posts.translationGroupId,
+                  db
+                    .select({ groupId: posts.translationGroupId })
+                    .from(posts)
+                    .where(seedConditions(chunk)),
+                ),
+                ...(reader
+                  ? buildReaderVisibilityConditions(posts, siteId, reader)
+                  : []),
+              ),
+            ),
+        ),
+      ]);
       if (seedRows.length === 0) return result;
 
-      const groupIds = [
-        ...new Set(
-          seedRows
-            .map((row) => row.translationGroupId)
-            .filter((groupId): groupId is string => groupId !== null),
-        ),
+      // Seeds of one group in two chunks bring its members back twice.
+      const members = [
+        ...new Map(
+          hydratePosts(memberRows).map((member) => [member.id, member]),
+        ).values(),
       ];
-      const memberRows = await db
-        .select()
-        .from(posts)
-        .where(
-          and(
-            eq(posts.siteId, siteId),
-            inArray(posts.translationGroupId, groupIds),
-          ),
-        );
-      const members = await hydratePosts(memberRows);
       const byGroup = new Map<string, Post[]>();
       for (const member of members) {
         const groupId = member.translationGroupId;
@@ -4020,10 +4620,9 @@ export function createPostService(
         .select({
           id: posts.id,
           threadId: posts.threadId,
-          createdAt: posts.createdAt,
           previewRank: sql<number>`CAST(ROW_NUMBER() OVER (
             PARTITION BY ${posts.threadId}
-            ORDER BY ${posts.createdAt}, ${posts.id}
+            ORDER BY ${sql.join(threadOrder(), sql`, `)}
           ) AS INTEGER)`.as("preview_rank"),
         })
         .from(posts)
@@ -4041,15 +4640,10 @@ export function createPostService(
         .select({
           id: rankedReplies.id,
           threadId: rankedReplies.threadId,
-          createdAt: rankedReplies.createdAt,
         })
         .from(rankedReplies)
         .where(lte(rankedReplies.previewRank, previewCount))
-        .orderBy(
-          rankedReplies.threadId,
-          rankedReplies.createdAt,
-          rankedReplies.id,
-        );
+        .orderBy(rankedReplies.threadId, sql`${rankedReplies.previewRank}`);
 
       const hydratedPosts = await hydratePostsById(
         rankedRows.map((row) => row.id),
@@ -4073,55 +4667,64 @@ export function createPostService(
     async getThreadTimelineContext(rootIds) {
       if (rootIds.length === 0) return new Map();
 
-      const rankedReplies = db
-        .select({
-          id: posts.id,
-          threadId: posts.threadId,
-          firstReplyRank: sql<number>`CAST(ROW_NUMBER() OVER (
+      // A page of Threads can outgrow one statement's parameter budget — the
+      // API lists up to 100. Each Thread lands in one chunk, so every window
+      // below still partitions over a whole Thread. The replies come back
+      // whole, ranked and ready to hydrate, so the preview is one read.
+      const contextRows = await batchQueryRows(
+        [...new Set(rootIds)],
+        (chunk) => {
+          const rankedReplies = db
+            .select({
+              ...hydratedPostColumns,
+              firstReplyRank: sql<number>`CAST(ROW_NUMBER() OVER (
             PARTITION BY ${posts.threadId}
-            ORDER BY ${posts.createdAt}, ${posts.id}
+            ORDER BY ${sql.join(threadOrder(), sql`, `)}
           ) AS INTEGER)`.as("first_reply_rank"),
-          latestReplyRank: sql<number>`CAST(ROW_NUMBER() OVER (
+              latestReplyRank: sql<number>`CAST(ROW_NUMBER() OVER (
             PARTITION BY ${posts.threadId}
-            ORDER BY ${posts.createdAt} DESC, ${posts.id} DESC
+            ORDER BY ${sql.join(threadOrder("desc"), sql`, `)}
           ) AS INTEGER)`.as("latest_reply_rank"),
-          totalReplyCount: sql<number>`CAST(COUNT(*) OVER (
+              totalReplyCount: sql<number>`CAST(COUNT(*) OVER (
             PARTITION BY ${posts.threadId}
           ) AS INTEGER)`.as("total_reply_count"),
-        })
-        .from(posts)
-        .where(
-          and(
-            eq(posts.siteId, siteId),
-            inArray(posts.threadId, rootIds),
-            eq(posts.status, "published"),
-            isNotNull(posts.replyToId),
-          ),
-        )
-        .as("ranked_replies");
+            })
+            .from(posts)
+            .where(
+              and(
+                eq(posts.siteId, siteId),
+                inArray(posts.threadId, chunk),
+                eq(posts.status, "published"),
+                isNotNull(posts.replyToId),
+              ),
+            )
+            .as("ranked_replies");
 
-      const contextRows = await db
-        .select({
-          threadId: rankedReplies.threadId,
-          id: rankedReplies.id,
-          firstReplyRank: rankedReplies.firstReplyRank,
-          latestReplyRank: rankedReplies.latestReplyRank,
-          totalReplyCount: rankedReplies.totalReplyCount,
-        })
-        .from(rankedReplies)
-        .where(
-          or(
-            // One past the leading window: that extra row is never rendered,
-            // it is only where the gap link points. Without it the gap has to
-            // aim at a reply already on screen.
-            lte(rankedReplies.firstReplyRank, THREAD_LEADING_REPLIES + 1),
-            lte(rankedReplies.latestReplyRank, THREAD_TRAILING_REPLIES),
-          ),
-        );
-
-      const hydratedPosts = await hydratePostsById(
-        contextRows.map((row) => row.id),
+          return db
+            .select()
+            .from(rankedReplies)
+            .where(
+              or(
+                // One past the leading window: that extra row is never rendered,
+                // it is only where the gap link points. Without it the gap has to
+                // aim at a reply already on screen.
+                lte(rankedReplies.firstReplyRank, THREAD_LEADING_REPLIES + 1),
+                lte(rankedReplies.latestReplyRank, THREAD_TRAILING_REPLIES),
+              ),
+            );
+        },
       );
+
+      const hydratedPosts = new Map<string, Post>();
+      for (const {
+        firstReplyRank: _first,
+        latestReplyRank: _latest,
+        totalReplyCount: _total,
+        ...row
+      } of contextRows) {
+        const post = hydratePost(row);
+        if (post) hydratedPosts.set(post.id, post);
+      }
 
       const contextByThreadId = new Map<
         string,
@@ -4265,33 +4868,35 @@ export function createPostService(
       if (rootIds.length === 0) return result;
 
       const uniqueRootIds = [...new Set(rootIds)];
-      const threadPosition = sql<number>`CAST(
-        row_number() OVER (
-          PARTITION BY ${posts.threadId}
-          ORDER BY ${posts.createdAt}, ${posts.id}
-        ) - 1 AS INTEGER
-      )`.as("thread_position");
-      const threadPostCount = sql<number>`CAST(
-        count(*) OVER (PARTITION BY ${posts.threadId}) AS INTEGER
-      )`.as("thread_post_count");
+      const inThreadOrder = () => sql`
+        PARTITION BY ${posts.threadId}
+        ORDER BY ${sql.join(threadOrder(), sql`, `)}
+      `;
+      const threadPosition = () =>
+        sql<number>`CAST(
+          row_number() OVER (${inThreadOrder()}) - 1 AS INTEGER
+        )`.as("thread_position");
+      const threadPostCount = () =>
+        sql<number>`CAST(
+          count(*) OVER (PARTITION BY ${posts.threadId}) AS INTEGER
+        )`.as("thread_post_count");
+      const inRequestedThreads = and(
+        eq(posts.siteId, siteId),
+        inArray(posts.threadId, uniqueRootIds),
+        eq(posts.status, "published"),
+      );
 
+      // The Posts shown: the Root, every Featured Post, and the last Post.
       const rankedPosts = db
         .select({
-          ...getTableColumns(posts),
-          threadPosition,
-          threadPostCount,
+          ...hydratedPostColumns,
+          threadPosition: threadPosition(),
+          threadPostCount: threadPostCount(),
         })
         .from(posts)
-        .where(
-          and(
-            eq(posts.siteId, siteId),
-            inArray(posts.threadId, uniqueRootIds),
-            eq(posts.status, "published"),
-          ),
-        )
+        .where(inRequestedThreads)
         .as("ranked_featured_thread_post");
-
-      const rows = await db
+      const shownQuery = db
         .select()
         .from(rankedPosts)
         .where(
@@ -4303,14 +4908,61 @@ export function createPostService(
         )
         .orderBy(rankedPosts.threadId, sql`${rankedPosts.threadPosition}`);
 
-      const hydratedPosts = await hydratePosts(
-        rows.map(
-          ({ threadPosition: _position, threadPostCount: _count, ...row }) =>
-            row,
-        ),
-      );
+      // Where each gap points: the Post right after a shown one, when it is
+      // hidden itself. Read beside the shown Posts rather than with them, and
+      // only as far as its address, since nothing renders it.
+      const gapCandidates = db
+        .select({
+          id: posts.id,
+          threadId: posts.threadId,
+          slug: hydratedPostColumns.slug,
+          featuredAt: posts.featuredAt,
+          threadPosition: threadPosition(),
+          threadPostCount: threadPostCount(),
+          previousPostId: sql<
+            string | null
+          >`LAG(${posts.id}) OVER (${inThreadOrder()})`.as("previous_post_id"),
+          previousFeaturedAt: sql<
+            number | null
+          >`LAG(${posts.featuredAt}) OVER (${inThreadOrder()})`.as(
+            "previous_featured_at",
+          ),
+        })
+        .from(posts)
+        .where(inRequestedThreads)
+        .as("featured_thread_gap_candidate");
+      const gapQuery = db
+        .select({
+          id: gapCandidates.id,
+          threadId: gapCandidates.threadId,
+          slug: gapCandidates.slug,
+          previousPostId: gapCandidates.previousPostId,
+        })
+        .from(gapCandidates)
+        .where(
+          and(
+            // Hidden: not the Root, not Featured, not the last Post...
+            ne(gapCandidates.id, gapCandidates.threadId),
+            isNull(gapCandidates.featuredAt),
+            sql`${gapCandidates.threadPosition} < ${gapCandidates.threadPostCount} - 1`,
+            // ...right after a shown Post. Nothing follows the last one, so
+            // that is the Root or a Featured Post.
+            or(
+              eq(gapCandidates.previousPostId, gapCandidates.threadId),
+              isNotNull(gapCandidates.previousFeaturedAt),
+            ),
+          ),
+        );
+
+      const [rows, gapRows] = await Promise.all([shownQuery, gapQuery]);
+
       const hydratedById = new Map(
-        hydratedPosts.map((post) => [post.id, post]),
+        hydratePosts(
+          rows.map(
+            ({ threadPosition: _position, threadPostCount: _count, ...row }) =>
+              row,
+          ),
+        ).map((post) => [post.id, post]),
       );
 
       for (const row of rows) {
@@ -4320,12 +4972,23 @@ export function createPostService(
         const thread = result.get(row.threadId) ?? {
           posts: [],
           featuredPostIds: [],
+          gapTargets: [],
         };
         thread.posts.push({ post, position: row.threadPosition });
         if (row.featuredAt !== null) {
           thread.featuredPostIds.push(row.id);
         }
         result.set(row.threadId, thread);
+      }
+
+      for (const row of gapRows) {
+        const thread = result.get(row.threadId);
+        if (!row.slug || !thread || !row.previousPostId) continue;
+        thread.gapTargets.push({
+          id: row.id,
+          slug: row.slug,
+          afterPostId: row.previousPostId,
+        });
       }
 
       return result;
@@ -4407,103 +5070,15 @@ export function createPostService(
       collectionIds,
       options = {},
     ) {
-      const { sortOrder, sortedThreads } = buildCollectionThreadSortQuery(
+      const { sortedThreads, keys } = buildCollectionThreadSort(
         collectionIds,
         options,
       );
-      let cursorCondition: SQL<unknown> | undefined;
 
-      if (options.cursor) {
-        const cursorRows = await db
-          .select()
-          .from(sortedThreads)
-          .where(eq(sortedThreads.threadId, options.cursor))
-          .limit(1);
-        const cursorRow = cursorRows[0];
-        if (!cursorRow) return [];
-
-        const pinnedKey: CursorSortKey = {
-          direction: "desc",
-          expr: sortedThreads.collectionPinnedAt,
-          value: cursorRow.collectionPinnedAt,
-        };
-
-        cursorCondition =
-          sortOrder === "oldest"
-            ? buildLexicographicCursorCondition([
-                pinnedKey,
-                {
-                  direction: "asc",
-                  expr: sortedThreads.publishedAt,
-                  value: cursorRow.publishedAt,
-                },
-                {
-                  direction: "asc",
-                  expr: sortedThreads.threadId,
-                  value: cursorRow.threadId,
-                },
-              ])
-            : sortOrder === "rating_desc"
-              ? buildLexicographicCursorCondition([
-                  pinnedKey,
-                  {
-                    direction: "desc",
-                    expr: sortedThreads.ratingPresence,
-                    value: cursorRow.ratingPresence,
-                  },
-                  {
-                    direction: "desc",
-                    expr: sortedThreads.ratingValue,
-                    value: cursorRow.ratingValue,
-                  },
-                  {
-                    direction: "desc",
-                    expr: sortedThreads.threadActivityAt,
-                    value: cursorRow.threadActivityAt,
-                  },
-                  {
-                    direction: "desc",
-                    expr: sortedThreads.threadId,
-                    value: cursorRow.threadId,
-                  },
-                ])
-              : buildLexicographicCursorCondition([
-                  pinnedKey,
-                  {
-                    direction: "desc",
-                    expr: sortedThreads.threadActivityAt,
-                    value: cursorRow.threadActivityAt,
-                  },
-                  {
-                    direction: "desc",
-                    expr: sortedThreads.threadId,
-                    value: cursorRow.threadId,
-                  },
-                ]);
-      }
-
-      const baseQuery = db.select().from(sortedThreads).where(cursorCondition);
-
-      let query =
-        sortOrder === "oldest"
-          ? baseQuery.orderBy(
-              desc(sortedThreads.collectionPinnedAt),
-              asc(sortedThreads.publishedAt),
-              asc(sortedThreads.threadId),
-            )
-          : sortOrder === "rating_desc"
-            ? baseQuery.orderBy(
-                desc(sortedThreads.collectionPinnedAt),
-                desc(sortedThreads.ratingPresence),
-                desc(sortedThreads.ratingValue),
-                desc(sortedThreads.threadActivityAt),
-                desc(sortedThreads.threadId),
-              )
-            : baseQuery.orderBy(
-                desc(sortedThreads.collectionPinnedAt),
-                desc(sortedThreads.threadActivityAt),
-                desc(sortedThreads.threadId),
-              );
+      let query = db
+        .select({ threadId: sortedThreads.threadId })
+        .from(sortedThreads)
+        .orderBy(...listOrderBy(keys));
 
       if (options.limit !== undefined) {
         query = query.limit(options.limit) as typeof query;
@@ -4516,16 +5091,52 @@ export function createPostService(
       return rows.map((row) => row.threadId);
     },
 
-    async listCollectionThreadRootsForCollections(collectionIds, options = {}) {
-      const rootIds = await this.listCollectionThreadRootIdsForCollections(
-        collectionIds,
-        options,
-      );
+    async listCollectionThreadRootPage(
+      collectionIds,
+      options,
+      { cursor, limit },
+    ) {
+      const sort = buildCollectionThreadSort(collectionIds, options);
+      const { sortedThreads, keys } = sort;
+      // An empty cursor means the first page, as in `listPage`.
+      const after = cursor
+        ? buildListKeysetCondition(
+            keys,
+            resolveCollectionThreadCursor(cursor, sort),
+          )
+        : undefined;
+
+      // One row past the page says whether another page exists.
+      const rows = await db
+        .select({
+          threadId: sortedThreads.threadId,
+          sortKey: listSortKeyFields(keys),
+        })
+        .from(sortedThreads)
+        .where(after)
+        .orderBy(...listOrderBy(keys))
+        .limit(limit + 1);
+
+      const pageRows = rows.slice(0, limit);
+      // From the last row read, not the last root hydrated, as in `listPage`.
+      const lastRow = pageRows[pageRows.length - 1];
+      const nextCursor =
+        rows.length > limit && lastRow
+          ? encodePostListCursor(
+              sort.mode,
+              readListSortKeyValues(keys, lastRow.sortKey),
+            )
+          : null;
+
+      const rootIds = pageRows.map((row) => row.threadId);
       const rootsById = await hydratePostsById(rootIds);
-      return rootIds.flatMap((rootId) => {
-        const root = rootsById.get(rootId);
-        return root ? [root] : [];
-      });
+      return {
+        posts: rootIds.flatMap((rootId) => {
+          const root = rootsById.get(rootId);
+          return root ? [root] : [];
+        }),
+        nextCursor,
+      };
     },
 
     async listCollectionFeedEntries(collectionId, options = {}) {
@@ -4606,13 +5217,13 @@ export function createPostService(
           );
         }
         return db
-          .select()
+          .select(hydratedPostColumns)
           .from(posts)
           .where(and(...conditions))
-          .orderBy(posts.threadId, posts.createdAt, posts.id);
+          .orderBy(posts.threadId, ...threadOrder());
       });
 
-      for (const post of await hydratePosts(rows)) {
+      for (const post of hydratePosts(rows)) {
         const thread = result.get(post.threadId);
         if (thread) {
           thread.push(post);
@@ -4642,7 +5253,7 @@ export function createPostService(
             ...(options?.includeDrafts ? [] : [eq(posts.status, "published")]),
           ),
         )
-        .orderBy(posts.threadId, desc(posts.createdAt), desc(posts.id));
+        .orderBy(posts.threadId, ...threadOrder("desc"));
 
       for (const row of rows) {
         if (!result.has(row.threadId)) {
@@ -4652,19 +5263,16 @@ export function createPostService(
       return result;
     },
 
-    async getDistinctYears(filters = {}) {
-      const axis = timeAxisColumn(filters);
-      const conditions = [...buildFilterConditions(filters), isNotNull(axis)];
-      const publishedYearExpr = buildYearExpr(axis);
+    async getDistinctYears(filters, timeZone) {
+      const years = await calendarPeriodsOf(filters, "year", timeZone);
+      if (!years) return [];
 
       const rows = await db
-        .select({
-          year: publishedYearExpr.as("year"),
-        })
+        .select({ year: years.expr.as("year") })
         .from(posts)
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .groupBy(publishedYearExpr)
-        .orderBy(desc(publishedYearExpr));
+        .where(years.where)
+        .groupBy(years.expr)
+        .orderBy(desc(years.expr));
 
       return rows.map((r) => parseInt(r.year, 10));
     },

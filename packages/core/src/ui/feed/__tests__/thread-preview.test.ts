@@ -7,10 +7,8 @@ import { createI18n } from "../../../i18n/i18n.js";
 import type { PostView, TimelineItemView } from "../../../types.js";
 import { CuratedThreadPreview } from "../CuratedThreadPreview.js";
 import { ThreadPreview } from "../ThreadPreview.js";
-import {
-  getThreadPreviewState,
-  threadContextAssumesOverflow,
-} from "../thread-preview-state.js";
+import { foldReplyWindows } from "../../../lib/thread-fold.js";
+import { threadContextAssumesOverflow } from "../thread-preview-state.js";
 
 function createPostView(overrides: Partial<PostView> = {}): PostView {
   return {
@@ -57,7 +55,7 @@ function toggleTag(html: string): string {
   );
 }
 
-describe("getThreadPreviewState", () => {
+describe("thread preview fold", () => {
   it("has no hidden posts for a 2-post thread", () => {
     const latestReply = createPostView({
       id: "post-2",
@@ -65,16 +63,16 @@ describe("getThreadPreviewState", () => {
       slug: "post-2",
     });
 
-    expect(
-      getThreadPreviewState({
-        leadingReplies: [latestReply],
-        trailingReplies: [],
-        latestReply,
-        totalReplyCount: 1,
-      }),
-    ).toEqual({
-      hiddenCount: 0,
+    const fold = foldReplyWindows({
+      leadingReplies: [latestReply],
+      trailingReplies: [],
+      latestReply,
+      nextReply: null,
+      totalReplyCount: 1,
     });
+    expect(fold.hiddenCount).toBe(0);
+    // The only reply is the hero, so the leading window gives it up.
+    expect(fold.leadingReplies).toEqual([]);
   });
 
   it("has no hidden posts for a 6-post thread when all slots are visible", () => {
@@ -105,15 +103,14 @@ describe("getThreadPreviewState", () => {
     });
 
     expect(
-      getThreadPreviewState({
+      foldReplyWindows({
         leadingReplies: [firstReply, secondReply],
         trailingReplies: [antepenultimateReply, penultimateReply],
         latestReply,
+        nextReply: antepenultimateReply,
         totalReplyCount: 5,
       }),
-    ).toEqual({
-      hiddenCount: 0,
-    });
+    ).toMatchObject({ hiddenCount: 0, firstHiddenReply: null });
   });
 
   it("counts hidden posts for longer threads after deduping visible slots", () => {
@@ -144,15 +141,14 @@ describe("getThreadPreviewState", () => {
     });
 
     expect(
-      getThreadPreviewState({
+      foldReplyWindows({
         leadingReplies: [firstReply, secondReply],
         trailingReplies: [antepenultimateReply, penultimateReply],
         latestReply,
+        nextReply: createPostView({ id: "post-4" }),
         totalReplyCount: 8,
       }),
-    ).toEqual({
-      hiddenCount: 3,
-    });
+    ).toMatchObject({ hiddenCount: 3, firstHiddenReply: { id: "post-4" } });
   });
 
   it("keeps thread preview items shrinkable within the grid track", () => {
@@ -208,6 +204,7 @@ describe("getThreadPreviewState", () => {
         leadingReplies: [secondReply],
         trailingReplies: [],
         latestReply,
+        gapHref: null,
         totalReplyCount: 3,
       }),
     );
@@ -252,6 +249,7 @@ describe("getThreadPreviewState", () => {
           bodyHtml: "<p>Latest</p>",
           isLastInThread: true,
         }),
+        gapHref: "/post-3",
         totalReplyCount: 4,
       }),
     );
@@ -280,6 +278,7 @@ describe("getThreadPreviewState", () => {
         leadingReplies: [reply(2), reply(3)],
         trailingReplies: [reply(6), reply(7)],
         latestReply: reply(8),
+        gapHref: "/post-4",
         totalReplyCount: 7,
       }),
     );
@@ -316,6 +315,7 @@ describe("getThreadPreviewState", () => {
           bodyHtml: "<p>Latest</p>",
           isLastInThread: true,
         }),
+        gapHref: null,
         totalReplyCount: 1,
       }),
     );
@@ -346,6 +346,7 @@ describe("getThreadPreviewState", () => {
           bodyHtml: "<p>Latest</p>",
           isLastInThread: true,
         }),
+        gapHref: null,
         totalReplyCount: 1,
       }),
     );
@@ -378,6 +379,7 @@ describe("getThreadPreviewState", () => {
           bodyHtml: "<p>Latest</p>",
           isLastInThread: true,
         }),
+        gapHref: null,
         totalReplyCount: 2,
       }),
     );
@@ -432,8 +434,9 @@ describe("getThreadPreviewState", () => {
 
   // The gap target comes from the service, one rank past the leading window.
   // It can be missing where the count and the fetch disagree — a reply
-  // unpublished between them — and the link still has to go somewhere.
-  it("falls back to the latest reply when no gap target arrives", () => {
+  // unpublished between them. The feed then leaves the gap out, and so does
+  // the site: no post on screen stands in for the ones hidden.
+  it("leaves the gap out when no gap target arrives", () => {
     const html = renderWithI18n(() =>
       ThreadPreview({
         rootPost: createPostView({ bodyHtml: "<p>Root</p>" }),
@@ -453,13 +456,13 @@ describe("getThreadPreviewState", () => {
           bodyHtml: "<p>Latest</p>",
           isLastInThread: true,
         }),
+        gapHref: null,
         totalReplyCount: 3,
       }),
     );
 
-    expect(html).toMatch(
-      /<a[^>]*\bhref="\/post-5"[^>]*\bclass="thread-gap-link"|<a[^>]*\bclass="thread-gap-link"[^>]*\bhref="\/post-5"/,
-    );
+    expect(html).toContain("<p>Penultimate</p>");
+    expect(html).not.toContain("thread-item-gap");
   });
 
   it("renders curated thread previews without a collapsible context shell", () => {
@@ -471,7 +474,9 @@ describe("getThreadPreviewState", () => {
         curatedThread: {
           rootPost: post,
           showContextRatings: false,
-          segments: [{ post, hiddenBeforeCount: 0, highlighted: true }],
+          segments: [
+            { post, hiddenBeforeCount: 0, gapHref: null, highlighted: true },
+          ],
         },
       }),
     );
@@ -493,6 +498,7 @@ describe("getThreadPreviewState", () => {
         {
           post: articlePost,
           hiddenBeforeCount: 0,
+          gapHref: null,
           highlighted: true,
         },
       ],
@@ -532,8 +538,18 @@ describe("getThreadPreviewState", () => {
           rootPost: root,
           showContextRatings: true,
           segments: [
-            { post: root, hiddenBeforeCount: 0, highlighted: false },
-            { post: reply, hiddenBeforeCount: 0, highlighted: true },
+            {
+              post: root,
+              hiddenBeforeCount: 0,
+              gapHref: null,
+              highlighted: false,
+            },
+            {
+              post: reply,
+              hiddenBeforeCount: 0,
+              gapHref: null,
+              highlighted: true,
+            },
           ],
         },
       }),
@@ -565,8 +581,18 @@ describe("getThreadPreviewState", () => {
           rootPost: featured,
           showContextRatings: false,
           segments: [
-            { post: featured, hiddenBeforeCount: 0, highlighted: true },
-            { post: context, hiddenBeforeCount: 0, highlighted: false },
+            {
+              post: featured,
+              hiddenBeforeCount: 0,
+              gapHref: null,
+              highlighted: true,
+            },
+            {
+              post: context,
+              hiddenBeforeCount: 0,
+              gapHref: null,
+              highlighted: false,
+            },
           ],
         },
       }),
@@ -575,6 +601,89 @@ describe("getThreadPreviewState", () => {
     expect(html.match(/class="post-rating"/g)).toHaveLength(1);
     expect(html).toContain("thread-item-curated");
     expect(html).toContain("thread-item-context");
+  });
+
+  it("points a curated gap at the first post it hides", () => {
+    const root = createPostView({
+      id: "post-root",
+      slug: "post-root",
+      permalink: "/post-root",
+    });
+    const featured = createPostView({
+      id: "post-4",
+      slug: "post-4",
+      permalink: "/post-4",
+      isLastInThread: true,
+    });
+
+    const html = renderWithI18n(() =>
+      CuratedThreadPreview({
+        curatedThread: {
+          rootPost: root,
+          showContextRatings: false,
+          segments: [
+            {
+              post: root,
+              hiddenBeforeCount: 0,
+              gapHref: null,
+              highlighted: false,
+            },
+            {
+              post: featured,
+              hiddenBeforeCount: 3,
+              gapHref: "/post-1",
+              highlighted: true,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(html).toContain(
+      '<a href="/post-1" class="thread-gap-link">3 hidden posts</a>',
+    );
+  });
+
+  // The target is read beside the posts shown, so it can go missing — a post
+  // deleted between the two reads. No other post stands in for it.
+  it("leaves a curated gap out when no target arrives", () => {
+    const root = createPostView({
+      id: "post-root",
+      slug: "post-root",
+      permalink: "/post-root",
+    });
+    const featured = createPostView({
+      id: "post-4",
+      slug: "post-4",
+      permalink: "/post-4",
+      isLastInThread: true,
+    });
+
+    const html = renderWithI18n(() =>
+      CuratedThreadPreview({
+        curatedThread: {
+          rootPost: root,
+          showContextRatings: false,
+          segments: [
+            {
+              post: root,
+              hiddenBeforeCount: 0,
+              gapHref: null,
+              highlighted: false,
+            },
+            {
+              post: featured,
+              hiddenBeforeCount: 1,
+              gapHref: null,
+              highlighted: true,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(html).not.toContain("thread-gap-link");
+    expect(html).toContain("thread-item-curated");
   });
 });
 

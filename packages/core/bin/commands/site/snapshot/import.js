@@ -1,16 +1,10 @@
-import { existsSync } from "node:fs";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { Readable } from "node:stream";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { unzipSync } from "fflate";
+import { extractZipFile } from "../../../lib/zip-archive.js";
 import { executeD1, queryD1 } from "../../../lib/d1-query.js";
 import { loadNodeRuntime } from "../../../lib/load-node-runtime.js";
 import { openNodeDatabase } from "../../../lib/node-database.js";
@@ -18,6 +12,9 @@ import { deleteR2Object, uploadR2Object } from "../../../lib/r2-query.js";
 import {
   assertSnapshotDialectMatches,
   assertSnapshotMeta,
+  assertSnapshotSchemaInstalled,
+  buildMediaProviderSql,
+  DEFER_FOREIGN_KEYS_SQL,
   buildReplaceSql,
   buildSnapshotStorageQuery,
   collectSnapshotObjects,
@@ -58,11 +55,13 @@ async function createNodeImportContext() {
   // the current site, which (a) is redundant with the bin-level resolveCliSite
   // call below and (b) prints a generic "/setup first" error when the
   // snapshot's own error path is more informative.
-  const { createStorageDriver } = await loadNodeRuntime();
+  const { createStorageDriver, getConfiguredStorageDriver } =
+    await loadNodeRuntime();
   const storage = createStorageDriver(nodeDatabase.bindings);
 
   return {
     dialect: nodeDatabase.database.dialect,
+    storageProvider: getConfiguredStorageDriver(nodeDatabase.bindings),
     async close() {
       await nodeDatabase.close();
     },
@@ -77,8 +76,7 @@ async function createNodeImportContext() {
         throw new Error("Snapshot import requires configured storage.");
       }
 
-      const bytes = new Uint8Array(await readFile(filePath));
-      await storage.put(key, bytes, {
+      await storage.put(key, Readable.toWeb(createReadStream(filePath)), {
         contentType: contentType || undefined,
       });
     },
@@ -96,6 +94,8 @@ function createD1ImportContext(runtime, values) {
 
   return {
     dialect: "sqlite",
+    // Objects go up through the wrangler R2 binding below.
+    storageProvider: "r2",
     async close() {},
     async query(sql) {
       return queryD1(sql, runtime, wranglerOptions);
@@ -141,14 +141,7 @@ async function materializeSnapshotInput(inputPath) {
   }
 
   const outputDir = await mkdtemp(join(tmpdir(), "jant-site-snapshot-import-"));
-  const bytes = new Uint8Array(await readFile(inputPath));
-  const files = unzipSync(bytes);
-
-  for (const [relativePath, data] of Object.entries(files)) {
-    const absolutePath = join(outputDir, relativePath);
-    await mkdir(dirname(absolutePath), { recursive: true });
-    await writeFile(absolutePath, data);
-  }
+  await extractZipFile(inputPath, outputDir);
 
   return {
     cleanup: async () => {
@@ -247,7 +240,7 @@ export async function run(argv) {
     console.log("                          missing key list.");
     console.log("");
     console.log(
-      "`.env.node` next to your project (or in packages/core/) is auto-loaded.",
+      "`.env` in the current directory is read, or the file JANT_ENV_FILE names.",
     );
     console.log(
       "If DATABASE_URL or DATA_DIR is then set and no runtime flag is passed,",
@@ -281,6 +274,7 @@ export async function run(argv) {
   try {
     const meta = await readSnapshotJson(materialized.rootDir, "meta.json");
     assertSnapshotMeta(meta);
+    assertSnapshotSchemaInstalled(meta);
     assertSnapshotDialectMatches(meta, context.dialect);
     const explicitRemap = values["remap-site"] === true;
     const snapshotSite = getSnapshotBootstrapSite(meta);
@@ -288,7 +282,6 @@ export async function run(argv) {
 
     const { site: targetSite } = await resolveCliSite(context, {
       env: process.env,
-      createIfMissing: false,
       host: values.host,
       pathPrefix: values["path-prefix"],
       site: values.site,
@@ -402,7 +395,15 @@ export async function run(argv) {
       );
     }
 
-    await context.execute(`${buildReplaceSql(targetSite.id)}\n${dbSql}`);
+    await context.execute(
+      [
+        // The PRAGMA is SQLite's. Node reports Postgres as "pg".
+        ...(context.dialect === "pg" ? [] : [DEFER_FOREIGN_KEYS_SQL]),
+        buildReplaceSql(targetSite.id),
+        dbSql,
+        buildMediaProviderSql(targetSite.id, context.storageProvider),
+      ].join("\n"),
+    );
 
     const keysToDelete = [...currentKeys].filter(
       (key) => !snapshotKeys.has(key),

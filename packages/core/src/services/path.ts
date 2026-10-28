@@ -6,7 +6,17 @@
  * slash (for example: "hello-world" or "collections/reading+tools").
  */
 
-import { and, asc, eq, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import { type Database, batchQuery } from "../db/index.js";
 import {
   sqliteSchemaBundle,
@@ -15,7 +25,11 @@ import {
 import { createEntityId } from "../lib/ids.js";
 import { now } from "../lib/time.js";
 import { ConflictError } from "../lib/errors.js";
-import { normalizePath } from "../lib/url.js";
+import {
+  normalizePath,
+  normalizeRedirectTarget,
+  redirectTargetPath,
+} from "../lib/url.js";
 import type { PathKind, PathRecord, Status } from "../types.js";
 
 export interface ResolvedPath extends PathRecord {
@@ -83,6 +97,17 @@ export interface PathService {
    * not have its feed identity reassigned to the newer one.
    */
   getPostAliases(postIds: string[]): Promise<Map<string, string[]>>;
+  /**
+   * Custom paths registered for each Collection, oldest first, each with a
+   * leading slash, as {@link getPostAliases} gives them for Posts.
+   */
+  getCollectionAliases(collectionIds: string[]): Promise<Map<string, string[]>>;
+  /**
+   * Custom URLs that stand on their own rather than naming a post or a
+   * collection: redirects to another path, and legacy archive views. Oldest
+   * first.
+   */
+  listStandalonePaths(): Promise<PathRecord[]>;
   listNavigableItems(): Promise<NavigableItem[]>;
   /**
    * Find registered paths that a URL segment would shadow: the segment itself
@@ -163,7 +188,7 @@ export function createPathService(
           collectionId: input.collectionId ?? null,
           smartCollectionId: input.smartCollectionId ?? null,
           redirectToPath: input.redirectToPath
-            ? normalizeStoredPath(input.redirectToPath)
+            ? normalizeRedirectTarget(input.redirectToPath)
             : null,
           redirectType: input.redirectType ?? null,
           archiveQuery: input.archiveQuery ?? null,
@@ -226,7 +251,10 @@ export function createPathService(
         !seen.has(current.path)
       ) {
         seen.add(current.path);
-        current = await this.resolve(current.redirectToPath);
+        // A redirect off the site names nothing here.
+        const next = redirectTargetPath(current.redirectToPath);
+        if (next === null) return null;
+        current = await this.resolve(next);
       }
 
       // A redirect chain that loops, or ends on another redirect with nothing
@@ -489,6 +517,53 @@ export function createPathService(
         .where(
           and(eq(pathRegistry.siteId, siteId), eq(pathRegistry.postId, postId)),
         );
+    },
+
+    async listStandalonePaths() {
+      const rows = await db
+        .select()
+        .from(pathRegistry)
+        .where(
+          and(
+            eq(pathRegistry.siteId, siteId),
+            inArray(pathRegistry.kind, ["redirect", "archive"]),
+            isNull(pathRegistry.postId),
+            isNull(pathRegistry.collectionId),
+            isNull(pathRegistry.smartCollectionId),
+          ),
+        )
+        .orderBy(asc(pathRegistry.createdAt), asc(pathRegistry.id));
+      return rows.map(toPathRecord);
+    },
+
+    async getCollectionAliases(collectionIds) {
+      if (collectionIds.length === 0) return new Map<string, string[]>();
+
+      return batchQuery(collectionIds, async (chunk) => {
+        const result = new Map<string, string[]>();
+        const rows = await db
+          .select({
+            collectionId: pathRegistry.collectionId,
+            path: pathRegistry.path,
+          })
+          .from(pathRegistry)
+          .where(
+            and(
+              eq(pathRegistry.siteId, siteId),
+              inArray(pathRegistry.collectionId, chunk),
+              eq(pathRegistry.kind, "alias"),
+            ),
+          )
+          .orderBy(asc(pathRegistry.createdAt), asc(pathRegistry.id));
+
+        for (const row of rows) {
+          if (!row.collectionId) continue;
+          const existing = result.get(row.collectionId) ?? [];
+          existing.push(`/${row.path}`);
+          result.set(row.collectionId, existing);
+        }
+        return result;
+      });
     },
 
     async getPostAliases(postIds) {

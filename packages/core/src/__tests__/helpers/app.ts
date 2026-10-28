@@ -10,7 +10,10 @@ import type { AppVariables } from "../../types/app-context.js";
 import { createTestDatabase, DEFAULT_TEST_SITE_ID } from "./db.js";
 import type { Database } from "../../db/index.js";
 import type BetterSqlite3 from "better-sqlite3";
-import { errorHandler } from "../../middleware/error-handler.js";
+import {
+  errorHandler,
+  notFoundHandler,
+} from "../../middleware/error-handler.js";
 import { createI18n } from "../../i18n/i18n.js";
 import { DEFAULT_APP_PORT } from "../../lib/env.js";
 import { createMemoryRateLimiter } from "../../lib/rate-limit-memory.js";
@@ -45,6 +48,10 @@ interface TestAppOptions {
   telegramWebhookSecret?: string;
   /** RSS publication delay; defaults to zero in general route tests. */
   rssPublishDelaySeconds?: number;
+  /** `SITE_PATH_PREFIX`, such as `/blog`; none by default. */
+  sitePathPrefix?: string;
+  /** More environment bindings, as an operator would set them. */
+  env?: Partial<Record<keyof Bindings, string>>;
 }
 
 /**
@@ -74,13 +81,14 @@ export function createTestApp(options: TestAppOptions = {}) {
 
   // Global error handler: maps DomainError → HTTP responses
   app.onError(errorHandler);
+  app.notFound(notFoundHandler);
 
   // Inject env bindings and services middleware
   app.use("*", async (c, next) => {
     // Provide mock env bindings so c.env.* works in route handlers
     c.env = {
       SITE_ORIGIN: `http://localhost:${DEFAULT_APP_PORT}`,
-      SITE_PATH_PREFIX: "",
+      SITE_PATH_PREFIX: options.sitePathPrefix ?? "",
       DEMO_MODE: options.demoMode ? "true" : "false",
       INTERNAL_ADMIN_TOKEN: options.internalAdminToken,
       HOSTED_CONTROL_PLANE_SSO_SECRET: options.hostedControlPlaneSsoSecret,
@@ -94,6 +102,7 @@ export function createTestApp(options: TestAppOptions = {}) {
         schema: sqliteSchemaBundle,
       },
       SITE_RESOLUTION_MODE: options.siteResolutionMode,
+      ...options.env,
     } as AppVariables["services"] extends never ? never : Bindings;
 
     c.set("services", services as AppVariables["services"]);

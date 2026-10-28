@@ -4,9 +4,9 @@
 
 适用变更范围：
 
-- `sites/demo` 下的 `AGENTS.md`、`.agents/skills/`、`.claude/`
+- `sites/demo` 下的 `AGENTS.md`、`CLAUDE.md`
 - `packages/create-jant` 对模板和脚手架的同步逻辑
-- `/api/posts`、`/api/upload`、`/api/uploads`、`/api/attachments`、`/api/settings`、`/api/search`、`/api/mcp`
+- `/api/posts`、`/api/upload`、`/api/uploads`、`/api/media`、`/api/attachments`、`/api/settings`、`/api/search`、`/api/mcp`
 - 生成项目里的 `examples/agent-content-automation/`
 
 目标不是每次都跑满所有步骤，而是按改动范围选一层或多层验证。
@@ -40,7 +40,7 @@ pnpm exec prettier --write \
 ### 2.1 同步模板
 
 ```bash
-pnpm --filter create-jant prepublishOnly
+pnpm --filter create-jant run prepack
 ```
 
 这一步会把 `sites/demo` 同步到 `packages/create-jant/template/`。
@@ -48,9 +48,10 @@ pnpm --filter create-jant prepublishOnly
 ### 2.2 生成一个临时项目
 
 ```bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
 TMP_DIR=$(mktemp -d /tmp/jant-agent-e2e.XXXXXX)
 cd "$TMP_DIR"
-node /Users/green/project/jant/1/packages/create-jant/dist/index.js site --no-git -y
+node "$REPO_ROOT/packages/create-jant/dist/index.js" site --no-git -y
 cd site
 ```
 
@@ -63,9 +64,7 @@ cd site
 
 ```bash
 find . -maxdepth 3 \
-  \( -path '*/.agents/*' \
-  -o -path '*/.claude/*' \
-  -o -path '*/examples/agent-content-automation/*' \
+  \( -path '*/examples/agent-content-automation/*' \
   -o -name 'AGENTS.md' \
   -o -name 'CLAUDE.md' \) | sort
 ```
@@ -74,15 +73,10 @@ find . -maxdepth 3 \
 
 - `AGENTS.md`
 - `CLAUDE.md`
-- `.agents/skills/`
-- `.claude/skills/`
 - `examples/agent-content-automation/README.md`
 
-确认 `.claude/skills` 是复制目录，不是 symlink：
-
-```bash
-test ! -L ./.claude/skills && echo ".claude/skills is copied"
-```
+模板不再带 `.agents/skills/` 和 `.claude/skills/`（0.8.0 起）：它们是复制进用户仓库的 API 与 CLI 说明，
+升级后会过期。`AGENTS.md` 改为指向运行中站点的 `/skill.md`、`npx jant --help` 和文档站。
 
 ### 2.4 验证未发布 core 改动时切到本地包
 
@@ -91,7 +85,7 @@ test ! -L ./.claude/skills && echo ".claude/skills is copied"
 先在仓库根目录把本地包构建到最新：
 
 ```bash
-cd /Users/green/project/jant/1
+cd "$REPO_ROOT"
 pnpm --filter @jant/core build
 ```
 
@@ -99,7 +93,7 @@ pnpm --filter @jant/core build
 
 ```bash
 cd "$TMP_DIR/site"
-pnpm add @jant/core@file:/Users/green/project/jant/1/packages/core
+pnpm add "@jant/core@file:$REPO_ROOT/packages/core"
 ```
 
 验证安装结果：
@@ -179,7 +173,7 @@ curl -X POST "$JANT_URL/api/upload" \
   -F "file=@./path/to/photo.webp" \
   -F "alt=Cover image"
 
-curl "$JANT_URL/api/upload?mimePrefix=image/" \
+curl "$JANT_URL/api/media?mimePrefix=image/" \
   -H "Authorization: Bearer $JANT_API_TOKEN"
 ```
 
@@ -189,7 +183,7 @@ curl "$JANT_URL/api/upload?mimePrefix=image/" \
 - `PUT /api/settings` 返回更新后的 `settings`
 - `GET /api/search` 返回合法 JSON，而不是认证或解析错误
 - `POST /api/upload` 返回 `med_*`
-- `GET /api/upload?mimePrefix=image/` 能看到刚上传的文件
+- `GET /api/media?mimePrefix=image/` 能看到刚上传的文件
 
 ### 3.3 额外的裸 API 检查
 
@@ -291,7 +285,7 @@ pnpm exec vitest run \
 ### 4.3 模板回归
 
 ```bash
-pnpm --filter create-jant prepublishOnly
+pnpm --filter create-jant run prepack
 ```
 
 如果你想把“生成模板 + 安装 + build/typecheck”整条链一起覆盖，再跑：
@@ -315,8 +309,8 @@ mise run check-template
 
 如果这次改动确实碰到了 agent automation 面：
 
-1. `pnpm --filter create-jant prepublishOnly`
-2. 生成一个临时项目并检查 `AGENTS.md`、`.agents/skills`、`.claude/skills`、`examples/agent-content-automation/`
+1. `pnpm --filter create-jant run prepack`
+2. 生成一个临时项目并检查 `AGENTS.md`、`CLAUDE.md`、`examples/agent-content-automation/`
 3. 至少跑一次 `curl -X POST $JANT_URL/api/posts ...` 验证内容自动化
 4. 如果碰到上传或 MCP，额外跑 `curl -X POST $JANT_URL/api/upload ...` 和 `/api/mcp initialize + tools/call`
 5. 跑定向 Vitest

@@ -67,37 +67,37 @@ The repo's bundled `compose.yml` puts local data at:
 - `data/jant.sqlite`
 - `data/media/`
 
-Archiving a running SQLite file directly can produce an inconsistent snapshot. Stop the service before packing:
+Archiving a running SQLite file directly can produce an inconsistent snapshot. Stop the service before packing. SQLite writes to `jant.sqlite-wal` first and moves those writes into `jant.sqlite` when Jant closes the database, which a stop does. If the process was killed instead, the latest writes are still in `jant.sqlite-wal`, so the archive takes every `jant.sqlite*` file:
 
 ```bash
 docker compose down
 mkdir -p backups
-tar -czf ./backups/jant-full-$(date +%F).tar.gz data/jant.sqlite data/media
+tar -czf ./backups/jant-full-$(date +%F).tar.gz data/jant.sqlite* data/media
 docker compose up -d
 ```
 
-Clean the old data before restoring — `tar -xzf` only overwrites same-named files, so leftover objects in `data/media/` would survive and turn into stale data:
+Clean the old data before restoring. `tar -xzf` only overwrites same-named files: leftover objects in `data/media/` would survive and turn into stale data, and a leftover `jant.sqlite-wal` would be applied on top of the restored database and corrupt it:
 
 ```bash
 docker compose down
-rm -rf data/jant.sqlite data/media
+rm -rf data/jant.sqlite* data/media
 tar -xzf ./backups/jant-full-2026-03-30.tar.gz
 docker compose up -d
 ```
 
 ### Bare Node + SQLite + local media
 
-In the default layout, the SQLite file lives at `DATA_DIR` (default `./data`) and the media directory at `LOCAL_STORAGE_PATH` (default `<DATA_DIR>/media`). Stop the process manager, then archive whatever paths your config actually uses:
+In the default layout, the SQLite file lives at `DATA_DIR` (default `./data`) and the media directory at `LOCAL_STORAGE_PATH` (default `<DATA_DIR>/media`). Stop the process manager, then archive whatever paths your config actually uses, with every `jant.sqlite*` file as above:
 
 ```bash
 set -a; source .env; set +a   # load DATA_DIR / LOCAL_STORAGE_PATH
 mkdir -p backups
 tar -czf "./backups/jant-full-$(date +%F).tar.gz" \
-  "${DATA_DIR:-./data}/jant.sqlite" \
+  "${DATA_DIR:-./data}"/jant.sqlite* \
   "${LOCAL_STORAGE_PATH:-${DATA_DIR:-./data}/media}"
 ```
 
-If `DATABASE_URL` overrides the SQLite path explicitly (for example `DATABASE_URL=file:/var/lib/jant/custom.sqlite`), archive whatever path the URL points at.
+If `DATABASE_URL` overrides the SQLite path explicitly (for example `DATABASE_URL=file:/var/lib/jant/custom.sqlite`), archive whatever path the URL points at, along with the `-wal` file next to it. Before restoring, delete the database file and its `-wal` and `-shm` files, as in the Docker steps.
 
 ### Node + Postgres
 
@@ -172,7 +172,11 @@ npx jant site snapshot export --remote --config ./wrangler.toml --output ./backu
 
 ### Cloudflare
 
-1. **Database**: load the SQL back with `wrangler d1 execute <db> --file=./backups/jant-db-*.sql --remote`, or roll back with D1 time-travel; for snapshots, use `npx jant site snapshot import --remote --replace`.
+1. **Database**: within D1's time-travel window, roll the database back to a moment before the loss with `npx wrangler d1 time-travel restore <db> --timestamp=<time>`. For a snapshot, use `npx jant site snapshot import --remote --replace`. A SQL file from `db export` holds rows, not tables, so it goes into a new, empty database:
+   1. Create one with `npx wrangler d1 create <db>-restored`, and put its `database_id` in `wrangler.toml`.
+   2. Create its tables with `npx jant migrate --remote`, using the `@jant/core` version that wrote the export.
+   3. Load the rows with `npx wrangler d1 execute <db>-restored --remote --file=./backups/jant-db-<date>.sql`.
+   4. Deploy, as in step 3, so the Worker uses the new database.
 2. **Objects**: refill missing objects from R2 versioning or your offline copy.
 3. **Deploy**: no redeploy needed if bindings haven't changed; only update `wrangler.toml` and redeploy when D1 or R2 has changed.
 4. **Verify**: home page, collection pages, media URLs, settings page.

@@ -30,6 +30,7 @@ exportApiRoutes.post("/hugo", requireAuthApi(), async (c) => {
       rssFeedsEnabled: appConfig.rssFeedsEnabled,
       mainRssFeed: appConfig.mainRssFeed,
       archiveDefaultLayout: appConfig.archiveDefaultLayout,
+      timeZone: appConfig.timeZone,
       siteFooter: appConfig.siteFooter,
       showHeaderAvatar: appConfig.showHeaderAvatar,
       siteAvatarUrl: appConfig.siteAvatarUrl,
@@ -57,12 +58,12 @@ exportApiRoutes.post("/hugo", requireAuthApi(), async (c) => {
       storage: c.var.storage,
     },
   );
-  const zip = await exportService.generateHugoSite();
-  return new Response(zip, {
+  // Streamed: stored media is read as the archive goes out, so the response
+  // starts at once and memory stays flat whatever the site's size.
+  return new Response(await exportService.generateHugoSite(), {
     headers: {
       "Content-Type": "application/zip",
       "Content-Disposition": 'attachment; filename="jant-export.zip"',
-      "Content-Length": String(zip.byteLength),
     },
   });
 });

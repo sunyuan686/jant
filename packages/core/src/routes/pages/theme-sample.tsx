@@ -67,12 +67,11 @@ themeSampleRoutes.get("/theme-sample", async (c) => {
     noindex: true,
   });
   c.header("X-Robots-Tag", "noindex, nofollow");
-  c.set(
-    "themeStyle",
-    buildThemeStyle(selectedTheme, selectedMode, fontOverrides),
-  );
+  // The page carries `data-theme-mode={selectedMode}`, which picks the block.
+  c.set("themeStyle", buildThemeStyle(selectedTheme, fontOverrides));
 
   return renderPublicPage(c, {
+    page: "theme-sample",
     title: buildPageTitle(
       selectedTheme.name,
       i18n._(

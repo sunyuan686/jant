@@ -9,6 +9,7 @@
  */
 
 import type { Context } from "hono";
+import { buildFeedPostViews } from "../feed/feed.js";
 import type { Bindings, SmartCollection } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { SmartCollectionPage } from "../../ui/pages/SmartCollectionPage.js";
@@ -20,14 +21,14 @@ import { assembleTimelineItems } from "../../lib/timeline.js";
 import { defaultFeedRenderer } from "../../lib/feed.js";
 import {
   buildFeedDiscoveryFields,
-  getFeedEntryUpdatedAt,
+  buildFeedLabels,
   getFeedLimit,
   getRssPublishedBefore,
+  feedsPublished,
   renderFeed,
 } from "../../lib/feed-policy.js";
 import { toPlainText as markdownToPlainText } from "../../lib/markdown.js";
-import { buildMediaMap } from "../../lib/media-helpers.js";
-import { createMediaContext, toPostViews } from "../../lib/view.js";
+
 import { toAbsoluteSiteUrl } from "../../lib/url.js";
 import {
   buildSurfaceAlternates,
@@ -42,9 +43,12 @@ import {
   describeSmartCollection,
 } from "../../ui/shared/smart-collection-labels.js";
 import { getI18n } from "../../i18n/index.js";
-import { SMART_COLLECTION_SORT_ORDERS } from "../../types.js";
-import type { SmartCollectionSortOrder } from "../../types.js";
-import { supportsCollectionRatingSort } from "../../lib/collection-sort.js";
+import {
+  collectionSortParam,
+  parseCollectionSortParam,
+  resolveCollectionSortOrder,
+  supportsCollectionRatingSort,
+} from "../../lib/collection-sort.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
@@ -62,26 +66,6 @@ async function loadConditionVocabulary(
   const ids = smartCollection.selection.collection ?? [];
   if (ids.length === 0) return buildCollectionVocabulary([]);
   return buildCollectionVocabulary(await c.var.services.collections.list());
-}
-
-function readSort(
-  value: string | undefined,
-  fallback: SmartCollectionSortOrder,
-  showRatingSort: boolean,
-): SmartCollectionSortOrder {
-  // `updated` was a fourth order before `newest` came to mean the same thing.
-  // Links to it are still in the wild, and they still resolve to what the
-  // reader chose, so the accept-old rule costs one line here.
-  const named = value === "updated" ? "newest" : value;
-  const requested = (
-    SMART_COLLECTION_SORT_ORDERS as readonly string[]
-  ).includes(named ?? "")
-    ? (named as SmartCollectionSortOrder)
-    : fallback;
-  // Silently falls back rather than showing an order that would look arbitrary
-  // on a set where almost nothing is rated — the same rule a collection page
-  // applies to its own rating sort.
-  return requested === "rating_desc" && !showRatingSort ? "newest" : requested;
 }
 
 /**
@@ -108,6 +92,7 @@ export async function renderSmartCollectionPage(
   const viewer = {
     isAuthenticated: navData.isAuthenticated,
     lang: getViewLang(c) ?? undefined,
+    timeZone: c.var.appConfig.timeZone,
   };
 
   // The rating order is offered only where it would say something. One cheap
@@ -120,12 +105,18 @@ export async function renderSmartCollectionPage(
     2,
   );
   const showRatingSort = supportsCollectionRatingSort(ratedCount);
-  const defaultSort = readSort(smartCollection.sort, "newest", showRatingSort);
+  // A rating order falls back rather than showing an order that would look
+  // arbitrary on a set where almost nothing is rated, as on a collection page.
+  const defaultSort = resolveCollectionSortOrder(
+    undefined,
+    smartCollection.sort,
+    showRatingSort,
+  );
   // The reader's `?sort=` wins over the stored default, the same way it does on
   // a collection page. Condition params in the URL are ignored: membership is
   // edited in the dialog, not by hand in the address bar.
-  const currentSort = readSort(
-    c.req.query("sort"),
+  const currentSort = resolveCollectionSortOrder(
+    parseCollectionSortParam(c.req.query("sort")),
     defaultSort,
     showRatingSort,
   );
@@ -156,6 +147,7 @@ export async function renderSmartCollectionPage(
     : undefined;
 
   return renderPublicPage(c, {
+    page: "collection",
     title:
       page > 1
         ? buildPageTitle(
@@ -185,7 +177,10 @@ export async function renderSmartCollectionPage(
         baseUrl={
           currentSort === defaultSort
             ? toViewPath(c, canonicalPagePath)
-            : toViewPath(c, `${canonicalPagePath}?sort=${currentSort}`)
+            : toViewPath(
+                c,
+                `${canonicalPagePath}?sort=${collectionSortParam(currentSort)}`,
+              )
         }
         currentSort={currentSort}
         defaultSort={defaultSort}
@@ -227,6 +222,8 @@ export async function renderSmartCollectionFeed(
   c: Context<Env>,
   slug: string,
 ): Promise<Response | null> {
+  // Null, which the caller answers with 404.
+  if (!feedsPublished(c)) return null;
   const smartCollection = await c.var.services.smartCollections.getBySlug(slug);
   if (!smartCollection) return null;
 
@@ -241,6 +238,7 @@ export async function renderSmartCollectionFeed(
   const filters = services.smartCollections.toPostFilters(smartCollection, {
     isAuthenticated: false,
     lang: getViewLang(c) ?? undefined,
+    timeZone: appConfig.timeZone,
   });
   const posts = await services.posts.list({
     ...filters,
@@ -253,76 +251,11 @@ export async function renderSmartCollectionFeed(
     limit: getFeedLimit(c),
   });
 
-  const rootIds = posts.filter((p) => p.threadId === p.id).map((p) => p.id);
-  const postIds = posts.map((post) => post.id);
-  const [threadMap, rawMediaMap, aliasesMap] = await Promise.all([
-    services.posts.getPublishedThreads(rootIds, { publishedBefore }),
-    services.media.getByPostIds(postIds),
-    services.paths.getPostAliases(postIds),
-  ]);
-
-  const replyIds: string[] = [];
-  for (const [rootId, thread] of threadMap) {
-    for (const reply of thread) {
-      if (reply.id !== rootId) replyIds.push(reply.id);
-    }
-  }
-  const replyMediaMap =
-    replyIds.length > 0
-      ? await services.media.getByPostIds(replyIds)
-      : new Map<string, never[]>();
-
-  const mediaCtx = createMediaContext(appConfig);
-  const allRawMedia = new Map(rawMediaMap);
-  for (const [id, media] of replyMediaMap) {
-    allRawMedia.set(id, media);
-  }
-  const mediaMap = buildMediaMap(
-    allRawMedia,
-    mediaCtx.r2PublicUrl,
-    mediaCtx.imageTransformUrl,
-    mediaCtx.s3PublicUrl,
-    mediaCtx.localPublicUrl,
-    mediaCtx.sitePathPrefix,
-  );
-  const aliasMap = new Map<string, string>();
-  for (const [id, aliases] of aliasesMap) {
-    if (aliases[0]) aliasMap.set(id, aliases[0]);
-  }
-
-  const postViews = toPostViews(
-    posts.map((post) => ({
-      ...post,
-      mediaAttachments: mediaMap.get(post.id) ?? [],
-    })),
-    mediaCtx,
-    undefined,
-    aliasMap,
-  ).map((postView, index) => {
-    const post = posts[index] as (typeof posts)[number];
-    const thread = threadMap.get(post.id);
-    const replies =
-      thread && thread.length > 1
-        ? toPostViews(
-            thread
-              .filter((reply) => reply.id !== post.id)
-              .map((reply) => ({
-                ...reply,
-                mediaAttachments: mediaMap.get(reply.id) ?? [],
-              })),
-            mediaCtx,
-          )
-        : undefined;
-
-    return {
-      ...postView,
-      feedUpdatedAt: getFeedEntryUpdatedAt(post, thread),
-      threadReplies: replies,
-    };
-  });
+  const postViews = await buildFeedPostViews(c, posts, { publishedBefore });
 
   const feedData = {
     ...buildFeedDiscoveryFields(c),
+    labels: buildFeedLabels(c),
     siteName: appConfig.siteName,
     siteDescription: markdownToPlainText(appConfig.siteDescription),
     siteUrl: appConfig.siteUrl,

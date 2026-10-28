@@ -1,12 +1,12 @@
 import { randomBytes, scryptSync } from "node:crypto";
 import { generateKeyBetween } from "fractional-indexing";
-import { typeidUnboxed } from "typeid-js";
 import { runLocalWrangler } from "../../bin/lib/wrangler-cli.js";
 import { extractWranglerJson } from "../../bin/lib/wrangler-json.js";
 import {
   DEFAULT_NAVIGATION_PROFILE,
   SYSTEM_NAV_KEYS,
 } from "../../src/types/constants.ts";
+import { createTypeId } from "../../src/lib/ids.ts";
 
 export const DEV_EMAIL = "debug@jant.test";
 export const DEFAULT_DEV_PASSWORD = "jant-dev-debug-login";
@@ -45,10 +45,6 @@ function randomId(byteLength = 16) {
   return randomBytes(byteLength).toString("hex");
 }
 
-function createTypeId(prefix) {
-  return typeidUnboxed(prefix);
-}
-
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
@@ -67,6 +63,47 @@ export function executeJson(flag, sql) {
 
 export function executeSql(flag, sql) {
   runWrangler([flag, "--command", sql], { stdio: "inherit" });
+}
+
+/** Tables the helpers below read or write. The schema migrations create all of them. */
+const REQUIRED_TABLES = Object.freeze([
+  "site",
+  "site_setting",
+  "site_member",
+  "user",
+  "account",
+  "nav_item",
+]);
+
+// Exit with the task to run when the database has not been migrated. Without
+// this check, a fresh `.wrangler` (or a migration that went to the Node
+// database instead) fails inside the first query with Wrangler's
+// `no such table: site`, which names the symptom instead of the skipped step.
+function assertSchemaMigrated(flag) {
+  const result = executeJson(
+    flag,
+    [
+      "SELECT name FROM sqlite_master WHERE type = 'table'",
+      `AND name IN (${REQUIRED_TABLES.map(sqlString).join(", ")})`,
+    ].join(" "),
+  );
+  const present = new Set((result[0]?.results ?? []).map((row) => row.name));
+  const missing = REQUIRED_TABLES.filter((name) => !present.has(name));
+
+  if (missing.length === 0) {
+    return;
+  }
+
+  const isRemote = flag === "--remote";
+  console.error(
+    [
+      `${isRemote ? "Remote" : "Local"} D1 is not migrated (missing tables: ${missing.join(", ")}).`,
+      isRemote
+        ? "Run `mise run db-remote-migrate` first."
+        : "Run `mise run db-wrangler-migrate` first, or `mise run db-wrangler-bootstrap-shell` to migrate and set up the dev account in one step.",
+    ].join("\n"),
+  );
+  process.exit(1);
 }
 
 export async function hashPassword(password) {
@@ -294,6 +331,8 @@ export async function ensureManagedSetup({
     "Run the matching bootstrap command before setting credentials.",
   ].join("\n"),
 }) {
+  assertSchemaMigrated(flag);
+
   const timestamp = nowSeconds();
   const shell = ensureSingleSiteShell(flag, timestamp);
   const siteId = shell.siteId;
@@ -409,6 +448,8 @@ export async function setLocalDevPassword({
   flag,
   allowMissingAdmin = false,
 }) {
+  assertSchemaMigrated(flag);
+
   return setCredentialPassword({
     password,
     flag,

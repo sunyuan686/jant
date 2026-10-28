@@ -1,0 +1,75 @@
+# 兼容性
+
+Jant 的承诺分三档。有些东西每个版本都保持可用，大版本也不例外；有些只在大版本里改动，改动写在该版本的升级说明里；其余的任何版本都可能改变。版本号从 1.0 起遵循[语义化版本](https://semver.org/lang/zh-CN/)。
+
+## 每个版本都保持可用
+
+| 范围       | 保持的内容                                                     | 参考                                        |
+| ---------- | -------------------------------------------------------------- | ------------------------------------------- |
+| 升级       | 站点可以原地升级到之后的任何版本                               | [升级](#升级)                               |
+| 导出与快照 | 0.7.0 及之后的站点导出或快照，都能导入同一版本或之后的任何版本 | [导出与导入](export-and-import.md)          |
+| 地址       | 帖子和合集的 URL、自定义 URL 及其重定向、归档页的查询参数      | [写作与内容组织](writing-and-organizing.md) |
+| Feed       | 每个 feed 地址，以及每个条目的 `<id>` 和 `<jant:id>`           | [Feed](feeds.md)                            |
+
+地址的旧写法也一直可用，包括链接和 feed 订阅，例如 `?hasMedia=1`、`?visibility=latest_hidden`、`/feed/latest`。新链接用现在的写法。
+
+条目的 `<id>` 就是帖子的地址，地址变它就变；哪些操作会改变地址，见 [Feed](feeds.md)。`<jant:id>` 永远不变。
+
+任何版本都不会加入占用你内容已有地址的顶层路径。第一段以 `_` 或 `.` 开头的路径归 Jant 使用，因为你的地址都以字母或数字开头，所以新的系统地址都放在这里：`/_assets` 和 `/__sso` 已经是这样，`/.well-known/` 留给标准地址。其他位置的新顶层路径，只在那个地址上已有的内容保持不变时才会加入。
+
+## 只在大版本里改动
+
+| 范围       | 覆盖的内容                                                                                                                              | 参考                                         |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| HTTP API   | 接口、请求与响应字段及其行为，`/api/internal/*` 除外                                                                                    | [API 参考（英文）](../API.md)                |
+| MCP        | `/api/mcp` 的工具名和参数，以及它接受的协议版本：次版本可以新增，只有大版本才会去掉                                                     | [自动化与 API](automation-and-api.md)        |
+| Feed 内容  | 文档写明的 Atom 元素和 `https://jant.me/ns` 扩展                                                                                        | [读取 Jant feed（英文）](../feed-reading.md) |
+| 命令行     | `jant --help` 列出的命令及其选项                                                                                                        | [命令行](cli.md)                             |
+| 配置       | 环境变量和设置项、它们的取值（包括主题 ID）、保留路径，以及 `DATA_DIR` 里的 `jant.sqlite` 和 `media/`                                   | [配置](configuration.md)                     |
+| 导出格式   | 站点导出的 front matter 字段（标为「仅主题」的除外）和 `data/jant.toml`                                                                 | [导出与导入](export-and-import.md)           |
+| Docker     | `owenyoung/jant` 镜像名、`/var/lib/jant` 数据目录及其中的 `jant.sqlite` 和 `media/`，以及 `jant-migrate` 服务                           | [使用 Docker 部署](deployment-docker.md)     |
+| JavaScript | `@jant/core` 的 `createApp`：不接受参数，返回一个用 `fetch` 响应请求的对象                                                              | —                                            |
+| 项目结构   | `create-jant` 项目的 `wrangler.toml` 读取的 `@jant/core` 内部路径 `dist/client` 和 `src/db/migrations`，以及它声明的绑定名 `DB` 和 `R2` | [使用 Cloudflare 部署](deployment.md)        |
+
+大版本改动其中任何一项，都会在升级说明里写明要改什么。它可能先在某个次版本里标为弃用，但不一定。
+
+新增在次版本里发布：新的接口、字段、选项、feed 元素和设置项，以及取值范围固定的字段的新取值，例如帖子的 `format`、错误的 `code`。客户端应忽略不认识的字段和元素，把不认识的 `format` 当作 `note`，遇到不认识的错误 `code` 按 HTTP 状态码处理。
+
+请求同样宽容：HTTP API 和 MCP 会忽略请求里不认识的字段和参数，所以为较新版本写的客户端，只要不依赖新字段，在较旧的版本上也能用。唯一的例外是智能合集的 `selection`：不认识的条件返回 `400`，因为忽略它会发布一个比要求更宽的页面。
+
+## 不作承诺
+
+以下内容任何版本都可能改变。Jant 会尽量保持稳定，改动时在发布说明里写一句：
+
+- [主题定制](theming.md)页列出的 CSS 变量、数据属性和 class。
+- MCP 工具的返回结果。工具名和参数属于上一档。
+- 帖子 `body` 的内部结构（编辑器自己的文档格式），以及 `bodyHtml` 里的 HTML。读写帖子请用 `bodyMarkdown`。
+- 错误里的 `details`（设置接口的 `rejectedKeys` 除外），以及 `error` 信息的措辞。错误带有 `error` 和 `code`、每个 code 的含义，属于上一档。
+- `@jant/core` 发布的 TypeScript 类型，包括 `createApp` 的类型。
+- 导出站点的 Hugo 模板和 partial。
+
+以下内容任何版本都可能改变，不另行说明：
+
+- `/api/internal/*`。它连接 core 和托管服务，两者一起发布。
+- 参考文档没有写明的接口、字段和参数，即使响应里带着它们。给后台命令面板提供数据的 `/api/palette` 就是一例。
+- 用于托管服务的 `SITE_RESOLUTION_MODE` 和 `HOSTED_CONTROL_PLANE_*` 变量，以及在一个数据库里有多个站点时用来指明站点的命令行选项 `--site`、`--host` 和 `--path-prefix`。
+- 用于本地调试和公开演示站的 `DEV_API_TOKEN` 和 `DEMO_*` 变量。
+- `jant --help` 不列出的命令，也就是构建和运维工具。
+- 用和服务器不同版本的 Jant 运行 `search reindex`、`uploads cleanup` 或 `posts rebuild-html`。它们调用 `/api/internal/*`，要用服务器所运行的版本来跑。
+- `@jant/core` 里 `createApp` 以外的一切，包括 `@jant/core/i18n` 和 `src/` 下的模块。
+- 主题定制页没有列出的 CSS 自定义属性和 class，以及文档化钩子周围的 HTML 结构。
+- [导出与导入](export-and-import.md)标为「仅主题」的 front matter 字段。
+- 数据库结构。迁移在任何版本里都可能改动表和列；读写数据请用 API、命令行或导出。
+- 界面文字和翻译。
+- 默认值。次版本可能改动默认值（例如 `PAGE_SIZE`），发布说明会写明，并给出恢复旧行为的设置项。例外是 `PUBLIC_API_ENABLED`、`MAIN_RSS_FEED`、`RSS_FEEDS_ENABLED` 和 `CORS_ORIGINS`：它们的默认值决定保持可用的地址返回什么，只在大版本里改动。
+
+## 升级
+
+各种部署方式的升级步骤见[升级](upgrading.md)。
+
+- 站点可以原地升级到之后的任何版本，可以跨版本：部署时按顺序执行迁移。
+- 迁移只能向前。要回到旧版本，恢复升级前的备份，见[备份与恢复](backups.md)。
+- 站点导出的格式比导入方能读的更新，或者快照来自更新的 Jant 时，导入会在写入任何数据之前停止，并提示先升级 `@jant/core`。`site import` 每开始读一项新内容，格式版本就加一，所以旧版 Jant 不会一边导入新的导出、一边丢掉它不认识的内容。
+- 快照只能恢复到同一种数据库：SQLite（包括 D1）或 Postgres。要在两者之间迁移，用站点导出。
+- 修复只进入最新版本。
+- 托管站点由服务负责升级。

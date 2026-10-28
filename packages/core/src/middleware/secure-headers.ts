@@ -15,6 +15,7 @@ import type { Bindings } from "../types.js";
 import type { AppVariables } from "../types/app-context.js";
 import { getConfiguredStorageDriver, getEnvString } from "../lib/env.js";
 import { IS_VITE_DEV } from "../lib/build-env.js";
+import { isPublicStoragePath } from "../lib/public-storage.js";
 import {
   buildCspDirectives,
   type ContentSecurityPolicyDirectives,
@@ -45,20 +46,6 @@ function shouldBlockFraming(path: string): boolean {
   return FRAME_PROTECTED_PATH_PREFIXES.some((prefix) =>
     matchesPathPrefix(path, prefix),
   );
-}
-
-/**
- * Paths whose responses are not HTML rendered by `BaseLayout` and therefore
- * never carry author-pasted `customHeadHtml` / `customBodyEndHtml`. Skipping
- * the settings lookup for these avoids two DB roundtrips on every static
- * asset request.
- */
-function couldRenderCodeInjection(path: string): boolean {
-  if (shouldBlockFraming(path)) return false;
-  if (path === "/favicon.ico" || path === "/apple-touch-icon.png") return false;
-  if (path === "/healthz" || path === "/readyz") return false;
-  if (path.startsWith("/media/") || path.startsWith("/sites/")) return false;
-  return true;
 }
 
 function tryGetOrigin(value: string | undefined): string | null {
@@ -135,7 +122,12 @@ function buildSecureHeadersOptions(
   });
 
   return {
-    contentSecurityPolicy: toHonoCspOptions(directives),
+    // A stored file carries its own, stricter policy (see storedFileHeaders
+    // in app.tsx); the page policy would let an uploaded HTML file run
+    // scripts from any https origin.
+    contentSecurityPolicy: isPublicStoragePath(path)
+      ? undefined
+      : toHonoCspOptions(directives),
     crossOriginResourcePolicy: false,
     crossOriginOpenerPolicy: false,
     originAgentCluster: false,
@@ -151,37 +143,40 @@ function buildSecureHeadersOptions(
 }
 
 /**
- * Probe the settings service for any author-saved code injection. Resolves to
- * `false` whenever the lookup is unavailable (e.g. in unit tests that skip the
- * runtime middleware) or the path can't render `BaseLayout`.
+ * Whether the page this request rendered carries author-pasted code injection.
  *
- * Costs two settings reads on public HTML routes; static asset and
- * frame-protected paths are short-circuited above.
+ * Decided after the route has run, from the configuration it rendered with:
+ * `BaseLayout` emits `customHeadHtml` / `customBodyEndHtml` from
+ * `c.var.appConfig`, and a request that never loaded that configuration
+ * cannot have rendered them. Reading the settings again up front cost every
+ * public page a round trip of its own before routing could start.
+ *
+ * Authoring and auth pages keep a tight policy whatever is configured: an
+ * analytics snippet has no business running next to the settings forms.
  */
-async function detectInlineScriptOptIn(
+function rendersCodeInjection(
   path: string,
-  settings: { get(key: string): Promise<string | null> } | undefined,
-): Promise<boolean> {
-  if (!settings) return false;
-  if (!couldRenderCodeInjection(path)) return false;
-  const [head, bodyEnd] = await Promise.all([
-    settings.get("CUSTOM_HEAD_HTML"),
-    settings.get("CUSTOM_BODY_END_HTML"),
-  ]);
-  return Boolean(head?.trim() || bodyEnd?.trim());
+  appConfig: AppVariables["appConfig"] | undefined,
+): boolean {
+  if (!appConfig || shouldBlockFraming(path)) return false;
+  return Boolean(
+    appConfig.customHeadHtml.trim() || appConfig.customBodyEndHtml.trim(),
+  );
 }
 
 export function secureHeadersMiddleware(): MiddlewareHandler<Env> {
   return async (c, next) => {
-    // `services` is set by the runtime bootstrap middleware. Cast through
-    // `undefined` so unit tests that skip that middleware still work.
-    const services = c.var.services as AppVariables["services"] | undefined;
-    const allowInlineScript = await detectInlineScriptOptIn(
+    await next();
+    // Headers go on the response the route produced — Hono's middleware sets
+    // them after its own `next()` too — so the route runs first and the policy
+    // follows what it rendered. `appConfig` is set by `withConfig()`, which
+    // some routes never reach; cast through `undefined` for those.
+    const allowInlineScript = rendersCodeInjection(
       c.req.path,
-      services?.settings,
+      c.var.appConfig as AppVariables["appConfig"] | undefined,
     );
-    return secureHeaders(
+    await secureHeaders(
       buildSecureHeadersOptions(c.req.path, c.env, allowInlineScript),
-    )(c, next);
+    )(c, async () => {});
   };
 }

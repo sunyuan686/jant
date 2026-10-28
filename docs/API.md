@@ -15,31 +15,37 @@ For static export and round-trip import, also see [Export and Import](export-and
 
 ## API Surface
 
-| Area                    | Base path               | Auth                    |
-| ----------------------- | ----------------------- | ----------------------- |
-| Public posts            | `/api/public/posts`     | Public when enabled     |
-| Public archive          | `/api/public/archive`   | Public when enabled     |
-| Posts                   | `/api/posts`            | API token or session    |
-| Upload sessions         | `/api/uploads`          | API token or session    |
-| One-shot upload         | `/api/upload`           | API token or session    |
-| Legacy multipart relay  | `/api/upload/multipart` | API token or session    |
-| Text attachment content | `/api/attachments`      | API token or session    |
-| MCP                     | `/api/mcp`              | API token or session    |
-| Collections             | `/api/collections`      | Mixed                   |
-| Navigation items        | `/api/nav-items`        | Mixed                   |
-| Custom URLs             | `/api/custom-urls`      | API token or session    |
-| Settings                | `/api/settings`         | API token or session    |
-| Search                  | `/api/search`           | Public or authenticated |
-| Export                  | `/api/export`           | API token or session    |
-| Internal admin          | `/api/internal/*`       | Internal admin token    |
+| Area                    | Base path                | Auth                 |
+| ----------------------- | ------------------------ | -------------------- |
+| Public posts            | `/api/public/posts`      | Public when enabled  |
+| Public Threads          | `/api/public/threads`    | Public when enabled  |
+| Discover post status    | `/api/discover/posts`    | Public               |
+| Posts                   | `/api/posts`             | API token or session |
+| Threads                 | `/api/threads`           | API token or session |
+| Upload sessions         | `/api/uploads`           | API token or session |
+| One-shot upload         | `/api/upload`            | API token or session |
+| Media                   | `/api/media`             | API token or session |
+| Text attachment content | `/api/attachments`       | API token or session |
+| MCP                     | `/api/mcp`               | API token or session |
+| Collections             | `/api/collections`       | API token or session |
+| Smart collections       | `/api/smart-collections` | API token or session |
+| Navigation items        | `/api/nav-items`         | API token or session |
+| Custom URLs             | `/api/custom-urls`       | API token or session |
+| Settings                | `/api/settings`          | API token or session |
+| Search                  | `/api/search`            | API token or session |
+| Export                  | `/api/export`            | API token or session |
+| GitHub webhooks         | `/api/github-sync`       | GitHub signature     |
+| Telegram webhook        | `/api/telegram`          | Telegram secret      |
+| Internal admin          | `/api/internal/*`        | Internal admin token |
 
 Auth labels in this document:
 
 - `Public`: no auth required
 - `Public when enabled`: public by default; returns `404` to every caller when `PUBLIC_API_ENABLED=false`
-- `Public or authenticated`: public by default; requires a session or token when `PUBLIC_API_ENABLED=false`
 - `Session or token`: browser session cookie or `Authorization: Bearer <token>`
 - `Internal admin token`: `Authorization: Bearer <INTERNAL_ADMIN_TOKEN>`
+- `GitHub signature`: an `X-Hub-Signature-256` header GitHub computes with the webhook secret; see [GitHub webhooks](#github-webhooks)
+- `Telegram secret`: an `X-Telegram-Bot-Api-Secret-Token` header carrying the secret the webhook was registered with; see [Telegram webhook](#telegram-webhook)
 
 ---
 
@@ -68,7 +74,7 @@ Browser requests can use the normal session cookie after signing in at `/signin`
 
 ### Local development token
 
-When `DEV_API_TOKEN` is configured, Jant also accepts it as a Bearer token on local hosts only:
+When `DEV_API_TOKEN` is configured, Jant also accepts it as a Bearer token for requests to a local host that come from the same machine. The host must be one of:
 
 - `localhost`
 - `127.0.0.1`
@@ -98,12 +104,12 @@ Auth resolution for both surfaces:
 
 - pass `Authorization: Bearer jnt_...` (issued under Settings → API Tokens), or
 - on local hosts, send the same value with `DEV_API_TOKEN` from `.dev.vars`.
-- a small set of read endpoints — public posts/archive, Collections, navigation items, and search — work without a token while `PUBLIC_API_ENABLED=true`.
+- the public posts and Threads endpoints under `/api/public/*` work without a token while `PUBLIC_API_ENABLED=true`.
 - `GET /api/discover/posts` works without a token while the site is listed in Discover, independent of `PUBLIC_API_ENABLED`.
 
 ### MCP
 
-Base path: `/api/mcp`
+`POST /api/mcp`
 
 Auth: `Session or token`
 
@@ -111,22 +117,25 @@ Jant's MCP endpoint is a minimal HTTP JSON-RPC transport for remote agents and a
 
 Current transport behavior:
 
-- `POST` only
 - content type `application/json`
-- requires `MCP-Protocol-Version: 2025-06-18`
+- takes `MCP-Protocol-Version: 2025-06-18`; a request without it is read as that version, and any other version answers `400`. A later minor release can accept newer protocol versions as well; one is dropped only in a major release
 - supports `initialize`, `ping`, `tools/list`, `tools/call`, and `notifications/initialized`
 - does not support batch requests, SSE streaming, or session negotiation
 
 Current tool groups:
 
-- posts: `jant_posts_list`, `jant_posts_get`, `jant_posts_get_content`, `jant_posts_create`, `jant_posts_update`, `jant_posts_delete`
-- media: `jant_media_list`, `jant_media_get`, `jant_media_upload`, `jant_media_update_alt`, `jant_media_delete`
+- posts: `jant_posts_list`, `jant_posts_get`, `jant_posts_search`, `jant_posts_create`, `jant_posts_update`, `jant_posts_delete`
+- threads: `jant_threads_list`, `jant_threads_get`, `jant_threads_list_posts`
+- media: `jant_media_list`, `jant_media_get`, `jant_media_upload`, `jant_media_update`, `jant_media_delete`
 - attachments: `jant_attachments_get_content`
 - collections: `jant_collections_list`, `jant_collections_get`, `jant_collections_create`, `jant_collections_update`, `jant_collections_delete`, `jant_collections_add_thread`, `jant_collections_remove_thread`
 - settings: `jant_settings_get`, `jant_settings_update`
-- search: `jant_search_posts`
 
-Tool calls return normal MCP `result` envelopes. Successful tool calls include both `structuredContent` and a JSON string copy in `content[0].text`. Tool-level validation and domain failures return `200 OK` with `isError: true`.
+Tool calls return normal MCP `result` envelopes. Successful tool calls include both `structuredContent` and a JSON string copy in `content[0].text`, and a tool returns the objects its HTTP endpoint does. A failed call returns `200 OK` with `isError: true`; its `structuredContent` has the [HTTP error shape](#error-format), `{ error, code }` with `details` for a validation error, and `content[0].text` repeats the message.
+
+`jant_posts_search` takes `q` and `limit`, searches as `GET /api/search` does, and returns the same result objects.
+
+`jant_posts_list`, `jant_threads_list`, and `jant_threads_list_posts` take `cursor` and return `nextCursor` as `GET /api/posts`, `GET /api/threads`, and `GET /api/threads/:id/posts` do; see [Pagination](#pagination). `jant_threads_list` takes the same filters as `GET /api/threads`, and `fold: true` in place of `include=fold`. The tools that return posts take `content: "markdown"` as their endpoints take `content=markdown`.
 
 Initialize:
 
@@ -156,6 +165,10 @@ curl -X POST https://your-site.com/api/mcp \
 
 Unless an endpoint explicitly returns a ZIP, XML, or plain text response, it returns JSON.
 
+A request field or query parameter an endpoint doesn't know is ignored, so a client that sends one works against an older Jant too. A value an endpoint can't read, in a field it does know, answers `400`. `include` is the exception: it skips a value it doesn't offer, so a client asking for an extra a later release adds still gets the rest. A list's `limit` past either end of its range reads as that end: `limit=500` on a list of at most `100` returns `100`.
+
+A field that takes one of a fixed set of values, such as `format`, `status`, `visibility`, or an error's `code`, can gain a value in a minor release. Read a `format` you don't recognize as `note`, and handle a `code` you don't recognize by the HTTP status.
+
 All timestamps are Unix seconds:
 
 ```json
@@ -174,11 +187,23 @@ Jant uses TypeIDs everywhere.
 | Media / attachment        | `med_` | `med_01jpyx4g9m8b4y50a4gx3t7p1n` |
 | Upload session            | `upl_` | `upl_01jpyx9h0m8w4g5q1c7d2f3r4s` |
 | Collection                | `col_` | `col_01jpyx5qds8y79w2dd6sv4rznj` |
+| Smart collection          | `smc_` | `smc_01jpyxd4k2m8w5q9r3t7v1b6nc` |
 | Custom URL / path record  | `pth_` | `pth_01jpyxb27t6m4v9r2k8s5c1qfh` |
 | Collection directory item | `cdi_` | `cdi_01jpyx8r7s3v8m1q5c9k2f6gth` |
 | Nav item                  | `nav_` | `nav_01jpyxcv3m7w4b8k2r5s9t1qfh` |
 
 Invalid IDs return `400`.
+
+### Pagination
+
+The post list (`GET /api/posts`), the Thread lists (`GET /api/threads`, `GET /api/public/threads`), a Thread's posts (`GET /api/threads/:id/posts`, `GET /api/public/threads/:slug/posts`), the media list (`GET /api/media`), the custom URL list (`GET /api/custom-urls`), and the `jant_posts_list`, `jant_threads_list`, `jant_threads_list_posts`, and `jant_media_list` MCP tools return one page and a `nextCursor`. Repeat the request with `cursor` set to `nextCursor` for the next page. `nextCursor` is `null` on the last page.
+
+- `nextCursor` is opaque: pass it back unchanged. Its format is not part of the API.
+- A post that exists for the whole walk and keeps its place in the order is returned exactly once, whatever else is published, edited, or deleted between requests. A post that moves during the walk, because its publish date is edited or a reply moves its Thread up, can be skipped or returned twice. To walk everything, use an order a reply doesn't move: `GET /api/posts`, or `sort=published` on a Thread list.
+- A page can hold fewer posts than `limit` and still have a `nextCursor`. The walk ends when `nextCursor` is `null`.
+- A `cursor` that can't be read, or that comes from a list in a different order, returns `400`.
+
+The other lists, collections (`GET /api/collections`), smart collections (`GET /api/smart-collections`), navigation items (`GET /api/nav-items`), and a post's other versions, return every item in one response. If one of them gains pages in a later release, a request that doesn't ask for a page still gets all of it.
 
 ### Slugs, paths, and aliases
 
@@ -186,7 +211,7 @@ Invalid IDs return `400`.
 - Post `path` is a create-time convenience field, not a general path-management API.
 - If a post `path` is itself a valid slug, Jant uses it as the canonical slug.
 - If a post `path` is not a valid slug, Jant slugifies it for the canonical URL and stores the original path as an alias.
-- Custom URL creation expects a leading slash in the request body, but list/create responses return normalized paths without the leading slash.
+- Custom URL `path` carries a leading slash in responses, and so does `toPath` when it names a path on the site. A request may leave it off `path`.
 
 ### Body formats
 
@@ -220,7 +245,7 @@ Quote posts use quote-specific names in the API:
 
 ## Error Format
 
-Domain errors use this shape:
+Every error uses this shape:
 
 ```json
 {
@@ -230,8 +255,8 @@ Domain errors use this shape:
 }
 ```
 
-- `details` is present for validation errors that carry structured field information.
-- Unhandled server errors may return only `{ "error": "Something went wrong on our end" }`.
+- `details` is present for validation errors that carry structured field information. Its shape can change in any release, and so can the wording of `error`: show them to a person or log them, and branch on `code`. The one documented part of `details` is the settings endpoint's `rejectedKeys`.
+- `code` is always present, an error the server didn't expect included (`INTERNAL_ERROR`). An unknown `/api` path answers `NOT_FOUND` in this shape too.
 
 Common error codes:
 
@@ -243,9 +268,11 @@ Common error codes:
 | `NOT_FOUND`              | `404` | Resource does not exist                                             |
 | `CONFLICT`               | `409` | Duplicate slug/path, invalid state transition, hosted-mode conflict |
 | `MEDIA_QUOTA_EXCEEDED`   | `409` | Hosted media quota would be exceeded                                |
-| `RATE_LIMIT`             | `429` | Too many requests                                                   |
+| `LANGUAGE_IN_USE`        | `409` | The language still has posts, so it can't be removed                |
 | `CONFIGURATION_ERROR`    | `500` | Missing or invalid server configuration                             |
 | `EXTERNAL_SERVICE_ERROR` | `500` | External dependency failed                                          |
+| `INTERNAL_ERROR`         | `500` | An error the server didn't expect; the server log has the details   |
+| `SITE_UNAVAILABLE`       | `503` | The hosted site is suspended                                        |
 
 Example validation error:
 
@@ -278,36 +305,39 @@ Jant supports three post formats:
 
 Post responses include these fields:
 
-| Field             | Type                                     | Notes                                                     |
-| ----------------- | ---------------------------------------- | --------------------------------------------------------- |
-| `id`              | `pst_*` string                           | Post ID                                                   |
-| `siteId`          | string                                   | Owning site                                               |
-| `format`          | `note` \| `link` \| `quote`              | Post format                                               |
-| `status`          | `draft` \| `published`                   | Stored post status                                        |
-| `visibility`      | `public` \| `latest_hidden` \| `private` | Resolved visibility shown to clients                      |
-| `pinnedAt`        | integer \| `null`                        | Pin timestamp                                             |
-| `featuredAt`      | integer \| `null`                        | Feature timestamp                                         |
-| `slug`            | string                                   | Canonical slug                                            |
-| `title`           | string \| `null`                         | Returned for non-quote responses; omitted for `quote`     |
-| `url`             | string \| `null`                         | Returned for non-quote responses; usually `null` on notes |
-| `sourceName`      | string \| `null`                         | Returned instead of `title` for `quote`                   |
-| `sourceUrl`       | string \| `null`                         | Returned instead of `url` for `quote`                     |
-| `body`            | string \| `null`                         | Raw TipTap JSON string when stored that way               |
-| `bodyHtml`        | string \| `null`                         | Rendered HTML                                             |
-| `bodyText`        | string \| `null`                         | Plain-text rendering                                      |
-| `quoteText`       | string \| `null`                         | Quote content                                             |
-| `summary`         | string \| `null`                         | Optional summary                                          |
-| `rating`          | integer \| `null`                        | `1` to `5` when set                                       |
-| `replyToId`       | `pst_*` string \| `null`                 | Parent reply/post ID                                      |
-| `threadId`        | `pst_*` string                           | Thread root ID                                            |
-| `quietReply`      | boolean                                  | Reply published without announcing its Thread             |
-| `publishedAt`     | integer \| `null`                        | Publish timestamp                                         |
-| `lastActivityAt`  | integer                                  | Newest post in the Thread, excluding quiet replies        |
-| `threadUpdatedAt` | integer                                  | Newest post in the Thread, including quiet replies        |
-| `createdAt`       | integer                                  | Unix seconds                                              |
-| `updatedAt`       | integer                                  | Unix seconds — last row write, including edits            |
-| `attachments`     | array                                    | Ordered media/text attachment objects                     |
-| `collectionIds`   | `col_*` string[]                         | Shared Thread Collections; only in `GET /api/posts/:id`   |
+| Field             | Type                                     | Notes                                                                                                                                    |
+| ----------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`              | `pst_*` string                           | Post ID                                                                                                                                  |
+| `format`          | `note` \| `link` \| `quote`              | Post format                                                                                                                              |
+| `status`          | `draft` \| `published`                   | Stored post status                                                                                                                       |
+| `visibility`      | `public` \| `latest_hidden` \| `private` | Resolved visibility shown to clients                                                                                                     |
+| `pinnedAt`        | integer \| `null`                        | Pin timestamp                                                                                                                            |
+| `featuredAt`      | integer \| `null`                        | Feature timestamp                                                                                                                        |
+| `slug`            | string                                   | Canonical slug                                                                                                                           |
+| `title`           | string \| `null`                         | Returned for non-quote responses; omitted for `quote`                                                                                    |
+| `url`             | string \| `null`                         | Returned for non-quote responses; usually `null` on notes                                                                                |
+| `sourceName`      | string \| `null`                         | Returned instead of `title` for `quote`                                                                                                  |
+| `sourceUrl`       | string \| `null`                         | Returned instead of `url` for `quote`                                                                                                    |
+| `displayTitle`    | string                                   | Short plain-text name: the title, or one derived from the content when there is none. Use it where the post is referenced from elsewhere |
+| `body`            | string \| `null`                         | Raw TipTap JSON string when stored that way; omitted when `content=markdown`                                                             |
+| `bodyHtml`        | string \| `null`                         | Rendered HTML; omitted when `content=markdown`                                                                                           |
+| `bodyText`        | string \| `null`                         | Plain-text rendering; omitted when `content=markdown`                                                                                    |
+| `bodyMarkdown`    | string \| `null`                         | Markdown source; only returned when `content=markdown`                                                                                   |
+| `quoteText`       | string \| `null`                         | Quote content                                                                                                                            |
+| `summary`         | string \| `null`                         | Optional summary                                                                                                                         |
+| `rating`          | integer \| `null`                        | `1` to `5` when set                                                                                                                      |
+| `replyToId`       | `pst_*` string \| `null`                 | Parent reply/post ID                                                                                                                     |
+| `threadId`        | `pst_*` string                           | Thread root ID                                                                                                                           |
+| `language`        | string \| `null`                         | BCP 47 content language, the same for every post in a Thread; `null` until the site first turns on multilingual content                  |
+| `quietReply`      | boolean                                  | Reply published without announcing its Thread                                                                                            |
+| `publishedAt`     | integer \| `null`                        | Publish timestamp                                                                                                                        |
+| `lastActivityAt`  | integer                                  | Newest post in the Thread, excluding quiet replies                                                                                       |
+| `threadUpdatedAt` | integer                                  | Newest post in the Thread, including quiet replies                                                                                       |
+| `threadPostCount` | integer                                  | Published posts in the Thread, root included; `1` alone                                                                                  |
+| `createdAt`       | integer                                  | Unix seconds                                                                                                                             |
+| `updatedAt`       | integer                                  | Unix seconds — last row write, including edits                                                                                           |
+| `attachments`     | array                                    | Ordered media/text attachment objects                                                                                                    |
+| `collectionIds`   | `col_*` string[]                         | Shared Thread Collections; only in `GET /api/posts/:id`                                                                                  |
 
 ### Post response shape
 
@@ -318,7 +348,6 @@ Example:
 ```json
 {
   "id": "pst_01jpyx3m7gw4w3h7m4bknq0v1d",
-  "siteId": "sit_01jpyx1v6z9k4c7b2m5q8r3nfh",
   "format": "note",
   "status": "published",
   "visibility": "public",
@@ -326,6 +355,7 @@ Example:
   "featuredAt": null,
   "slug": "hello-world",
   "title": "Hello World",
+  "displayTitle": "Hello World",
   "body": null,
   "bodyHtml": "<p>Hello world</p>",
   "bodyText": "Hello world",
@@ -334,10 +364,12 @@ Example:
   "rating": null,
   "replyToId": null,
   "threadId": "pst_01jpyx3m7gw4w3h7m4bknq0v1d",
+  "language": "en",
   "quietReply": false,
   "publishedAt": 1706000000,
   "lastActivityAt": 1706000000,
   "threadUpdatedAt": 1706000000,
+  "threadPostCount": 1,
   "createdAt": 1706000000,
   "updatedAt": 1706000000,
   "attachments": []
@@ -350,161 +382,8 @@ Notes:
 - Quote responses omit `title` and `url` instead of returning them as `null`.
 - `replyToId !== null` means the post is a thread reply.
 - `threadId` points at the thread root.
+- `threadPostCount` above `1` means the post belongs to a Thread; [Threads](#threads) returns the rest of it. It is `0` while nothing in the Thread is published.
 - `GET /api/posts` includes both root posts and replies. There is currently no `excludeReplies` query parameter.
-
-## Public posts
-
-Base path: `/api/public/posts`
-
-These endpoints expose the public reading view, not the editing view used in Settings.
-When `PUBLIC_API_ENABLED=false`, these dedicated public endpoints return `404`
-to every caller. Authenticated clients can use `/api/posts` instead.
-
-Public post responses include these fields:
-
-| Field             | Type                        | Notes                                                                                                        |
-| ----------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `id`              | `pst_*` string              | Post ID                                                                                                      |
-| `format`          | `note` \| `link` \| `quote` | Post format                                                                                                  |
-| `status`          | `published`                 | Public endpoints only return published posts                                                                 |
-| `visibility`      | `public` \| `latest_hidden` | `/api/public/posts` list excludes `latest_hidden`; single-post reads and `/api/public/archive` may return it |
-| `slug`            | string                      | Canonical slug                                                                                               |
-| `permalink`       | string                      | Public post URL                                                                                              |
-| `title`           | string \| `null`            | Returned for `note` and `link` posts                                                                         |
-| `url`             | string \| `null`            | Returned for `link` posts                                                                                    |
-| `sourceName`      | string \| `null`            | Returned instead of `title` for `quote`                                                                      |
-| `sourceUrl`       | string \| `null`            | Returned instead of `url` for `quote`                                                                        |
-| `bodyHtml`        | string \| `null`            | Rendered HTML; omitted when `content=markdown`                                                               |
-| `bodyText`        | string \| `null`            | Plain-text rendering; omitted when `content=markdown`                                                        |
-| `bodyMarkdown`    | string \| `null`            | Markdown source; only returned when `content=markdown`                                                       |
-| `quoteText`       | string \| `null`            | Quote content                                                                                                |
-| `summary`         | string \| `null`            | Optional summary                                                                                             |
-| `rating`          | integer \| `null`           | `1` to `5` when set                                                                                          |
-| `previewKind`     | string \| `null`            | Link preview kind                                                                                            |
-| `previewProvider` | string \| `null`            | Link preview provider                                                                                        |
-| `previewImageUrl` | string \| `null`            | Public preview image URL                                                                                     |
-| `replyToId`       | `pst_*` string \| `null`    | Parent reply/post ID                                                                                         |
-| `threadId`        | `pst_*` string              | Thread root ID                                                                                               |
-| `quietReply`      | boolean                     | Reply published without announcing its Thread. Always `false` on Thread roots                                |
-| `pinnedAt`        | integer \| `null`           | Pin timestamp                                                                                                |
-| `featuredAt`      | integer \| `null`           | Feature timestamp                                                                                            |
-| `publishedAt`     | integer \| `null`           | Publish timestamp                                                                                            |
-| `lastActivityAt`  | integer                     | Thread root: newest post in the Thread, **excluding** quiet replies. Editing a post never moves it           |
-| `threadUpdatedAt` | integer                     | Thread root: newest post in the Thread, **including** quiet replies. Editing a post never moves it           |
-| `createdAt`       | integer                     | Unix seconds                                                                                                 |
-| `updatedAt`       | integer                     | Unix seconds — when this row was last written, including edits                                               |
-| `attachments`     | array                       | Ordered media/text attachment objects                                                                        |
-| `collections`     | object[]                    | Public collection refs with `id`, `slug`, `title`, and `url`                                                 |
-
-### List public posts
-
-`GET /api/public/posts`
-
-Auth: `Public`
-
-Query parameters:
-
-| Parameter    | Type                                  | Required | Default              | Notes                                                                                               |
-| ------------ | ------------------------------------- | -------- | -------------------- | --------------------------------------------------------------------------------------------------- |
-| `format`     | `note` \| `link` \| `quote`           | no       | all                  | Format filter                                                                                       |
-| `collection` | string                                | no       | none                 | Filter by collection slug(s). Single slug (`design`) or multiple comma-separated (`tech,art`)       |
-| `sort`       | `newest` \| `oldest` \| `rating_desc` | no       | collection's default | Sort order override. Only effective when `collection` is set. Without `collection`, this is ignored |
-| `cursor`     | string                                | no       | none                 | Pass the previous `nextCursor` back unchanged                                                       |
-| `limit`      | integer                               | no       | `20`                 | `1` to `100`                                                                                        |
-| `content`    | `markdown`                            | no       | none                 | Return `bodyMarkdown` instead of rendered body fields                                               |
-
-Collection filtering notes:
-
-- Single collection: `?collection=design`
-- Multiple collections (union): `?collection=tech,art`
-- When filtering by a single collection, results default to that collection's configured `sortOrder`.
-- When filtering by multiple collections, results default to `newest`.
-- Use `sort` to override the default: `?collection=design&sort=oldest`
-- If any slug in the `collection` parameter does not resolve, the endpoint returns an empty result set.
-
-Response:
-
-```json
-{
-  "posts": [
-    {
-      "id": "pst_01jpyx3m7gw4w3h7m4bknq0v1d",
-      "format": "note",
-      "status": "published",
-      "visibility": "public",
-      "slug": "hello-world",
-      "permalink": "/hello-world",
-      "title": "Hello World",
-      "bodyHtml": "<p>Hello world</p>",
-      "bodyText": "Hello world",
-      "quoteText": null,
-      "replyToId": null,
-      "threadId": "pst_01jpyx3m7gw4w3h7m4bknq0v1d",
-      "publishedAt": 1706000000,
-      "attachments": [],
-      "collections": []
-    }
-  ],
-  "nextCursor": "pst_01jpyx3m7gw4w3h7m4bknq0v1d"
-}
-```
-
-Notes:
-
-- This list returns published public thread roots only.
-- Drafts, private posts, replies, and `latest_hidden` posts are excluded.
-- `content=markdown` returns `bodyMarkdown` and omits `bodyHtml/bodyText`.
-
-### Get a public post by slug
-
-`GET /api/public/posts/:slug`
-
-Auth: `Public`
-
-This returns a single published public post by canonical slug.
-
-Notes:
-
-- `latest_hidden` posts remain readable by direct slug.
-- Draft and private posts return `404`.
-- `content=markdown` returns `bodyMarkdown` and omits `bodyHtml/bodyText`.
-
-### List archive posts
-
-`GET /api/public/archive`
-
-Auth: `Public`
-
-The archive endpoint carries the same filters as the `/archive` page — year, collection, media kind, presence of media, title, or replies, and visibility — and returns every public thread root, **including `latest_hidden` posts**. Use this when you want a complete corpus instead of the curated Latest feed. Ordering is fixed at newest-first; the page's `?sort=` switch has no counterpart here, because the cursor is keyed off the post `id`.
-
-Query parameters:
-
-| Parameter    | Type                                           | Required | Default | Notes                                                                                                                                                                                  |
-| ------------ | ---------------------------------------------- | -------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `format`     | `note` \| `link` \| `quote`                    | no       | all     | Format filter                                                                                                                                                                          |
-| `collection` | string                                         | no       | none    | Filter by collection slug(s). Single slug (`design`) or several, comma-separated (`tech,art`). A post in any one of them matches                                                       |
-| `lang`       | BCP 47 tag                                     | no       | all     | Restrict to one content language, as `/api/public/posts` does                                                                                                                          |
-| `year`       | integer                                        | no       | none    | Only posts whose `publishedAt` falls in this calendar year (UTC)                                                                                                                       |
-| `media`      | comma-separated `MediaKind` \| `any` \| `none` | no       | none    | Kinds (`image`, `video`, `audio`, `text`, `document`): posts with at least one attachment of one of these kinds. `any` = posts with any attachment, `none` = posts without attachments |
-| `title`      | `any` \| `none`                                | no       | none    | `any` = posts with a title, `none` = posts without                                                                                                                                     |
-| `replies`    | `any` \| `none`                                | no       | none    | `any` = thread roots with published replies (threads), `none` = single posts without replies                                                                                           |
-| `visibility` | `public` \| `featured` \| `hidden`             | no       | all     | `hidden` is the URL spelling of `latest_hidden`, which is also read. `private` names a set no anonymous caller can see and returns `400`, as does any other value                      |
-| `hasMedia`   | `0` \| `1`                                     | no       | none    | **Deprecated** — use `media=any` / `media=none`                                                                                                                                        |
-| `hasTitle`   | `0` \| `1`                                     | no       | none    | **Deprecated** — use `title=any` / `title=none`                                                                                                                                        |
-| `hasReplies` | `0` \| `1`                                     | no       | none    | **Deprecated** — use `replies=any` / `replies=none`                                                                                                                                    |
-| `cursor`     | string                                         | no       | none    | Pass the previous `nextCursor` back unchanged                                                                                                                                          |
-| `limit`      | integer                                        | no       | `20`    | `1` to `100`                                                                                                                                                                           |
-| `content`    | `markdown`                                     | no       | none    | Return `bodyMarkdown` instead of rendered body fields                                                                                                                                  |
-
-Response shape matches `GET /api/public/posts`: `{ posts: PublicPost[], nextCursor: string | null }`.
-
-Notes:
-
-- Returns published public thread roots **and** `latest_hidden` posts.
-- Drafts, private posts, and replies are excluded.
-- Posts are returned in newest-first order. Cursor pagination is keyed off the post `id`.
-- An invalid value for any filter returns `400`, and so does a parameter this endpoint does not know — a typo that silently returned the whole archive would be worse than an error. An unknown `collection` slug returns an empty result set.
-- `content=markdown` returns `bodyMarkdown` and omits `bodyHtml/bodyText`.
 
 ### List posts
 
@@ -514,12 +393,13 @@ Auth: `Session or token`
 
 Query parameters:
 
-| Parameter | Type                        | Required | Default     | Notes                                         |
-| --------- | --------------------------- | -------- | ----------- | --------------------------------------------- |
-| `format`  | `note` \| `link` \| `quote` | no       | all         | Format filter                                 |
-| `status`  | `draft` \| `published`      | no       | `published` | Status filter                                 |
-| `cursor`  | string                      | no       | none        | Pass the previous `nextCursor` back unchanged |
-| `limit`   | integer                     | no       | `100`       | `1` to `100`                                  |
+| Parameter | Type                        | Required | Default     | Notes                                                               |
+| --------- | --------------------------- | -------- | ----------- | ------------------------------------------------------------------- |
+| `format`  | `note` \| `link` \| `quote` | no       | all         | Format filter                                                       |
+| `status`  | `draft` \| `published`      | no       | `published` | Status filter                                                       |
+| `cursor`  | string                      | no       | none        | Pass the previous `nextCursor` back unchanged                       |
+| `limit`   | integer                     | no       | `100`       | `1` to `100`                                                        |
+| `content` | `markdown`                  | no       | none        | Return `bodyMarkdown` instead of `body`, `bodyHtml`, and `bodyText` |
 
 Response:
 
@@ -544,14 +424,16 @@ Response:
       "attachments": []
     }
   ],
-  "nextCursor": "pst_01jpyx3m7gw4w3h7m4bknq0v1d"
+  "nextCursor": "eyJ2IjoxLCJzIjoibmV3ZXN0OnB1Ymxpc2hlZDp1bnBpbm5lZCIsImsiOlsxNzA2MDAwMDAwLCJwc3RfMDFqcHl4M203Z3c0dzNoN200YmtucTB2MWQiXX0"
 }
 ```
 
 Notes:
 
 - Each item uses the post response fields above, except list responses omit `collectionIds`.
-- `nextCursor` is `null` when there are no more results.
+- Roots and replies are listed alike, one post per item. [Threads](#threads) lists them grouped.
+- Published posts are ordered by `publishedAt`, newest first, with `id` breaking ties. Pinned posts are not moved to the top, and a reply does not move its root. Drafts are ordered by `updatedAt`, last edited first.
+- Paging follows [Pagination](#pagination).
 
 ### Suggest or validate a slug
 
@@ -612,7 +494,9 @@ Invalid slug candidates return `400`, including reserved slugs and slugs with in
 
 Auth: `Session or token`
 
-This returns the full post plus shared Thread-level `collectionIds` and ordered `attachments`.
+This returns the full post plus shared Thread-level `collectionIds`, ordered `attachments`, and `threadPosition`: the post's place in its Thread, `1` for the root. `jant_posts_get` returns the same.
+
+`content=markdown` returns the body as `bodyMarkdown` in place of `body`, `bodyHtml`, and `bodyText`. To edit a body, read it this way and send the edited Markdown back as `bodyMarkdown`.
 
 Example:
 
@@ -621,6 +505,7 @@ Example:
   "id": "pst_01jpyx3m7gw4w3h7m4bknq0v1d",
   "format": "note",
   "collectionIds": ["col_01jpyx5qds8y79w2dd6sv4rznj"],
+  "threadPosition": 1,
   "attachments": [],
   "slug": "hello-world",
   "title": "Hello World",
@@ -662,35 +547,44 @@ Request body:
 
 Fields:
 
-| Field             | Type                                     | Required             | Default        | Notes                                                                     |
-| ----------------- | ---------------------------------------- | -------------------- | -------------- | ------------------------------------------------------------------------- |
-| `format`          | `note` \| `link` \| `quote`              | yes                  | —              | Post format                                                               |
-| `title`           | string                                   | required for `link`  | —              | Max `300`; not allowed for `quote`                                        |
-| `sourceName`      | string                                   | no                   | `null`         | Quote attribution name, max `300`; only for `quote`                       |
-| `body`            | string                                   | no                   | `null`         | TipTap JSON string; mutually exclusive with `bodyMarkdown`                |
-| `bodyMarkdown`    | string                                   | no                   | `null`         | Recommended for scripts; mutually exclusive with `body`                   |
-| `slug`            | string                                   | no                   | auto-generated | Canonical slug; mutually exclusive with `path`                            |
-| `path`            | string                                   | no                   | —              | Create-time path helper; mutually exclusive with `slug`                   |
-| `status`          | `draft` \| `published`                   | no                   | `published`    | Post status                                                               |
-| `visibility`      | `public` \| `latest_hidden` \| `private` | no                   | `public`       | Post visibility                                                           |
-| `pinned`          | boolean                                  | no                   | `false`        | Pin the post; not allowed on replies                                      |
-| `featured`        | boolean                                  | no                   | `false`        | Mark as featured                                                          |
-| `url`             | absolute URL                             | required for `link`  | —              | Allows `http:`, `https:`, or `mailto:`; not allowed for `note` or `quote` |
-| `sourceUrl`       | absolute URL                             | no                   | `null`         | Quote attribution URL; not allowed for non-quote                          |
-| `quoteText`       | string                                   | required for `quote` | —              | Not allowed for `note` or `link`                                          |
-| `rating`          | integer                                  | no                   | `null`         | `1` to `5`; send `0` to clear on update                                   |
-| `collectionIds`   | `col_*` string[]                         | no                   | `[]`           | Shared Thread Collection TypeIDs; max `20`                                |
-| `replyToId`       | `pst_*` string                           | no                   | `null`         | Make this post a thread reply                                             |
-| `language`        | BCP 47 tag                               | no                   | detected       | Content language, e.g. `en`, `zh-Hans`; replies inherit the Thread's      |
-| `translationOfId` | `pst_*` string                           | no                   | `null`         | Link the new post into that post's translation group                      |
-| `publishedAt`     | integer                                  | no                   | current time   | Unix seconds; only valid when `status` is `published`                     |
-| `attachments`     | attachment[]                             | no                   | `[]`           | Ordered attachments, max `20`                                             |
+| Field               | Type                                     | Required             | Default        | Notes                                                                                                                                  |
+| ------------------- | ---------------------------------------- | -------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `format`            | `note` \| `link` \| `quote`              | yes                  | —              | Post format                                                                                                                            |
+| `title`             | string                                   | required for `link`  | —              | Max `300`; not allowed for `quote`                                                                                                     |
+| `sourceName`        | string                                   | no                   | `null`         | Quote attribution name, max `300`; only for `quote`                                                                                    |
+| `body`              | string                                   | no                   | `null`         | TipTap JSON string; mutually exclusive with `bodyMarkdown`                                                                             |
+| `bodyMarkdown`      | string                                   | no                   | `null`         | Recommended for scripts; mutually exclusive with `body`                                                                                |
+| `slug`              | string                                   | no                   | auto-generated | Canonical slug; mutually exclusive with `path`                                                                                         |
+| `path`              | string                                   | no                   | —              | Create-time address; starts with a letter or digit, then lowercase letters, numbers, `-`, `.`, and `/`; mutually exclusive with `slug` |
+| `status`            | `draft` \| `published`                   | no                   | `published`    | Post status                                                                                                                            |
+| `visibility`        | `public` \| `latest_hidden` \| `private` | no                   | `public`       | Post visibility                                                                                                                        |
+| `pinned`            | boolean                                  | no                   | `false`        | Pin the post; not allowed on replies                                                                                                   |
+| `featured`          | boolean                                  | no                   | `false`        | Mark as featured                                                                                                                       |
+| `pinnedAt`          | integer \| `null`                        | no                   | —              | Pin at this time instead of now; wins over `pinned`. For restores                                                                      |
+| `featuredAt`        | integer \| `null`                        | no                   | —              | Feature at this time instead of now; wins over `featured`. For restores                                                                |
+| `url`               | absolute URL                             | required for `link`  | —              | Allows `http:`, `https:`, or `mailto:`; not allowed for `note` or `quote`                                                              |
+| `sourceUrl`         | absolute URL                             | no                   | `null`         | Quote attribution URL; not allowed for non-quote                                                                                       |
+| `quoteText`         | string                                   | required for `quote` | —              | Not allowed for `note` or `link`                                                                                                       |
+| `rating`            | integer                                  | no                   | `null`         | `1` to `5`; send `0` to clear on update                                                                                                |
+| `collectionIds`     | `col_*` string[]                         | no                   | `[]`           | Shared Thread Collection TypeIDs; max `20`                                                                                             |
+| `collectionEntries` | object[]                                 | no                   | —              | Collection memberships with their own times; wins over `collectionIds`. For restores                                                   |
+| `replyToId`         | `pst_*` string                           | no                   | `null`         | Make this post a thread reply                                                                                                          |
+| `quietReply`        | boolean                                  | no                   | `false`        | Publish a reply without announcing its Thread on Latest                                                                                |
+| `language`          | BCP 47 tag                               | no                   | detected       | Content language, e.g. `en`, `zh-Hans`; replies inherit the Thread's                                                                   |
+| `translationOfId`   | `pst_*` string                           | no                   | `null`         | Link the new post into that post's translation group                                                                                   |
+| `publishedAt`       | integer                                  | no                   | current time   | Unix seconds; only valid when `status` is `published`                                                                                  |
+| `createdAt`         | integer                                  | no                   | current time   | Unix seconds; restores a moved post's creation time                                                                                    |
+| `updatedAt`         | integer                                  | no                   | `createdAt`    | Unix seconds; restores a moved post's last edit time                                                                                   |
+| `attachments`       | attachment[]                             | no                   | `[]`           | Ordered attachments, max `20`                                                                                                          |
 
 Important rules:
 
 - Use `body` or `bodyMarkdown`, not both.
+- `body` must be a TipTap document (a `doc` node) as a JSON string. Anything else is a `400`.
+- `createdAt` and `updatedAt` are for restores: an import or a migration that keeps a post's own times. Feeds report `updatedAt` as the entry's update time, and a Thread orders its replies by `createdAt`, then ID, after the root, which always comes first. Updates can't change either.
 - Use `slug` or `path`, not both.
 - `path` is only available on create. Post updates only support `slug`.
+- Each `collectionEntries` item is `{ "collectionId": "col_…", "createdAt": 1706000000, "position": 0, "pinnedAt": null }`; all but `collectionId` are optional. It restores when a Thread joined each collection, its place in a hand-ordered one, and whether it's pinned there.
 - `link` posts require `title` and `url`.
 - `quote` posts require `quoteText` and must use `sourceName` / `sourceUrl` instead of `title` / `url`.
 - `note` posts do not accept `url`, `quoteText`, `sourceName`, or `sourceUrl`.
@@ -709,6 +603,8 @@ Response: `201 Created` with the full post object and ordered `attachments`.
 ### Attachments
 
 Posts accept an ordered `attachments` array. Order in the request is the order shown on the post.
+
+An uploaded media item belongs to one post. A `mediaId` already attached to another post answers `409` with `CONFLICT`; to show the same file in a second post, such as a translation, upload it again.
 
 Input shapes:
 
@@ -731,15 +627,15 @@ Input shapes:
 
 Fields:
 
-| Field           | Type           | Required | Default | Notes                                  |
-| --------------- | -------------- | -------- | ------- | -------------------------------------- |
-| `type`          | `"media"`      | yes      | —       | Media attachment                       |
-| `mediaId`       | `med_*` string | yes      | —       | Previously uploaded media ID           |
-| `alt`           | string         | no       | `null`  | Alt text, max `500`                    |
-| `type`          | `"text"`       | yes      | —       | Text attachment                        |
-| `contentFormat` | `"markdown"`   | yes      | —       | Currently only `markdown` is supported |
-| `content`       | string         | yes      | —       | Non-empty text content                 |
-| `summary`       | string         | no       | `null`  | Optional summary, max `300`            |
+| Field           | Type           | Required | Default | Notes                                                                                        |
+| --------------- | -------------- | -------- | ------- | -------------------------------------------------------------------------------------------- |
+| `type`          | `"media"`      | yes      | —       | Media attachment                                                                             |
+| `mediaId`       | `med_*` string | yes      | —       | Previously uploaded media ID                                                                 |
+| `alt`           | string         | no       | `null`  | Alt text, max `500`. On an update, an omitted `alt` keeps the stored text and `""` clears it |
+| `type`          | `"text"`       | yes      | —       | Text attachment                                                                              |
+| `contentFormat` | `"markdown"`   | yes      | —       | Currently only `markdown` is supported                                                       |
+| `content`       | string         | yes      | —       | Non-empty text content                                                                       |
+| `summary`       | string         | no       | `null`  | Optional summary, max `300`                                                                  |
 
 Response shapes:
 
@@ -756,6 +652,7 @@ Response shapes:
   "blurhash": null,
   "width": 800,
   "height": 600,
+  "durationSeconds": null,
   "mimeType": "image/jpeg",
   "originalName": "photo.jpg",
   "size": 1024000,
@@ -770,12 +667,15 @@ Response shapes:
 {
   "type": "text",
   "id": "med_...",
+  "url": "/media/med_....md",
   "contentFormat": "markdown",
   "contentUrl": "/api/attachments/med_.../content",
   "summary": "Attached note Extra context here.",
   "chars": 33
 }
 ```
+
+A text attachment's `url` is its Markdown source file. `contentUrl` returns the same source as JSON and needs a session or token, so [public posts](#public-posts) leave it out.
 
 ### Get text attachment content
 
@@ -818,7 +718,7 @@ Example:
 
 Request body fields:
 
-This endpoint accepts the same JSON fields as `POST /api/posts`, except `path`. All fields are optional. Additionally, update accepts `null` to clear `title`, `sourceName`, `body`, `bodyMarkdown`, `url`, `sourceUrl`, `quoteText`, and `rating`.
+This endpoint accepts the same JSON fields as `POST /api/posts`, except the ones a post gets when it's created: `path`, `replyToId`, `quietReply`, `translationOfId`, `createdAt`, and `updatedAt`. It ignores those like any other field it doesn't know. All fields are optional. Additionally, update accepts `null` to clear `title`, `sourceName`, `body`, `bodyMarkdown`, `url`, `sourceUrl`, `quoteText`, and `rating`.
 
 Attachment replacement rules:
 
@@ -826,10 +726,13 @@ Attachment replacement rules:
 - Send `"attachments": []`: remove all attachments
 - Send a new `attachments` array: replace all attachments in that order
 
+An attachment the update removes is deleted, file included.
+
 Notes:
 
-- `path` is not supported on update. Use `slug` for canonical URL changes and `custom-urls` for extra aliases.
-- For quote posts, keep using `sourceName` and `sourceUrl`.
+- To change a post's address, send `slug`, or add a custom URL through `/api/custom-urls`.
+- The fields must suit the post's format, the one in the body or else its current one, with the same rules as create: a note takes no `url` or `sourceName`, and a quote uses `sourceName` and `sourceUrl`, not `title` and `url`. A field that doesn't answers `400`.
+- To link a post as a translation, use the [translation](#language-and-translations) endpoints. A reply's place in its Thread is fixed when it's created.
 - Thread replies reject direct `visibility` and `pinned` changes.
 - Sending `collectionIds` from either a Root or Child update replaces the shared Thread Collection set.
 - Draft updates cannot set `publishedAt`.
@@ -843,7 +746,7 @@ Response: `200 OK` with the updated post.
 
 Auth: `Session or token`
 
-Deletes the post. If the target is a thread root, its replies are deleted as part of the same operation.
+Deletes the post and its attachments, files included. If the target is a thread root, its replies are deleted as part of the same operation.
 
 Response:
 
@@ -851,9 +754,77 @@ Response:
 { "success": true }
 ```
 
+---
+
+## Public posts
+
+Base path: `/api/public/posts`
+
+`GET /api/public/posts/:slug` returns one post in the public reading view, not
+the editing view used in Settings; the Thread lists under `/api/public/threads`
+carry their posts in the same shape. When `PUBLIC_API_ENABLED=false`, these
+public endpoints return `404` to every caller. Authenticated clients can use
+`/api/posts` instead.
+
+Lists of public posts are Thread lists: `GET /api/public/threads`.
+
+Public post responses include these fields:
+
+| Field             | Type                        | Notes                                                                                                                   |
+| ----------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `id`              | `pst_*` string              | Post ID                                                                                                                 |
+| `format`          | `note` \| `link` \| `quote` | Post format                                                                                                             |
+| `status`          | `published`                 | Public endpoints only return published posts                                                                            |
+| `visibility`      | `public` \| `latest_hidden` | `latest_hidden` comes from single-post reads, and from Thread lists that ask for it                                     |
+| `slug`            | string                      | Canonical slug                                                                                                          |
+| `permalink`       | string                      | The post's public path, including any site prefix: its first custom URL, or `/{slug}` without one                       |
+| `title`           | string \| `null`            | Returned for `note` and `link` posts                                                                                    |
+| `url`             | string \| `null`            | Returned for `link` posts                                                                                               |
+| `sourceName`      | string \| `null`            | Returned instead of `title` for `quote`                                                                                 |
+| `sourceUrl`       | string \| `null`            | Returned instead of `url` for `quote`                                                                                   |
+| `bodyHtml`        | string \| `null`            | Rendered HTML; omitted when `content=markdown`                                                                          |
+| `bodyText`        | string \| `null`            | Plain-text rendering; omitted when `content=markdown`                                                                   |
+| `bodyMarkdown`    | string \| `null`            | Markdown source; only returned when `content=markdown`                                                                  |
+| `quoteText`       | string \| `null`            | Quote content                                                                                                           |
+| `summary`         | string \| `null`            | Optional summary                                                                                                        |
+| `rating`          | integer \| `null`           | `1` to `5` when set                                                                                                     |
+| `previewKind`     | string \| `null`            | Link preview kind                                                                                                       |
+| `previewProvider` | string \| `null`            | Link preview provider                                                                                                   |
+| `previewImageUrl` | string \| `null`            | Public preview image URL                                                                                                |
+| `replyToId`       | `pst_*` string \| `null`    | Parent reply/post ID                                                                                                    |
+| `threadId`        | `pst_*` string              | Thread root ID                                                                                                          |
+| `language`        | string \| `null`            | BCP 47 content language, the same for every post in a Thread; `null` until the site first turns on multilingual content |
+| `quietReply`      | boolean                     | Reply published without announcing its Thread. Always `false` on Thread roots                                           |
+| `pinnedAt`        | integer \| `null`           | Pin timestamp                                                                                                           |
+| `featuredAt`      | integer \| `null`           | Feature timestamp                                                                                                       |
+| `publishedAt`     | integer \| `null`           | Publish timestamp                                                                                                       |
+| `lastActivityAt`  | integer                     | Thread root: newest post in the Thread, **excluding** quiet replies. Editing a post never moves it                      |
+| `threadUpdatedAt` | integer                     | Thread root: newest post in the Thread, **including** quiet replies. Editing a post never moves it                      |
+| `threadPostCount` | integer                     | Published posts in the Thread, root included; `1` for a post on its own                                                 |
+| `createdAt`       | integer                     | Unix seconds                                                                                                            |
+| `updatedAt`       | integer                     | Unix seconds — when this row was last written, including edits                                                          |
+| `attachments`     | array                       | Ordered media/text attachment objects                                                                                   |
+| `collections`     | object[]                    | Public collection refs with `id`, `slug`, `title`, and `url`                                                            |
+
+### Get a public post by slug
+
+`GET /api/public/posts/:slug`
+
+Auth: `Public when enabled`
+
+This returns a single published public post by canonical slug.
+
+Notes:
+
+- `latest_hidden` posts remain readable by direct slug.
+- Draft and private posts return `404`.
+- `content=markdown` returns `bodyMarkdown` and omits `bodyHtml/bodyText`.
+
+---
+
 ## Language and translations
 
-These endpoints only matter on a site with [multilingual content](multilingual.md) turned on. Post responses do not carry `language`; read it through the translation endpoints below, which return the language of every post they list.
+These endpoints only matter on a site with [multilingual content](multilingual.md) turned on. Every post response carries `language`; the endpoints below list and link a post's other versions.
 
 ### Set a Thread's language
 
@@ -906,7 +877,7 @@ Auth: `Session or token`
 | `q`     | string  | yes      | —       | Substring of title or body, max `200` |
 | `limit` | integer | no       | `8`     | `1` to `20`                           |
 
-Returns published Thread roots this post could actually be linked to: written in a language its group does not already hold, and — when this post already belongs to a group — not in a group of their own. Same entry shape as the endpoint above, newest first.
+Returns published Thread roots this post could actually be linked to: written in a language its group does not already hold, and — when this post already belongs to a group — not in a group of their own. Newest first, as `{ "candidates": [...] }` with the same entries as the endpoint above.
 
 ### Look up a linkable post by address
 
@@ -963,19 +934,189 @@ Response: `200 OK` with `{ "success": true }`.
 
 ---
 
+## Threads
+
+Base paths: `/api/threads` and `/api/public/threads`
+
+A Thread is a root post and its replies. It has no ID of its own: it uses its root's, which every post in it carries as `threadId`. The endpoints that read one Thread accept any of its posts.
+
+`/api/threads` is the author's view: every status and visibility, with posts in the [editing view](#post-response-shape). `/api/public/threads` is the reader's: published Threads that aren't private, with posts in the [reading view](#public-posts). When `PUBLIC_API_ENABLED=false`, `/api/public/threads` returns `404` to every caller.
+
+Thread responses include these fields:
+
+| Field             | Type           | Notes                                               |
+| ----------------- | -------------- | --------------------------------------------------- |
+| `id`              | `pst_*` string | The root post's ID                                  |
+| `postCount`       | integer        | Published posts in the Thread, root included        |
+| `lastActivityAt`  | integer        | Newest post in the Thread, excluding quiet replies  |
+| `threadUpdatedAt` | integer        | Newest post in the Thread, including quiet replies  |
+| `root`            | object         | The root post                                       |
+| `fold`            | object         | Only with `include=fold`; see [The fold](#the-fold) |
+
+Example from `/api/public/threads?include=fold`:
+
+```json
+{
+  "id": "pst_01jpyx3m7gw4w3h7m4bknq0v1d",
+  "postCount": 9,
+  "lastActivityAt": 1706700000,
+  "threadUpdatedAt": 1706700000,
+  "root": {
+    "id": "pst_01jpyx3m7gw4w3h7m4bknq0v1d",
+    "slug": "dialing-in",
+    "permalink": "/dialing-in",
+    "threadPostCount": 9
+  },
+  "fold": {
+    "leading": [{ "id": "pst_01jpz0c7r4e7kqv3m8x2n5b6td" }, { "id": "…" }],
+    "hidden": 3,
+    "gap": {
+      "id": "pst_01jpz2k9w1f8m5c7q3v6x4b2hn",
+      "slug": "third-cup",
+      "permalink": "/third-cup",
+      "cursor": "eyJ2IjoxLCJzIjoidGhyZWFkIiwiayI6WzEsMTcwNjYwMDAwMCwicHN0XzAxanB6MGM3cjRlN2txdjNtOHgybjViNnRkIl19"
+    },
+    "trailing": [{ "id": "…" }, { "id": "…" }, { "id": "…" }]
+  }
+}
+```
+
+Posts in the example are cut to a few fields; each is a full post.
+
+### The fold
+
+`include=fold` adds the replies the homepage shows under a Thread: the earliest ones, then the latest ones with the newest last, and a count of the replies left out between them.
+
+| Field      | Type             | Notes                                                                                                                        |
+| ---------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `leading`  | post[]           | The earliest replies                                                                                                         |
+| `hidden`   | integer          | Replies left out between `leading` and `trailing`                                                                            |
+| `gap`      | object \| `null` | The first reply left out: `id`, `slug`, and `cursor`, plus `permalink` on `/api/public/threads`. `null` when `hidden` is `0` |
+| `trailing` | post[]           | The latest replies, oldest first. The newest reply is the last one                                                           |
+
+Notes:
+
+- Which replies the fold keeps is the site's choice and can change. Read `hidden` rather than working it out: for a published Thread, `1 + leading.length + trailing.length + hidden` is `postCount`.
+- A Thread without replies has an empty fold: `leading` and `trailing` are empty and `hidden` is `0`.
+- To load the replies left out, list the Thread's posts from the gap on: `GET /api/public/threads/:slug/posts?cursor=<gap.cursor>&limit=<hidden>`. The cursor is opaque, as `nextCursor` is.
+
+### List Threads
+
+`GET /api/public/threads`
+
+`GET /api/threads`
+
+Auth: `Public when enabled` for `/api/public/threads`, `Session or token` for `/api/threads`
+
+Unfiltered, `/api/public/threads` lists what the homepage lists: Threads hidden from Latest are left out, the newest activity comes first, and pinned Threads are on top. `/api/threads` lists every visibility. Both take [the archive's filters](writing-and-organizing.md#archive-filters).
+
+Query parameters:
+
+| Parameter    | Type                                                           | Required | Default     | Notes                                                                                                                                         |
+| ------------ | -------------------------------------------------------------- | -------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sort`       | `activity` \| `published` \| `updated` \| `oldest` \| `rating` | no       | `activity`  | See the orders below. A named collection changes the default                                                                                  |
+| `visibility` | `public` \| `featured` \| `hidden` \| `any` \| `private`       | no       | see notes   | `hidden` is the URL spelling of `latest_hidden`, which is also read. `private` on `/api/threads` only                                         |
+| `format`     | `note` \| `link` \| `quote`                                    | no       | all         | Format of the root                                                                                                                            |
+| `collection` | string                                                         | no       | none        | Collection slug, or several comma-separated. A Thread in any one of them matches                                                              |
+| `year`       | integer                                                        | no       | none        | Roots whose `publishedAt` falls in this calendar year in the site's time zone, whatever the order                                             |
+| `media`      | comma-separated `MediaKind` \| `any` \| `none`                 | no       | none        | Kinds (`image`, `video`, `audio`, `text`, `document`): roots with an attachment of one of them. `any` = with any attachment, `none` = without |
+| `title`      | `any` \| `none`                                                | no       | none        | Roots with a title, or without                                                                                                                |
+| `replies`    | `any` \| `none`                                                | no       | none        | Threads with published replies, or single posts                                                                                               |
+| `lang`       | BCP 47 tag                                                     | no       | all         | Restrict to one content language                                                                                                              |
+| `status`     | `draft` \| `published`                                         | no       | `published` | `/api/threads` only                                                                                                                           |
+| `include`    | `fold`                                                         | no       | none        | Add [the fold](#the-fold) to each Thread. Comma-separated; a value it doesn't offer is skipped                                                |
+| `cursor`     | string                                                         | no       | none        | Pass the previous `nextCursor` back unchanged                                                                                                 |
+| `limit`      | integer                                                        | no       | `20`        | `1` to `100`                                                                                                                                  |
+| `content`    | `markdown`                                                     | no       | none        | Return `bodyMarkdown` instead of the rendered body fields                                                                                     |
+
+Orders:
+
+| `sort`      | Order                                                                                            | Where the site uses it            |
+| ----------- | ------------------------------------------------------------------------------------------------ | --------------------------------- |
+| `activity`  | Newest activity first, pinned Threads on top. A reply moves its Thread up; a quiet reply doesn't | Homepage, a collection's `newest` |
+| `published` | Newest root publication first, `id` breaking ties. A reply doesn't move its Thread               | Archive                           |
+| `updated`   | Like `activity`, but quiet replies count too, and pinned Threads aren't moved to the top         | Archive's `?sort=updated`         |
+| `oldest`    | Oldest root publication first                                                                    | A collection's `oldest`           |
+| `rating`    | Highest rating first, then newest activity                                                       | A collection's `rating_desc`      |
+
+Response:
+
+```json
+{
+  "threads": [
+    { "id": "pst_01jpyx3m7gw4w3h7m4bknq0v1d", "postCount": 9, "…": "…" }
+  ],
+  "nextCursor": null
+}
+```
+
+Notes:
+
+- `visibility` left out means what the homepage shows on `/api/public/threads`, and every visibility on `/api/threads`. `visibility=any` on `/api/public/threads` adds Threads hidden from Latest. `visibility=all` returns `400`, and so does `visibility=private` on `/api/public/threads`.
+- `visibility=featured` lists newest-published first. A `sort` other than `published` returns `400`.
+- A single `collection` without `sort` lists in that collection's own `sortOrder`, with its pinned Threads on top; several collections list by `activity`. `activity`, `oldest`, and `rating` on a collection keep its pins. `published` and `updated` read it as a plain filter.
+- To walk every public Thread, pass `visibility=any&sort=published`: in `activity` order a new reply moves a Thread, which a walk can skip.
+- Paging follows [Pagination](#pagination).
+- An invalid value returns `400`. An unknown `collection` slug returns an empty result set.
+
+### Get a Thread
+
+`GET /api/public/threads/:slug`
+
+`GET /api/threads/:id`
+
+Auth: `Public when enabled` for `/api/public/threads/:slug`, `Session or token` for `/api/threads/:id`
+
+Returns the Thread of the post the slug or ID names, root or reply. `include=fold` adds [the fold](#the-fold), and `content=markdown` works as on the list.
+
+Notes:
+
+- `/api/public/threads/:slug` returns `404` when the slug names a draft or a private post. A Thread hidden from Latest is returned.
+- `/api/threads/:id` returns drafts and private Threads.
+
+### List a Thread's posts
+
+`GET /api/public/threads/:slug/posts`
+
+`GET /api/threads/:id/posts`
+
+Auth: `Public when enabled` for `/api/public/threads/:slug/posts`, `Session or token` for `/api/threads/:id/posts`
+
+Returns the posts of the Thread the slug or ID names, in Thread order: the root first, then replies by creation time. The Thread page and the feeds use the same order.
+
+Query parameters:
+
+| Parameter | Type                   | Required | Default     | Notes                                                                  |
+| --------- | ---------------------- | -------- | ----------- | ---------------------------------------------------------------------- |
+| `status`  | `draft` \| `published` | no       | `published` | `/api/threads/:id/posts` only                                          |
+| `cursor`  | string                 | no       | none        | Pass the previous `nextCursor` or a fold's `gap.cursor` back unchanged |
+| `limit`   | integer                | no       | `100`       | `1` to `100`                                                           |
+| `content` | `markdown`             | no       | none        | Return `bodyMarkdown` instead of the rendered body fields              |
+
+Response: `{ "posts": [Post], "nextCursor": string | null }`, with each post as the Posts or Public posts endpoints return it.
+
+Notes:
+
+- `/api/public/threads/:slug/posts` returns published posts only.
+- A reply published during a walk joins the end of the Thread, so the walk reaches it.
+- Paging follows [Pagination](#pagination).
+
+---
+
 ## Uploads
 
 All upload endpoints require auth.
 
-Jant currently exposes three upload APIs:
+Jant exposes two upload APIs:
 
 1. `/api/upload`: one-shot upload, preferred for ordinary scripts and migrations
 2. `/api/uploads`: session-based upload, preferred for large files, unreliable connections, and application clients that need resumable transport
-3. `/api/upload/multipart`: legacy explicit multipart relay API
 
 File size is limited by `UPLOAD_MAX_FILE_SIZE_MB` and defaults to `1024 MB`.
 
-Jant accepts a broad set of image, video, audio, document, text, archive, font, design, and code MIME types. Unsupported types return `400`.
+Images upload as JPEG, PNG, or WebP, video as MP4, and audio as MP4 (`audio/mp4`); any other image, video, or audio type answers `400`, so convert it first, as the editor does in the browser. Documents, text, archives, fonts, design files, and code upload in most formats and are served as downloads, except PDFs, which open in the browser.
+
+The type is the one the request declares for the file. `curl -F "file=@photo.webp"` declares `application/octet-stream` for extensions it doesn't know, WebP among them, and the file is then stored as a download; name the type, as in `-F "file=@photo.webp;type=image/webp"`.
 
 ### Session-based upload flow
 
@@ -1014,7 +1155,7 @@ Fields:
 | `size`           | integer | yes      | —       | File size in bytes              |
 | `checksumSha256` | string  | no       | `null`  | Base64-encoded SHA-256 checksum |
 
-The response includes an upload session ID (`upl_*`) and one of three transport kinds.
+The response includes an upload session ID (`upl_*`) and one of three transport kinds. Send the file to `transport.url` as given: on a site with `SITE_PATH_PREFIX`, the relay URLs already start with the prefix.
 
 #### Relay transport
 
@@ -1125,129 +1266,22 @@ Request body:
 
 Fields:
 
-| Field      | Type    | Required                      | Default | Notes                                 |
-| ---------- | ------- | ----------------------------- | ------- | ------------------------------------- |
-| `width`    | integer | no                            | `null`  | Image/video width; positive           |
-| `height`   | integer | no                            | `null`  | Image/video height; positive          |
-| `blurhash` | string  | no                            | `null`  | Blurhash string, max `200`            |
-| `waveform` | string  | no                            | `null`  | Audio waveform, max `2000`            |
-| `summary`  | string  | no                            | `null`  | Mainly for text uploads, max `500`    |
-| `chars`    | integer | no                            | `null`  | Mainly for text uploads; non-negative |
-| `parts`    | array   | required for `multipartRelay` | —       | `[{partNumber, etag}]`                |
+| Field             | Type    | Required                      | Default | Notes                                   |
+| ----------------- | ------- | ----------------------------- | ------- | --------------------------------------- |
+| `width`           | integer | no                            | `null`  | Image/video width; positive             |
+| `height`          | integer | no                            | `null`  | Image/video height; positive            |
+| `durationSeconds` | integer | no                            | `null`  | Audio/video length in seconds; positive |
+| `blurhash`        | string  | no                            | `null`  | Blurhash string, max `200`              |
+| `waveform`        | string  | no                            | `null`  | Audio waveform, max `2000`              |
+| `summary`         | string  | no                            | `null`  | Mainly for text uploads, max `500`      |
+| `chars`           | integer | no                            | `null`  | Mainly for text uploads; non-negative   |
+| `parts`           | array   | required for `multipartRelay` | —       | `[{partNumber, etag}]`                  |
 
-Response:
-
-```json
-{
-  "id": "med_01jpyx4g9m8b4y50a4gx3t7p1n",
-  "filename": "med_01jpyx4g9m8b4y50a4gx3t7p1n.webp",
-  "url": "/media/med_01jpyx4g9m8b4y50a4gx3t7p1n.webp",
-  "mimeType": "image/webp",
-  "size": 1024000
-}
-```
+Response: `201 Created` with the [media object](#media) the upload became.
 
 ### Abort an upload session
 
 `POST /api/uploads/:id/abort`
-
-Response:
-
-```json
-{ "success": true }
-```
-
-### List uploaded media
-
-`GET /api/upload`
-
-Auth: `Session or token`
-
-This is the media metadata listing endpoint.
-
-Query parameters:
-
-| Parameter    | Type    | Required | Default | Notes                                      |
-| ------------ | ------- | -------- | ------- | ------------------------------------------ |
-| `limit`      | integer | no       | `50`    | `1` to `200`                               |
-| `mimePrefix` | string  | no       | none    | Prefix filter such as `image/` or `video/` |
-
-Response:
-
-```json
-{
-  "media": [
-    {
-      "id": "med_01jpyx4g9m8b4y50a4gx3t7p1n",
-      "siteId": "sit_01jpyx1v6z9k4c7b2m5q8r3nfh",
-      "postId": null,
-      "filename": "photo.webp",
-      "originalName": "photo.webp",
-      "mimeType": "image/webp",
-      "size": 1024000,
-      "provider": "r2",
-      "width": 1200,
-      "height": 800,
-      "durationSeconds": null,
-      "alt": "Cover image",
-      "position": "0",
-      "blurhash": null,
-      "waveform": null,
-      "summary": null,
-      "chars": null,
-      "mediaKind": "image",
-      "createdAt": 1706000000,
-      "updatedAt": 1706000000,
-      "type": "media",
-      "url": "/media/med_01jpyx4g9m8b4y50a4gx3t7p1n.webp",
-      "previewUrl": "/media/med_01jpyx4g9m8b4y50a4gx3t7p1n.webp",
-      "posterUrl": null
-    }
-  ]
-}
-```
-
-Notes:
-
-- This list may include ordinary uploaded binaries and stored text attachments.
-- Text attachments use `type: "text"` and expose `contentFormat` plus `contentUrl` instead of `url`, `previewUrl`, and `posterUrl`.
-
-### Get a media item
-
-`GET /api/upload/:id`
-
-Auth: `Session or token`
-
-Returns one media or text attachment record using the same response shape as `GET /api/upload`.
-
-### Update media alt text
-
-`PATCH /api/upload/:id`
-
-Auth: `Session or token`
-
-Request body:
-
-```json
-{
-  "alt": "Cover image"
-}
-```
-
-Rules:
-
-- `alt` is trimmed before storing.
-- Max length is `500`.
-
-Response: `200 OK` with the updated media object.
-
-### Delete a media item
-
-`DELETE /api/upload/:id`
-
-Auth: `Session or token`
-
-Deletes the media record and its stored object.
 
 Response:
 
@@ -1269,152 +1303,148 @@ Content type: `multipart/form-data`
 
 Form fields:
 
-| Field      | Type    | Required | Default | Notes                          |
-| ---------- | ------- | -------- | ------- | ------------------------------ |
-| `file`     | file    | yes      | —       | Main file                      |
-| `width`    | integer | no       | `null`  | Image/video width              |
-| `height`   | integer | no       | `null`  | Image/video height             |
-| `alt`      | string  | no       | `null`  | Alt text                       |
-| `blurhash` | string  | no       | `null`  | Blurhash                       |
-| `waveform` | string  | no       | `null`  | Audio waveform                 |
-| `summary`  | string  | no       | `null`  | Summary for text uploads       |
-| `poster`   | file    | no       | —       | Poster frame for video uploads |
+| Field             | Type    | Required | Default | Notes                          |
+| ----------------- | ------- | -------- | ------- | ------------------------------ |
+| `file`            | file    | yes      | —       | Main file                      |
+| `width`           | integer | no       | `null`  | Image/video width              |
+| `height`          | integer | no       | `null`  | Image/video height             |
+| `alt`             | string  | no       | `null`  | Alt text                       |
+| `blurhash`        | string  | no       | `null`  | Blurhash                       |
+| `waveform`        | string  | no       | `null`  | Audio waveform                 |
+| `summary`         | string  | no       | `null`  | Summary for text uploads       |
+| `durationSeconds` | integer | no       | `null`  | Video or audio length          |
+| `poster`          | file    | no       | —       | Poster frame for video uploads |
+
+Response: `201 Created` with the [media object](#media) the file became.
+
+## Media
+
+Base path: `/api/media`
+
+The files you've uploaded, whether attached to a post or not. Upload them with [`POST /api/upload`](#one-shot-upload) or an [upload session](#session-based-upload-flow).
+
+Media responses, from these endpoints and the MCP media tools, include these fields:
+
+| Field             | Type                                                  | Notes                                                                                                             |
+| ----------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `id`              | `med_*` string                                        | Media ID                                                                                                          |
+| `postId`          | `pst_*` string \| `null`                              | The post the file is attached to; `null` while unattached                                                         |
+| `type`            | `media` \| `text`                                     | `text` for a text attachment, `media` for every other file                                                        |
+| `mediaKind`       | `image` \| `video` \| `audio` \| `text` \| `document` | Kind of file                                                                                                      |
+| `mimeType`        | string                                                | MIME type                                                                                                         |
+| `originalName`    | string                                                | The file's name as uploaded                                                                                       |
+| `size`            | integer                                               | Bytes                                                                                                             |
+| `width`           | integer \| `null`                                     | Pixels, for images and video                                                                                      |
+| `height`          | integer \| `null`                                     | Pixels, for images and video                                                                                      |
+| `durationSeconds` | number \| `null`                                      | For audio and video                                                                                               |
+| `alt`             | string \| `null`                                      | Alt text                                                                                                          |
+| `blurhash`        | string \| `null`                                      | Placeholder hash for images                                                                                       |
+| `waveform`        | string \| `null`                                      | Waveform data for audio                                                                                           |
+| `summary`         | string \| `null`                                      | Text attachment summary                                                                                           |
+| `chars`           | integer \| `null`                                     | Text attachment length in characters                                                                              |
+| `createdAt`       | integer                                               | Unix seconds                                                                                                      |
+| `updatedAt`       | integer                                               | Unix seconds                                                                                                      |
+| `url`             | string                                                | The file's public URL; for `type: "text"`, its Markdown source                                                    |
+| `previewUrl`      | string                                                | `type: "media"` only: a resized image for images, the file's URL otherwise                                        |
+| `posterUrl`       | string \| `null`                                      | `type: "media"` only: the poster frame for video                                                                  |
+| `contentFormat`   | `markdown`                                            | `type: "text"` only                                                                                               |
+| `contentUrl`      | string                                                | `type: "text"` only: the Markdown source as JSON; see [Get text attachment content](#get-text-attachment-content) |
+
+### List media
+
+`GET /api/media`
+
+Auth: `Session or token`
+
+Query parameters:
+
+| Parameter    | Type    | Required | Default | Notes                                         |
+| ------------ | ------- | -------- | ------- | --------------------------------------------- |
+| `limit`      | integer | no       | `50`    | `1` to `200`                                  |
+| `mimePrefix` | string  | no       | none    | Prefix filter such as `image/` or `video/`    |
+| `cursor`     | string  | no       | none    | Pass the previous `nextCursor` back unchanged |
 
 Response:
 
 ```json
 {
-  "id": "med_01jpyx4g9m8b4y50a4gx3t7p1n",
-  "filename": "med_01jpyx4g9m8b4y50a4gx3t7p1n.jpg",
-  "url": "/media/med_01jpyx4g9m8b4y50a4gx3t7p1n.jpg",
-  "mimeType": "image/jpeg",
-  "size": 1024000
+  "media": [
+    {
+      "id": "med_01jpyx4g9m8b4y50a4gx3t7p1n",
+      "postId": null,
+      "originalName": "photo.webp",
+      "mimeType": "image/webp",
+      "size": 1024000,
+      "width": 1200,
+      "height": 800,
+      "durationSeconds": null,
+      "alt": "Cover image",
+      "blurhash": null,
+      "waveform": null,
+      "summary": null,
+      "chars": null,
+      "mediaKind": "image",
+      "createdAt": 1706000000,
+      "updatedAt": 1706000000,
+      "type": "media",
+      "url": "/media/med_01jpyx4g9m8b4y50a4gx3t7p1n.webp",
+      "previewUrl": "/media/med_01jpyx4g9m8b4y50a4gx3t7p1n.webp",
+      "posterUrl": null
+    }
+  ],
+  "nextCursor": null
 }
 ```
 
-If the request sends `Accept: text/event-stream`, the endpoint may return SSE patches instead of JSON for live UI updates.
+Notes:
 
-### Legacy explicit multipart relay
+- Newest first. `nextCursor` is `null` on the last page.
+- This list may include ordinary uploaded binaries and stored text attachments.
+- Text attachments use `type: "text"` and expose `contentFormat` plus `contentUrl` instead of `previewUrl` and `posterUrl`.
 
-Base path: `/api/upload/multipart`
+### Get a media item
 
-This is the older chunked-upload API. Prefer `/api/uploads` unless you already implement this flow.
+`GET /api/media/:id`
 
-#### Initiate a multipart upload
+Auth: `Session or token`
 
-`POST /api/upload/multipart`
+Returns one media or text attachment record using the same response shape as `GET /api/media`.
+
+### Update media alt text
+
+`PUT /api/media/:id`
+
+Auth: `Session or token`
 
 Request body:
 
 ```json
 {
-  "filename": "video.mp4",
-  "contentType": "video/mp4",
-  "size": 250000000
+  "alt": "Cover image"
 }
 ```
 
-Response:
+Rules:
 
-```json
-{
-  "id": "med_01jpyx4g9m8b4y50a4gx3t7p1n",
-  "uploadId": "upload-123",
-  "storageKey": "media/...",
-  "filename": "med_01jpyx4g9m8b4y50a4gx3t7p1n.mp4",
-  "originalName": "video.mp4"
-}
-```
+- `alt` is trimmed before storing.
+- An empty `alt` clears it, and the response carries `null`.
+- Max length is `500`.
 
-#### Upload one part
+Response: `200 OK` with the updated media object.
 
-`PUT /api/upload/multipart/:id/part?partNumber=N&storageKey=...&uploadId=...`
+### Delete a media item
 
-- Body: raw part bytes
-- Response:
+`DELETE /api/media/:id`
 
-```json
-{
-  "partNumber": 1,
-  "etag": "etag-value"
-}
-```
+Auth: `Session or token`
 
-#### Upload a poster frame
-
-`PUT /api/upload/multipart/:id/poster`
-
-Content type: `multipart/form-data`
-
-Form field:
-
-| Field    | Type | Required | Default | Notes             |
-| -------- | ---- | -------- | ------- | ----------------- |
-| `poster` | file | yes      | —       | WebP poster frame |
-
-Response:
-
-```json
-{
-  "posterKey": "media/.../posters/..."
-}
-```
-
-#### Complete the multipart upload
-
-`POST /api/upload/multipart/:id/complete`
-
-Request body:
-
-```json
-{
-  "storageKey": "media/...",
-  "uploadId": "upload-123",
-  "parts": [{ "partNumber": 1, "etag": "etag-1" }],
-  "filename": "med_....mp4",
-  "originalName": "video.mp4",
-  "contentType": "video/mp4",
-  "size": 250000000,
-  "width": 1920,
-  "height": 1080,
-  "blurhash": "optional",
-  "waveform": "optional",
-  "posterKey": "media/.../poster.webp"
-}
-```
-
-Response:
-
-```json
-{
-  "id": "med_01jpyx4g9m8b4y50a4gx3t7p1n",
-  "filename": "med_01jpyx4g9m8b4y50a4gx3t7p1n.mp4",
-  "url": "/media/med_01jpyx4g9m8b4y50a4gx3t7p1n.mp4",
-  "mimeType": "video/mp4",
-  "size": 250000000
-}
-```
-
-#### Abort the multipart upload
-
-`POST /api/upload/multipart/:id/abort`
-
-Request body:
-
-```json
-{
-  "storageKey": "media/...",
-  "uploadId": "upload-123"
-}
-```
+Deletes the media record and its stored object.
 
 Response:
 
 ```json
 { "success": true }
 ```
-
----
 
 ## Collections
 
@@ -1428,7 +1458,6 @@ Collection responses include these fields:
 | Field              | Type                                  | Notes                            |
 | ------------------ | ------------------------------------- | -------------------------------- |
 | `id`               | `col_*` string                        | Collection ID                    |
-| `siteId`           | string                                | Owning site                      |
 | `slug`             | string                                | Canonical collection slug        |
 | `title`            | string                                | Display title                    |
 | `description`      | string \| `null`                      | Optional description             |
@@ -1440,18 +1469,18 @@ Collection responses include these fields:
 
 Directory item responses include these fields:
 
-| Field               | Type                                                      | Notes                                  |
-| ------------------- | --------------------------------------------------------- | -------------------------------------- |
-| `id`                | `cdi_*` string                                            | Directory item ID                      |
-| `siteId`            | string                                                    | Owning site                            |
-| `type`              | `collection` \| `smart_collection` \| `divider` \| `link` | Item kind                              |
-| `collectionId`      | `col_*` string \| `null`                                  | Present for `type: "collection"`       |
-| `smartCollectionId` | `smc_*` string \| `null`                                  | Present for `type: "smart_collection"` |
-| `label`             | string \| `null`                                          | Divider label or link label            |
-| `url`               | string \| `null`                                          | Present for `type: "link"`             |
-| `position`          | string                                                    | Fractional ordering key                |
-| `createdAt`         | integer                                                   | Unix seconds                           |
-| `updatedAt`         | integer                                                   | Unix seconds                           |
+| Field               | Type                                                      | Notes                                   |
+| ------------------- | --------------------------------------------------------- | --------------------------------------- |
+| `id`                | `cdi_*` string                                            | Directory item ID                       |
+| `type`              | `collection` \| `smart_collection` \| `divider` \| `link` | Item kind                               |
+| `collectionId`      | `col_*` string \| `null`                                  | Present for `type: "collection"`        |
+| `smartCollectionId` | `smc_*` string \| `null`                                  | Present for `type: "smart_collection"`  |
+| `label`             | string \| `null`                                          | Divider label or link label             |
+| `url`               | string \| `null`                                          | Present for `type: "link"`              |
+| `description`       | string \| `null`                                          | Optional description for `type: "link"` |
+| `position`          | string                                                    | Fractional ordering key                 |
+| `createdAt`         | integer                                                   | Unix seconds                            |
+| `updatedAt`         | integer                                                   | Unix seconds                            |
 
 Notes:
 
@@ -1464,13 +1493,14 @@ Notes:
 
 `GET /api/collections`
 
-Auth: `Public`
+Auth: `Session or token`
 
 Query parameters:
 
-| Parameter | Type      | Required | Default | Notes                                              |
-| --------- | --------- | -------- | ------- | -------------------------------------------------- |
-| `view`    | `compose` | no       | none    | Specialized compose view sorted by recent activity |
+| Parameter | Type       | Required | Default | Notes                                                                               |
+| --------- | ---------- | -------- | ------- | ----------------------------------------------------------------------------------- |
+| `view`    | `compose`  | no       | none    | Specialized compose view sorted by recent activity                                  |
+| `lang`    | BCP 47 tag | no       | all     | Count only Threads in this content language in `threadCount` and `recentActivityAt` |
 
 Default response:
 
@@ -1479,7 +1509,6 @@ Default response:
   "collections": [
     {
       "id": "col_01jpyx5qds8y79w2dd6sv4rznj",
-      "siteId": "sit_01jpyx1v6z9k4c7b2m5q8r3nfh",
       "slug": "reading",
       "title": "Reading",
       "description": "Books I've read",
@@ -1493,12 +1522,11 @@ Default response:
   "smartCollections": [
     {
       "id": "smc_01jpyxa2k4d7n6r9s1t3v5w8xz",
-      "siteId": "sit_01jpyx1v6z9k4c7b2m5q8r3nfh",
       "slug": "quotes",
       "title": "Quotes",
       "description": "Things worth keeping.",
       "selection": { "format": "quote" },
-      "sort": "newest",
+      "sortOrder": "newest",
       "layout": null,
       "createdAt": 1706000000,
       "updatedAt": 1706000000,
@@ -1509,7 +1537,6 @@ Default response:
   "directoryItems": [
     {
       "id": "cdi_01jpyx8r7s3v8m1q5c9k2f6gth",
-      "siteId": "sit_01jpyx1v6z9k4c7b2m5q8r3nfh",
       "type": "collection",
       "collectionId": "col_01jpyx5qds8y79w2dd6sv4rznj",
       "smartCollectionId": null,
@@ -1525,21 +1552,20 @@ Default response:
 
 Notes:
 
-- The default response returns directory ordering in `directoryItems`, and every smart collection in `smartCollections`. Both kinds carry `threadCount` and `recentActivityAt`, measured the same way, because the directory prints them side by side.
+- The default response returns directory ordering in `directoryItems`, and every smart collection in `smartCollections`. Both kinds carry `threadCount` and `recentActivityAt`, measured the same way, because the directory prints them side by side. Both count private Threads.
 - `view=compose` returns collections sorted by recent activity and always returns an empty `directoryItems` array. It carries no smart collections: a post cannot be added to one by hand, so offering it in a compose picker would be a control that does nothing.
 
 ### Get a collection
 
 `GET /api/collections/:id`
 
-Auth: `Public`
+Auth: `Session or token`
 
 Response:
 
 ```json
 {
   "id": "col_01jpyx5qds8y79w2dd6sv4rznj",
-  "siteId": "sit_01jpyx1v6z9k4c7b2m5q8r3nfh",
   "slug": "reading",
   "title": "Reading",
   "description": "Books I've read",
@@ -1596,7 +1622,7 @@ Notes:
 - Reserved slugs are rejected.
 - On success, Jant also creates the collection's `type: "collection"` directory item.
 
-Response: `201 Created` with the collection object, including `siteId`.
+Response: `201 Created` with the collection object.
 
 ### Update a collection
 
@@ -1615,7 +1641,7 @@ Request body fields:
 | `description` | string \| `null`                      | no       | unchanged | Send `null` to clear               |
 | `sortOrder`   | `newest` \| `oldest` \| `rating_desc` | no       | unchanged | Replaces the collection sort order |
 
-Response: `200 OK` with the updated collection object, including `siteId`.
+Response: `200 OK` with the updated collection object.
 
 ### Delete a collection
 
@@ -1662,13 +1688,14 @@ Link:
 
 Fields by type:
 
-| Field   | Type             | Required         | Default | Notes                                                         |
-| ------- | ---------------- | ---------------- | ------- | ------------------------------------------------------------- |
-| `type`  | `divider`        | yes              | —       | Creates a divider item                                        |
-| `label` | string \| `null` | no               | `null`  | Divider label, max `60`; blank values are stored as `null`    |
-| `type`  | `link`           | yes              | —       | Creates a custom link item                                    |
-| `label` | string           | yes (for `link`) | —       | Link label, 1-60 chars after trim                             |
-| `url`   | string           | yes (for `link`) | —       | Relative path or absolute `http:`, `https:`, or `mailto:` URL |
+| Field         | Type             | Required         | Default | Notes                                                         |
+| ------------- | ---------------- | ---------------- | ------- | ------------------------------------------------------------- |
+| `type`        | `divider`        | yes              | —       | Creates a divider item                                        |
+| `label`       | string \| `null` | no               | `null`  | Divider label, max `60`; blank values are stored as `null`    |
+| `type`        | `link`           | yes              | —       | Creates a custom link item                                    |
+| `label`       | string           | yes (for `link`) | —       | Link label, 1-60 chars after trim                             |
+| `url`         | string           | yes (for `link`) | —       | Relative path or absolute `http:`, `https:`, or `mailto:` URL |
+| `description` | string \| `null` | no               | `null`  | Link only: Markdown shown under the link                      |
 
 Notes:
 
@@ -1680,7 +1707,6 @@ Response:
 ```json
 {
   "id": "cdi_01jpyx8r7s3v8m1q5c9k2f6gth",
-  "siteId": "sit_01jpyx1v6z9k4c7b2m5q8r3nfh",
   "type": "divider",
   "collectionId": null,
   "label": "Essays",
@@ -1707,15 +1733,16 @@ This is a partial update.
 
 Request body fields:
 
-| Field   | Type             | Required | Default   | Notes                                               |
-| ------- | ---------------- | -------- | --------- | --------------------------------------------------- |
-| `label` | string \| `null` | no       | unchanged | For dividers: update label, or send `null` to clear |
-| `url`   | string           | no       | unchanged | For links: update URL                               |
+| Field         | Type             | Required | Default   | Notes                                                        |
+| ------------- | ---------------- | -------- | --------- | ------------------------------------------------------------ |
+| `label`       | string \| `null` | no       | unchanged | For dividers: update label, or send `null` to clear          |
+| `url`         | string           | no       | unchanged | For links: update URL                                        |
+| `description` | string \| `null` | no       | unchanged | For links: Markdown shown under the link, or `null` to clear |
 
 Notes:
 
 - Divider items only use `label`.
-- Link items use `label` and `url`.
+- Link items use `label`, `url`, and `description`.
 - Link labels cannot be cleared with `null`.
 - Collection-backed items should be managed through collection endpoints, not updated directly here.
 
@@ -1764,6 +1791,8 @@ Response:
 { "success": true }
 ```
 
+An ID that names no directory item returns `404`.
+
 ### Add a Thread to a collection
 
 `POST /api/collections/:id/threads`
@@ -1783,13 +1812,17 @@ Fields:
 | `threadId` | `pst_*` string | yes      | —       | Thread root or child Post ID |
 
 The ID is normalized to the Thread root. The root and every child share one
-Collection membership set.
+Collection membership set. Adding a Thread that is already in the Collection
+changes nothing.
 
 Response:
 
 ```json
 { "success": true }
 ```
+
+On this endpoint and the three below, a Collection or post that doesn't exist
+returns `404`.
 
 ### Remove a Thread from a collection
 
@@ -1798,7 +1831,7 @@ Response:
 Auth: `Session or token`
 
 Removes the whole Thread from the Collection. It does not delete the Thread or
-the Collection.
+the Collection. Removing a Thread that isn't in the Collection changes nothing.
 
 Response:
 
@@ -1815,7 +1848,8 @@ Response:
 Auth: `Session or token`
 
 Both endpoints accept a Thread root or child Post ID and operate on the shared
-Thread membership. Response:
+Thread membership. Pinning a Thread that isn't in the Collection returns `409`;
+unpinning one changes nothing. Response:
 
 ```json
 { "success": true }
@@ -1836,20 +1870,19 @@ endpoints here — the conditions are the membership.
 
 Smart collection responses include these fields:
 
-| Field              | Type                                  | Notes                                             |
-| ------------------ | ------------------------------------- | ------------------------------------------------- |
-| `id`               | `smc_*` string                        | Smart collection ID                               |
-| `siteId`           | string                                | Owning site                                       |
-| `slug`             | string                                | Canonical address, in the same namespace as posts |
-| `title`            | string                                | Display title. Required                           |
-| `description`      | string \| `null`                      | Optional description                              |
-| `selection`        | object                                | The conditions. `{}` collects every post          |
-| `sort`             | `newest` \| `oldest` \| `rating_desc` | Order of the posts the conditions gather          |
-| `layout`           | `list` \| `grid` \| `null`            | `null` follows the site's archive layout          |
-| `createdAt`        | integer                               | Unix seconds                                      |
-| `updatedAt`        | integer                               | Unix seconds                                      |
-| `threadCount`      | integer                               | Only present in list responses                    |
-| `recentActivityAt` | integer                               | Only present in list responses                    |
+| Field              | Type                                  | Notes                                                                        |
+| ------------------ | ------------------------------------- | ---------------------------------------------------------------------------- |
+| `id`               | `smc_*` string                        | Smart collection ID                                                          |
+| `slug`             | string                                | Canonical address, in the same namespace as posts                            |
+| `title`            | string                                | Display title. Required                                                      |
+| `description`      | string \| `null`                      | Optional description                                                         |
+| `selection`        | object                                | The conditions. `{}` collects every post                                     |
+| `sortOrder`        | `newest` \| `oldest` \| `rating_desc` | Order of the posts the conditions gather, named and valued as a collection's |
+| `layout`           | `list` \| `grid` \| `null`            | `null` follows the site's archive layout                                     |
+| `createdAt`        | integer                               | Unix seconds                                                                 |
+| `updatedAt`        | integer                               | Unix seconds                                                                 |
+| `threadCount`      | integer                               | Only present in list responses                                               |
+| `recentActivityAt` | integer                               | Only present in list responses                                               |
 
 ### The `selection` object
 
@@ -1866,6 +1899,10 @@ there is no "any" value, because a key that is absent already says that.
 | `media`      | `"any"` \| `"none"` \| array of `image` `video` `audio` `text` `document` |
 | `replies`    | boolean — `true` threads with replies, `false` single posts               |
 | `visibility` | `public` \| `featured` \| `latest_hidden`                                 |
+
+A key this table doesn't list answers `400` rather than being ignored like an
+unknown field elsewhere: dropping a condition would publish a wider page than
+the one asked for.
 
 `visibility` never accepts `private`, and `collection` never accepts more than
 one id. The first is because a smart collection is a published page and can
@@ -1894,7 +1931,7 @@ nothing reports its own `updatedAt`.
 
 `GET /api/smart-collections/:id`
 
-Response: `{ "smartCollection": SmartCollection }`.
+Response: the smart collection object.
 
 ### Create a smart collection
 
@@ -1908,13 +1945,13 @@ Body:
   "title": "Quotes",
   "description": "Things worth keeping.",
   "selection": { "format": "quote", "media": "any" },
-  "sort": "newest",
+  "sortOrder": "newest",
   "layout": null
 }
 ```
 
 `slug` and `title` are required; everything else is optional. Returns `201` with
-`{ "smartCollection": SmartCollection }`. A slug already used by a post, a
+the smart collection object. A slug already used by a post, a
 collection, or another smart collection returns `409` — they share one address
 space.
 
@@ -1922,7 +1959,7 @@ space.
 
 `PUT /api/smart-collections/:id`
 
-Same body, every field optional. Sending `selection` **replaces** the conditions
+Same body, every field optional. Returns the updated smart collection object. Sending `selection` **replaces** the conditions
 entirely: a dimension you leave out is cleared, not kept.
 
 Changing `slug` moves the address immediately and does not leave a redirect
@@ -1982,26 +2019,27 @@ Navigation items power the header navigation.
 
 Nav item responses include these fields:
 
-| Field               | Type                                                               | Notes                                           |
-| ------------------- | ------------------------------------------------------------------ | ----------------------------------------------- |
-| `id`                | `nav_*` string                                                     | Nav item ID                                     |
-| `siteId`            | string                                                             | Owning site                                     |
-| `type`              | `link` \| `system` \| `collection` \| `smart_collection` \| `page` | What the item points at                         |
-| `systemKey`         | `rss` \| `settings` \| `collections` \| `archive`                  | Only present for `type: "system"`               |
-| `collectionId`      | `col_*` string                                                     | Only present for `type: "collection"`           |
-| `smartCollectionId` | `smc_*` string                                                     | Only present for `type: "smart_collection"`     |
-| `postId`            | `pst_*` string                                                     | Only present for `type: "page"`                 |
-| `label`             | string                                                             | Author's override, or `""` to follow the target |
-| `url`               | string                                                             | Stored URL or path                              |
-| `position`          | string                                                             | Fractional ordering key                         |
-| `createdAt`         | integer                                                            | Unix seconds                                    |
-| `updatedAt`         | integer                                                            | Unix seconds                                    |
+| Field               | Type                                                                                                 | Notes                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `id`                | `nav_*` string                                                                                       | Nav item ID                                                                                  |
+| `type`              | `link` \| `system` \| `collection` \| `smart_collection` \| `page`                                   | What the item points at                                                                      |
+| `systemKey`         | `latest` \| `featured` \| `archive` \| `collections` \| `subscribe` \| `rss` \| `settings` \| `null` | `null` unless `type: "system"`                                                               |
+| `collectionId`      | `col_*` string \| `null`                                                                             | `null` unless `type: "collection"`                                                           |
+| `smartCollectionId` | `smc_*` string \| `null`                                                                             | `null` unless `type: "smart_collection"`                                                     |
+| `postId`            | `pst_*` string \| `null`                                                                             | `null` unless `type: "page"`                                                                 |
+| `label`             | string                                                                                               | Author's override, or `""` to follow the target                                              |
+| `url`               | string                                                                                               | Stored URL or path                                                                           |
+| `targetTitle`       | string \| `null`                                                                                     | The target's current title, shown when `label` is `""`. `null` for `link` and `system` items |
+| `placement`         | `header` \| `more`                                                                                   | In the header, or in its More menu                                                           |
+| `position`          | string                                                                                               | Fractional ordering key                                                                      |
+| `createdAt`         | integer                                                                                              | Unix seconds                                                                                 |
+| `updatedAt`         | integer                                                                                              | Unix seconds                                                                                 |
 
 ### List nav items
 
 `GET /api/nav-items`
 
-Auth: `Public`
+Auth: `Session or token`
 
 Response:
 
@@ -2048,28 +2086,33 @@ Create a built-in item:
 
 Fields by type:
 
-| Field               | Type                                              | Required                     | Default | Notes                                                            |
-| ------------------- | ------------------------------------------------- | ---------------------------- | ------- | ---------------------------------------------------------------- |
-| `type`              | `link`                                            | yes                          | —       | Creates a custom nav link                                        |
-| `label`             | string                                            | yes (for `link`)             | —       | Link label, 1-100 chars after trim                               |
-| `url`               | string                                            | yes (for `link`)             | —       | Relative path or absolute `http:`, `https:`, or `mailto:` URL    |
-| `type`              | `system`                                          | yes                          | —       | Creates a built-in nav item                                      |
-| `systemKey`         | `rss` \| `settings` \| `collections` \| `archive` | yes (for `system`)           | —       | Built-in destination key                                         |
-| `type`              | `collection` \| `smart_collection` \| `page`      | yes                          | —       | Points at a collection, a smart collection, or a standalone page |
-| `collectionId`      | `col_*` string                                    | yes (for `collection`)       | —       | Collection to point at                                           |
-| `smartCollectionId` | `smc_*` string                                    | yes (for `smart_collection`) | —       | Smart collection to point at                                     |
-| `postId`            | `pst_*` string                                    | yes (for `page`)             | —       | Published, non-private, titled Note to point at                  |
+| Field               | Type                                                                                       | Required                     | Default   | Notes                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------ | ---------------------------- | --------- | ---------------------------------------------------------------- |
+| `type`              | `link`                                                                                     | yes                          | —         | Creates a custom nav link                                        |
+| `label`             | string                                                                                     | yes (for `link`)             | —         | Link label, 1-100 chars after trim                               |
+| `url`               | string                                                                                     | yes (for `link`)             | —         | Relative path or absolute `http:`, `https:`, or `mailto:` URL    |
+| `type`              | `system`                                                                                   | yes                          | —         | Creates a built-in nav item                                      |
+| `systemKey`         | `latest` \| `featured` \| `archive` \| `collections` \| `subscribe` \| `rss` \| `settings` | yes (for `system`)           | —         | Built-in destination key                                         |
+| `type`              | `collection` \| `smart_collection` \| `page`                                               | yes                          | —         | Points at a collection, a smart collection, or a standalone page |
+| `collectionId`      | `col_*` string                                                                             | yes (for `collection`)       | —         | Collection to point at                                           |
+| `smartCollectionId` | `smc_*` string                                                                             | yes (for `smart_collection`) | —         | Smart collection to point at                                     |
+| `postId`            | `pst_*` string                                                                             | yes (for `page`)             | —         | Published, non-private, titled Note to point at                  |
+| `placement`         | `header` \| `more`                                                                         | no                           | see notes | In the header, or in its More menu                               |
 
 System keys:
 
+- `latest`
+- `featured`
+- `archive`
+- `collections`
+- `subscribe`
 - `rss`
 - `settings`
-- `collections`
-- `archive`
 
 Notes:
 
 - Built-in items get their label and URL automatically.
+- `placement` defaults to `header`, except for the built-in `collections`, `subscribe`, `rss`, and `settings` items, which default to `more`.
 - Jant rejects duplicate built-in items.
 - A `collection`, `smart_collection`, or `page` item stores its `label` empty unless you send one. It then shows its target's current title and follows it when the target is renamed, and its URL follows when the target's address moves. Only a label you typed is stored, and it then wins in every language view.
 
@@ -2114,7 +2157,7 @@ Notes:
 
 - This is a partial update.
 - Built-in system items reject manual label and URL edits.
-- Only `label` and `url` are accepted.
+- Only `label`, `url`, and `placement` are accepted.
 
 Response: `200 OK` with the updated nav item.
 
@@ -2140,23 +2183,27 @@ Custom URLs let you attach extra paths to posts or collections, or define intern
 
 Custom URL responses include these fields:
 
-| Field          | Type                                 | Notes                                             |
-| -------------- | ------------------------------------ | ------------------------------------------------- |
-| `id`           | `pth_*` string                       | Custom URL ID                                     |
-| `path`         | string                               | Normalized path without a leading slash           |
-| `targetType`   | `post` \| `collection` \| `redirect` | Target kind                                       |
-| `targetId`     | string \| `null`                     | Resolved post/collection TypeID for alias records |
-| `toPath`       | string \| `null`                     | Redirect destination with a leading slash         |
-| `redirectType` | `301` \| `302` \| `null`             | Redirect status for redirect records              |
-| `createdAt`    | integer                              | Unix seconds                                      |
+| Field          | Type                                              | Notes                                                                              |
+| -------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `id`           | `pth_*` string                                    | Custom URL ID                                                                      |
+| `path`         | string                                            | The address, with a leading slash                                                  |
+| `targetType`   | `post` \| `collection` \| `redirect` \| `archive` | Target kind                                                                        |
+| `targetId`     | string \| `null`                                  | The post's or collection's TypeID; `null` for other kinds                          |
+| `toPath`       | string \| `null`                                  | `redirect` only: a path on the site, with a leading slash, or an `http(s)` address |
+| `redirectType` | `301` \| `302` \| `null`                          | `redirect` only: the status it answers with                                        |
+| `archiveQuery` | string \| `null`                                  | `archive` only: the archive query the address shows                                |
+| `createdAt`    | integer                                           | Unix seconds                                                                       |
 
 Target types:
 
-| Type         | Meaning                             | Key fields               |
-| ------------ | ----------------------------------- | ------------------------ |
-| `post`       | Alias that resolves to a post       | `targetId`               |
-| `collection` | Alias that resolves to a collection | `targetId`               |
-| `redirect`   | Internal redirect to another path   | `toPath`, `redirectType` |
+| Type         | Meaning                                    | Key fields               |
+| ------------ | ------------------------------------------ | ------------------------ |
+| `post`       | Alias that resolves to a post              | `targetId`               |
+| `collection` | Alias that resolves to a collection        | `targetId`               |
+| `redirect`   | Redirect to another path or another site   | `toPath`, `redirectType` |
+| `archive`    | A saved archive view; read and delete only | `archiveQuery`           |
+
+`archive` addresses can't be created anymore; a [smart collection](#smart-collections) does the same job. Existing ones keep working, and the list returns them.
 
 ### List custom URLs
 
@@ -2166,9 +2213,10 @@ Auth: `Session or token`
 
 Query parameters:
 
-| Parameter | Type    | Required | Default |
-| --------- | ------- | -------- | ------- |
-| `page`    | integer | no       | `1`     |
+| Parameter | Type    | Required | Default | Notes                                         |
+| --------- | ------- | -------- | ------- | --------------------------------------------- |
+| `limit`   | integer | no       | `100`   | `1` to `100`                                  |
+| `cursor`  | string  | no       | none    | Pass the previous `nextCursor` back unchanged |
 
 Response:
 
@@ -2177,34 +2225,33 @@ Response:
   "customUrls": [
     {
       "id": "pth_01jpyxb27t6m4v9r2k8s5c1qfh",
-      "path": "blog/old-post",
+      "path": "/blog/old-post",
       "targetType": "redirect",
       "targetId": null,
       "toPath": "/my-new-slug",
       "redirectType": 301,
+      "archiveQuery": null,
       "createdAt": 1706000000
     },
     {
       "id": "pth_01jpyxbk8v4m2s7r9c5t1g6qdn",
-      "path": "essays/on-writing",
+      "path": "/essays/on-writing",
       "targetType": "post",
       "targetId": "pst_01jpyx3m7gw4w3h7m4bknq0v1d",
       "toPath": null,
       "redirectType": null,
+      "archiveQuery": null,
       "createdAt": 1706000000
     }
   ],
-  "total": 42,
-  "page": 1,
-  "totalPages": 1
+  "nextCursor": null
 }
 ```
 
 Notes:
 
-- List and create responses only cover alias and redirect records. Canonical post and collection slugs are not returned here.
-- Response `path` values are normalized and do not include a leading slash.
-- Alias responses return the resolved post or collection TypeID in `targetId`.
+- Newest first. `nextCursor` is `null` on the last page; see [Pagination](#pagination).
+- The list covers aliases, redirects, and archive addresses. Canonical post and collection slugs are not custom URLs and aren't listed.
 
 ### Create a custom URL
 
@@ -2219,19 +2266,19 @@ Request body:
   "path": "/blog/old-post",
   "targetType": "redirect",
   "toPath": "/my-new-slug",
-  "redirectType": "301"
+  "redirectType": 301
 }
 ```
 
 Fields:
 
-| Field          | Type                                 | Required                            | Default | Notes                                                                         |
-| -------------- | ------------------------------------ | ----------------------------------- | ------- | ----------------------------------------------------------------------------- |
-| `path`         | string                               | yes                                 | —       | Must start with `/`; max `512`; lowercase letters, numbers, `-`, and `/` only |
-| `targetType`   | `post` \| `collection` \| `redirect` | yes                                 | —       | Target kind                                                                   |
-| `targetId`     | string                               | required for `post` or `collection` | —       | Send the canonical slug, not the TypeID                                       |
-| `toPath`       | string                               | required for `redirect`             | —       | Internal destination path such as `/new-path`; normalized before storage      |
-| `redirectType` | `"301"` \| `"302"`                   | no                                  | `301`   | Only used for `redirect`                                                      |
+| Field          | Type                                 | Required                            | Default | Notes                                                                                                                                                                        |
+| -------------- | ------------------------------------ | ----------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`         | string                               | yes                                 | —       | Max `512`; starts with a letter or digit, then lowercase letters, numbers, `-`, `.`, and `/`; the leading `/` may be left off                                                |
+| `targetType`   | `post` \| `collection` \| `redirect` | yes                                 | —       | Target kind                                                                                                                                                                  |
+| `targetId`     | string                               | required for `post` or `collection` | —       | The post's or collection's TypeID, or its slug                                                                                                                               |
+| `toPath`       | string                               | required for `redirect`             | —       | A path on the site, such as `/new-path?format=note`, or a full `http://` or `https://` address. A path is lowercased and keeps its query string; an address is kept as given |
+| `redirectType` | `301` \| `302`                       | no                                  | `301`   | Only used for `redirect`. The strings `"301"` and `"302"` are accepted too                                                                                                   |
 
 Examples:
 
@@ -2242,7 +2289,7 @@ Redirect an old path:
   "path": "/blog/2024/my-old-post",
   "targetType": "redirect",
   "toPath": "/my-new-slug",
-  "redirectType": "301"
+  "redirectType": 301
 }
 ```
 
@@ -2260,9 +2307,9 @@ Important notes:
 
 - `path` must not collide with an existing slug or custom URL.
 - Reserved paths are rejected.
-- Redirects are for internal paths. External redirect targets are not supported by this API.
-- Post and collection targets must already exist by slug or the API returns `404`.
-- Create responses resolve slug targets to TypeIDs.
+- A redirect can point at a path on the site or at another site. A path is followed within the language view it was reached from.
+- A post or collection target that doesn't exist answers `404`.
+- The response names the target by TypeID, whichever you sent.
 
 Response: `201 Created` with the new custom URL object.
 
@@ -2292,7 +2339,7 @@ All settings endpoints require auth.
 
 ### Editable setting keys
 
-`GET /api/settings` and `PUT /api/settings` operate on editable site config only.
+`GET /api/settings` and `PUT /api/settings` operate on these, and on the [appearance settings](#appearance-setting-keys). `GET` also reports the [site's languages](#restore-the-sites-languages).
 
 All values are strings because they map directly to stored config values.
 
@@ -2302,7 +2349,6 @@ All values are strings because they map directly to stored config values.
 | `SITE_DESCRIPTION`           | Site description           | `"Notes and links"` |
 | `SITE_LANGUAGE`              | BCP 47 content language    | `"en"`              |
 | `DASHBOARD_LANGUAGE`         | Dashboard catalog language | `"zh-Hans"`         |
-| `CJK_SERIF_FONT`             | CJK serif fallback         | `"off"`             |
 | `MAIN_RSS_FEED`              | Canonical feed kind        | `"featured"`        |
 | `ARCHIVE_DEFAULT_LAYOUT`     | Archive default layout     | `"list"`            |
 | `PAGE_SIZE`                  | Default page size          | `"25"`              |
@@ -2329,6 +2375,20 @@ Notes:
 - `GET /api/settings` returns the effective environment or built-in fallback
   for editable keys that are not stored yet.
 - In demo mode, `NOINDEX` is always returned as `"true"`.
+
+### Appearance setting keys
+
+Each has its own screen under Settings rather than a Config Editor row. `PUT /api/settings` checks a value the way that screen would.
+
+| Key                  | Meaning                                          | Example value            |
+| -------------------- | ------------------------------------------------ | ------------------------ |
+| `THEME`              | Color theme ID; `""` follows `DEFAULT_THEME`     | `"paper"`                |
+| `FONT_THEME`         | Font theme ID; `""` follows `DEFAULT_FONT_THEME` | `"literary"`             |
+| `THEME_MODE`         | `auto`, `light`, or `dark`                       | `"dark"`                 |
+| `CUSTOM_CSS`         | Custom CSS, trimmed; locked on the demo site     | `"body { color: red; }"` |
+| `SHOW_HEADER_AVATAR` | Avatar in the site header, `"true"` or `"false"` | `"true"`                 |
+
+A theme or font theme ID that Jant doesn't have answers `400`.
 
 ### Get editable settings
 
@@ -2358,14 +2418,21 @@ Response:
     "SHOW_JANT_BRANDING_ON_HOME": "false",
     "NOINDEX": "false",
     "PUBLIC_API_ENABLED": "true",
-    "RSS_FEEDS_ENABLED": "true"
+    "RSS_FEEDS_ENABLED": "true",
+    "THEME": "tufte",
+    "FONT_THEME": "classic",
+    "THEME_MODE": "auto",
+    "CUSTOM_CSS": "",
+    "SHOW_HEADER_AVATAR": "false",
+    "MULTILINGUAL_ENABLED": "false",
+    "ADDITIONAL_LANGUAGES": ""
   }
 }
 ```
 
 Notes:
 
-- The response always returns the full editable settings object, not only keys stored in the database.
+- The response always returns every setting with the value in effect, not only keys stored in the database.
 - Environment-only and internal keys never appear in this response.
 
 ### Update editable settings
@@ -2433,6 +2500,26 @@ Rejected keys are returned:
 
 In demo mode, `NOINDEX` updates are rejected and the returned value stays `"true"`.
 
+### Restore the site's languages
+
+`PUT /api/settings/import`
+
+Auth: `Session or token`
+
+Restores the languages a site export recorded. `PUT /api/settings` doesn't take them: Settings → Languages changes them one at a time with its own checks.
+
+| Key                    | Notes                                                 |
+| ---------------------- | ----------------------------------------------------- |
+| `ADDITIONAL_LANGUAGES` | Comma-separated language tags besides `SITE_LANGUAGE` |
+| `MULTILINGUAL_ENABLED` | `"true"` or `"false"`; on only with a second language |
+
+Request body: an object of those keys and string values. A key left out keeps its current value.
+
+The response is what `PUT /api/settings` returns.
+
+- Other keys are left out and listed in `rejectedKeys`. A request with neither key answers `400`.
+- Each language passes the checks adding it in Settings would, against the current `SITE_LANGUAGE`. A language whose URL prefix collides with an existing address answers `409`.
+
 ### Reset a Config Editor setting
 
 `DELETE /api/settings/:key`
@@ -2443,47 +2530,15 @@ Removes the database override for one resettable Config Editor setting. This
 includes directly editable values and the safe scalar linked settings `THEME`,
 `FONT_THEME`, `THEME_MODE`, and `SHOW_HEADER_AVATAR`.
 
-The successful response contains the same directly editable `settings` object
-as `GET /api/settings` plus a safe `setting` field with the reset key's resolved
-Config Editor state:
+The successful response is what `GET /api/settings` returns, with the value the
+setting falls back to:
 
 ```json
-{
-  "settings": { "SITE_NAME": "Jant" },
-  "setting": {
-    "key": "SITE_NAME",
-    "mode": "link",
-    "type": "string",
-    "value": "Jant",
-    "fallbackValue": "Jant",
-    "modified": false,
-    "locked": false,
-    "settingsPath": "/settings/general",
-    "display": "value",
-    "resettable": true
-  }
-}
+{ "settings": { "SITE_NAME": "Jant" } }
 ```
 
 Environment-only, secret, unknown, specialized content/file keys, and
 demo-locked keys return `400` without changing stored settings.
-
-### Mark compose shortcut discovery as seen
-
-`POST /api/settings/discovery/compose-open-shortcut`
-
-Auth: `Session or token`
-
-This is a small UI-state endpoint used by the compose UI.
-
-- First call stores the timestamp and returns `201`
-- Later calls return `200`
-
-Response:
-
-```json
-{ "learned": true }
-```
 
 ### Upload site avatar and icons
 
@@ -2495,11 +2550,11 @@ Content type: `multipart/form-data`
 
 Form fields:
 
-| Field        | Type | Required | Default | Notes                  |
-| ------------ | ---- | -------- | ------- | ---------------------- |
-| `file`       | file | yes      | —       | Main avatar image      |
-| `favicon`    | file | no       | —       | Favicon `.ico` payload |
-| `appleTouch` | file | no       | —       | Apple touch icon       |
+| Field        | Type | Required | Default | Notes                                 |
+| ------------ | ---- | -------- | ------- | ------------------------------------- |
+| `file`       | file | yes      | —       | Main avatar image: PNG, JPEG, or WebP |
+| `favicon`    | file | no       | —       | Favicon `.ico` payload                |
+| `appleTouch` | file | no       | —       | Apple touch icon, PNG                 |
 
 Response:
 
@@ -2510,7 +2565,7 @@ Response:
 Notes:
 
 - File storage must be configured or the endpoint returns `500`.
-- Omitting `file` returns `400`.
+- Omitting `file` returns `400`, as does a file whose contents aren't the image type it names. An SVG is refused.
 - On success, this endpoint updates the internal avatar/favicon settings used by site rendering.
 
 ### Remove site avatar and related icons
@@ -2533,35 +2588,36 @@ Response:
 
 Base path: `/api/search`
 
-Search is public and only returns published posts.
+Search is the author's: it covers every published post, including private posts and replies in a private Thread. Readers search on the `/search` page, which leaves private posts out for anyone signed out.
 
 ### Search posts
 
 `GET /api/search`
 
-Auth: `Public`
+Auth: `Session or token`
 
 Query parameters:
 
 | Parameter | Type    | Required | Default | Notes                |
 | --------- | ------- | -------- | ------- | -------------------- |
 | `q`       | string  | yes      | none    | Maximum length `200` |
-| `limit`   | integer | no       | `20`    | Maximum `50`         |
+| `limit`   | integer | no       | `20`    | `1` to `50`          |
 
 Result objects include these fields:
 
-| Field         | Type                        | Notes                                             |
-| ------------- | --------------------------- | ------------------------------------------------- |
-| `id`          | `pst_*` string              | Post ID                                           |
-| `format`      | `note` \| `link` \| `quote` | Post format                                       |
-| `slug`        | string                      | Canonical slug                                    |
-| `snippet`     | string \| omitted           | Search snippet; may contain `<mark>` tags         |
-| `publishedAt` | integer \| `null`           | Publish timestamp                                 |
-| `permalink`   | string                      | Public path, including any configured site prefix |
-| `title`       | string \| `null`            | Present for `note` and `link` results             |
-| `url`         | string \| `null`            | Present for `note` and `link` results             |
-| `sourceName`  | string \| `null`            | Present instead of `title` for `quote` results    |
-| `sourceUrl`   | string \| `null`            | Present instead of `url` for `quote` results      |
+| Field         | Type                                     | Notes                                                                                                    |
+| ------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `id`          | `pst_*` string                           | Post ID                                                                                                  |
+| `format`      | `note` \| `link` \| `quote`              | Post format                                                                                              |
+| `slug`        | string                                   | Canonical slug                                                                                           |
+| `snippet`     | string \| omitted                        | Search snippet; may contain `<mark>` tags                                                                |
+| `publishedAt` | integer \| `null`                        | Publish timestamp                                                                                        |
+| `permalink`   | string                                   | Public path, including any configured site prefix: the post's first custom URL, or `/{slug}` without one |
+| `visibility`  | `public` \| `latest_hidden` \| `private` | Resolved visibility, inherited from the Thread's root                                                    |
+| `title`       | string \| `null`                         | Present for `note` and `link` results                                                                    |
+| `url`         | string \| `null`                         | Present for `note` and `link` results                                                                    |
+| `sourceName`  | string \| `null`                         | Present instead of `title` for `quote` results                                                           |
+| `sourceUrl`   | string \| `null`                         | Present instead of `url` for `quote` results                                                             |
 
 Response:
 
@@ -2577,6 +2633,7 @@ Response:
       "snippet": "...matched <mark>hello</mark> text...",
       "publishedAt": 1706000000,
       "permalink": "/hello-world",
+      "visibility": "public",
       "url": null
     }
   ],
@@ -2589,7 +2646,8 @@ Notes:
 - `snippet` may contain `<mark>` tags.
 - All search results include `permalink`.
 - Quote results use `sourceName` and `sourceUrl` instead of `title` and `url`.
-- Search only returns published posts.
+- Search covers published posts only. Drafts don't match.
+- Search isn't rate-limited. The per-client limit, `RATE_LIMIT_SEARCH_PER_MIN`, applies to signed-out readers on the `/search` page.
 
 ---
 
@@ -2996,6 +3054,8 @@ Response:
 ```json
 {
   "status": "ok",
+  "version": "0.7.0-3f9c2a7b1e4d8c60",
+  "startedAt": 1789000000,
   "checks": {
     "startupConfig": { "ok": true },
     "database": { "ok": true }
@@ -3008,7 +3068,10 @@ Notes:
 - Returns `200` when all checks pass.
 - Returns `503` when `status` is `"error"`.
 - `startupConfig.error` and `database.error` appear when a check fails.
+- `version` is the package version followed by the first 16 characters of the build's commit id.
+- `startedAt` is when the process started serving, in Unix seconds. Node only; absent on Workers.
 - This endpoint is stricter than `/health`: it verifies startup configuration and performs a lightweight database query.
+- On Node, `database` also fails while a database migration hasn't been applied. `database.error` names the missing migrations and says to run `jant migrate`.
 
 ### Feeds
 
@@ -3158,7 +3221,7 @@ curl -X POST "$JANT_URL/api/posts" \
 
 curl -X POST "$JANT_URL/api/upload" \
   -H "Authorization: Bearer $JANT_API_TOKEN" \
-  -F "file=@./path/to/photo.webp" \
+  -F "file=@./path/to/photo.webp;type=image/webp" \
   -F "alt=Cover image"
 
 curl -X PUT "$JANT_URL/api/settings" \
@@ -3193,12 +3256,28 @@ curl -X POST https://your-site.com/api/export/hugo \
 
 ---
 
+## GitHub webhooks
+
+GitHub calls these addresses, so they sit in GitHub's settings rather than in any client. Each checks the `X-Hub-Signature-256` signature against its secret and answers `401` when it doesn't match.
+
+| Address                             | GitHub calls it for                                                                                                                    | Secret                                                                                       |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `POST /api/github-sync/webhook`     | Pushes to the repository [GitHub Sync](github-sync.md) is connected to. Jant registers this webhook on the repository when you connect | `GITHUB_APP_WEBHOOK_SECRET` when set, otherwise the secret Jant generated when you connected |
+| `POST /api/github-sync/app-webhook` | A GitHub App's installation events: uninstalled, suspended, or repositories removed. You enter it in the App's settings                | `GITHUB_APP_WEBHOOK_SECRET`; the address answers `404` while that isn't set                  |
+
+Both answer `200` to an event they don't act on, such as an event of another kind or a push that holds only Jant's own sync commits, so GitHub doesn't mark the delivery failed.
+
+## Telegram webhook
+
+`POST /api/telegram/webhook/:botId`
+
+Telegram calls this address with the messages people send the site's [Telegram bot](configuration.md#telegram-bot-optional). Jant registers it with Telegram: when you save a bot token under Settings → Telegram, or, for a bot pool, with [`jant telegram register-webhooks`](cli.md#jant-telegram-register-webhooks) or on startup in hosted mode. `:botId` is the number before the colon in the bot's token.
+
+- An unknown `botId` answers `404`, and an `X-Telegram-Bot-Api-Secret-Token` that doesn't match the registered secret answers `401`.
+- Every update it accepts answers `200`, even one that fails to publish: the sender gets the error as a chat message, and Telegram doesn't deliver the update again.
+
+---
+
 ## Versioning and Stability
 
-The API is currently unversioned.
-
-Practical stability rules:
-
-- The site-owner endpoints documented here are intended to be scriptable.
-- `/api/internal/*` is operational rather than public API surface and may change more aggressively.
-- Breaking changes are announced in release notes rather than through URL-based versioning.
+The API has no version in its URLs. What this page documents follows Jant's [compatibility promise](compatibility.md), which says what each kind of release may change. `/api/internal/*` connects core to the hosted service and can change in any release.

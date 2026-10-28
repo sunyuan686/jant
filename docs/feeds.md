@@ -46,6 +46,8 @@ By default the archive feed is ordered by publication, like the page it belongs 
 
 `?format=` also works on `/latest/feed`. It does nothing on `/feed` or on the featured feed.
 
+The feed takes every archive filter, not only these four; [Writing and organizing § Archive filters](writing-and-organizing.md#archive-filters) lists them all.
+
 ## What every feed shares
 
 **Length.** Each feed carries your most recent 50 entries. Change it with `RSS_FEED_LIMIT` (1–200). Any feed also takes `?limit=` for one read of a different length, up to 500: `/latest/feed?limit=200`. It is for catching up on a site's history, the way a directory reads your site the first time it sees it; the address without it is still the one to subscribe to. A value that is not a whole number above zero is ignored.
@@ -58,7 +60,9 @@ By default the archive feed is ordered by publication, like the page it belongs 
 
 **Post format.** Each entry declares what kind of post it is — `<jant:format>quote</jant:format>`, in the `https://jant.me/ns` namespace — because a quote and an untitled note are otherwise identical in Atom. A thread is declared by its root. Readers that do not know the namespace ignore it.
 
-**Post ID.** Each entry also carries the post's own ID, `<jant:id>pst_…</jant:id>`, beside `<id>`. `<id>` is the post's address, which changes when you rename its slug or move the site to another domain. The ID never changes, so anything that needs to recognise the same post across either can rely on it.
+**Post ID.** Each entry also carries the post's own ID, `<jant:id>pst_…</jant:id>`, beside `<id>`. `<id>` is the post's address, so it changes whenever the address does: when you rename the slug, give the post its first custom URL or remove it, move the site to another domain, or change `SITE_PATH_PREFIX`. The ID never changes, so anything that needs to recognise the same post across those can rely on it.
+
+Everything else Jant adds to an entry, including how a thread's posts and attachments are marked, is in [Reading a Jant feed](feed-reading.md).
 
 ## Feeds and languages
 
@@ -92,8 +96,8 @@ Every Atom feed carries the setting in its header, so a directory holding any on
 The rules a directory should follow:
 
 - The namespace is `https://jant.me/ns`. It is a fixed identifier, not an address to fetch, and the prefix it is bound to is arbitrary.
-- The element's text is `latest`, `featured`, or `none`. Anything else should be ignored. `latest` is what the setting writes today: the directory may read any public post. `featured` is what older releases wrote for a site that chose to offer only its featured posts; a directory should keep honouring it, and read only the one feed it names.
-- The `feed` attribute is the absolute URL to poll, and it is present for `latest` and `featured` only. Honour it only when it is on the same origin as the feed that declared it; otherwise a site could have somebody else's posts listed under its name.
+- The element's text is `latest` or `none`. Anything else should be ignored. `latest` means the directory may read any public post.
+- The `feed` attribute is the absolute URL to poll, and it is present for `latest` only. Honour it only when it is on the same origin as the feed that declared it; otherwise a site could have somebody else's posts listed under its name.
 - The `featured` attribute is the absolute URL of the site's featured feed, present beside `feed` under `latest`, so a directory can show featured posts on one list and everything on another without guessing the address. The same-origin rule applies. A feed from before this attribute omits it; the featured feed then sits beside the latest one at the same base path, `/featured/feed` for `/latest/feed`.
 - The `status` attribute is the absolute URL a directory asks about posts it already holds; see [Asking about posts](#asking-about-posts). It is present whenever `feed` is, and on a multilingual site it carries the feed's language as `?lang=`. The same-origin rule applies.
 - **An absent element is not `none`.** It means the site runs a version of Jant from before Discover, which is a different thing from a site that is not listed. It does not mean yes forever either: a feed that declared once and then goes quiet is a downgrade, a feed template that broke, or a domain that changed hands. A directory should stop listing a feed whose element has been missing for a long while — jant.me waits thirty days — and list it again on the first read that carries the element.
@@ -101,7 +105,7 @@ The rules a directory should follow:
 
 On a multilingual site each language's feed declares itself and lists the others with `hreflang`, which is how a directory finds a bilingual blog's other language from whichever feed it happens to hold.
 
-Two details decide what a directory sees. Feeds are cached for a minute, so a change to the setting takes effect on the next read that misses the cache. And a directory should know a post by its `<jant:id>`, not its `<id>`: renaming a slug or moving the site to another domain changes the second and never the first.
+Two details decide what a directory sees. Feeds are cached for a minute, so a change to the setting takes effect on the next read that misses the cache. And a directory should know a post by its `<jant:id>`, not its `<id>`: anything that changes the post's address, such as a new slug or a new domain, changes the second and never the first.
 
 ### Asking about posts
 
@@ -137,10 +141,15 @@ GET https://example.com/api/discover/posts?id=pst_01jpyx3m7gw4w3h7m4bknq0v1d&id=
 
 These still work and always will, so nobody's subscription breaks. New links should use the canonical address on the right.
 
-| Old                     | Now              |
-| ----------------------- | ---------------- |
-| `/feed/latest`          | `/latest/feed`   |
-| `/feed/featured`        | `/featured/feed` |
-| `/feed/all`             | `/latest/feed`   |
-| `/feed/atom.xml`        | `/feed`          |
-| `/{page}/feed/atom.xml` | `/{page}/feed`   |
+| Old                       | Now              |
+| ------------------------- | ---------------- |
+| `/feed/latest`            | `/latest/feed`   |
+| `/feed/featured`          | `/featured/feed` |
+| `/feed/all`               | `/latest/feed`   |
+| `/feed/atom.xml`          | `/feed`          |
+| `/feed/latest/atom.xml`   | `/latest/feed`   |
+| `/feed/featured/atom.xml` | `/featured/feed` |
+| `/feed/all/atom.xml`      | `/latest/feed`   |
+| `/latest/feed/atom.xml`   | `/latest/feed`   |
+| `/featured/feed/atom.xml` | `/featured/feed` |
+| `/archive/feed/atom.xml`  | `/archive/feed`  |

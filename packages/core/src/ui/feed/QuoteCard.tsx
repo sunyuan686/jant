@@ -41,8 +41,7 @@ export const QuoteCard: FC<TimelineCardProps> = ({
 
   return (
     <article
-      class={articleClass}
-      {...(isDetail ? { "data-page": "post" } : {})}
+      class={`${articleClass}${isDetail ? " post-detail" : ""}`}
       {...getPostArticleAttributes(post)}
     >
       {!isCompact && !display?.hideStatusBadges && (
@@ -58,6 +57,7 @@ export const QuoteCard: FC<TimelineCardProps> = ({
           {post.quoteText && (
             <blockquote
               class={`feed-quote${isCompact ? "" : " feed-quote-card"}`}
+              data-post-quote
             >
               {!isCompact && <DecorativeQuoteMark class="feed-quote-mark" />}
               <div

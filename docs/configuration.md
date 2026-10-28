@@ -15,6 +15,8 @@ Use:
 - `.dev.vars` for local Cloudflare secrets
 - `.env` or process environment variables for Node and Docker
 
+Jant checks the values it reads at startup. A switch takes `true` or `false`, in any case; a number has to be a whole number within its range; a variable with a fixed set of values has to name one of them. Any value outside that stops the site from serving: Node and Docker exit with a message naming each variable, and Cloudflare answers every request with a page that lists them, as does `/readyz`.
+
 ### Required
 
 Every runtime requires this variable:
@@ -67,14 +69,14 @@ DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/DBNAME
 
 Common Node and Docker variables:
 
-| Variable             | Default                  | Description                                                                                    |
-| -------------------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
-| `DATA_DIR`           | `./data`                 | Base directory for default SQLite and local media paths                                        |
-| `LOCAL_STORAGE_PATH` | `<DATA_DIR>/media`       | Override the local media directory                                                             |
-| `LOCAL_PUBLIC_URL`   | unset                    | Public base URL when media is served outside Jant; leave unset to use Jant's `/media/*` routes |
-| `HOST`               | `127.0.0.1` on bare Node | Bind address for `jant start`                                                                  |
-| `PORT`               | `3000`                   | Bind port for `jant start`                                                                     |
-| `TRUST_PROXY`        | `false`                  | Trust forwarded headers from the reverse proxy                                                 |
+| Variable             | Default                                               | Description                                                                                    |
+| -------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `DATA_DIR`           | `./data`, or the directory of a SQLite `DATABASE_URL` | Base directory for default SQLite and local media paths                                        |
+| `LOCAL_STORAGE_PATH` | `<DATA_DIR>/media`                                    | Override the local media directory                                                             |
+| `LOCAL_PUBLIC_URL`   | unset                                                 | Public base URL when media is served outside Jant; leave unset to use Jant's `/media/*` routes |
+| `HOST`               | `127.0.0.1` on bare Node                              | Bind address for `jant start`                                                                  |
+| `PORT`               | `3000`                                                | Bind port for `jant start`                                                                     |
+| `TRUST_PROXY`        | `false`                                               | Trust the reverse proxy's forwarded headers for the site address and the client IP             |
 
 The official Docker image already defaults `DATA_DIR` to `/var/lib/jant`, and Docker Compose commonly sets `TRUST_PROXY=true`.
 
@@ -102,10 +104,10 @@ already in the Worker cache can remain visible for up to 60 seconds.
 
 ### Jant Discover (optional)
 
-| Variable            | Default                                     | Description                                                           |
-| ------------------- | ------------------------------------------- | --------------------------------------------------------------------- |
-| `DISCOVER`          | `off`                                       | What this deployment lists by default: `latest`, `featured`, or `off` |
-| `DISCOVER_PING_URL` | Your control plane, or Jant's own directory | Where the site announces itself; set it empty to announce nowhere     |
+| Variable            | Default                                     | Description                                                       |
+| ------------------- | ------------------------------------------- | ----------------------------------------------------------------- |
+| `DISCOVER`          | `off`                                       | What this deployment lists by default: `latest` or `off`          |
+| `DISCOVER_PING_URL` | Your control plane, or Jant's own directory | Where the site announces itself; set it empty to announce nowhere |
 
 Jant Discover is a public directory of Jant blogs. Every Atom feed declares
 whether the site takes part, and nothing is listed without that declaration —
@@ -138,10 +140,35 @@ third-party directory needs to honour.
 | `PUBLIC_API_ENABLED` | `true`  | Allows published content to be read without a session or token |
 
 When disabled, `/api/public/*` returns `404` to every caller; authenticated
-clients can use `/api/posts` instead. Collection, navigation, and search JSON
-reads return `401` to anonymous requests but remain available to browser
-sessions and Bearer API tokens. Public HTML pages, including `/search`, are
-unchanged.
+clients can use `/api/posts` instead. Public HTML pages, including `/search`,
+are unchanged.
+
+### Cross-origin API access (optional)
+
+| Variable       | Default | Description                                              |
+| -------------- | ------- | -------------------------------------------------------- |
+| `CORS_ORIGINS` | `*`     | Origins a browser may call the API from, comma-separated |
+
+`*` lets any origin call the API. A list such as
+`https://a.example,chrome-extension://<id>` limits it to those origins, and an
+empty value turns cross-origin access off. Requests still need a session or API
+token wherever the API asks for one.
+
+### Rate limits (optional)
+
+| Variable                    | Default | Description                                                          |
+| --------------------------- | ------- | -------------------------------------------------------------------- |
+| `RATE_LIMIT_SEARCH_PER_MIN` | `30`    | Searches a signed-out reader can make per minute. `0` means no limit |
+| `RATE_LIMIT_ENABLED`        | `true`  | Set to `false` to turn off every limit: search, sign-in, and setup   |
+
+The search limit applies to the `/search` page; the signed-in author and
+`/api/search` aren't limited. A reader over the limit gets `429` with a
+`Retry-After` header.
+
+Sign-in allows 20 attempts from one client and 10 for one account in 10
+minutes, and setup allows 20 submissions from one client. A client is its IP
+address: on Cloudflare, the one the edge reports; on Node, the connecting
+address, or with `TRUST_PROXY=true` the last one in `X-Forwarded-For`.
 
 ### Pagination (optional)
 
@@ -168,6 +195,19 @@ renders the tile catalogue. Readers switch layouts from the page itself, and a
 
 `?view=grid` was the earlier spelling of that link. It still works — `/archive`
 redirects it to `?layout=`, and stored custom archive URLs are read either way.
+
+### Default appearance (optional)
+
+| Variable             | Default   | Description                                  |
+| -------------------- | --------- | -------------------------------------------- |
+| `DEFAULT_THEME`      | `tufte`   | Color theme of a site that hasn't picked one |
+| `DEFAULT_FONT_THEME` | `classic` | Font theme of a site that hasn't picked one  |
+
+A theme picked in **Settings → Appearance** takes precedence. Color themes:
+`tufte`, `linen`, `frost`, `cotton`, `bone`, `parchment`, `dune`, `ink`,
+`slate`, `sage`, `clay`, `ember`, `paper`, `snow`, `espresso`. Font themes:
+`classic`, `tufte`, `system-sans`, `humanist-sans`, `modern-editorial`,
+`literary`, `geometric`.
 
 ### Storage
 
@@ -387,9 +427,9 @@ location /_assets/ {
 
 ### Slug (optional)
 
-| Variable         | Default | Description                                                 |
-| ---------------- | ------- | ----------------------------------------------------------- |
-| `SLUG_ID_LENGTH` | `5`     | Length of the random slug auto-generated for untitled posts |
+| Variable         | Default | Description                                                              |
+| ---------------- | ------- | ------------------------------------------------------------------------ |
+| `SLUG_ID_LENGTH` | `5`     | Length of the random slug auto-generated for untitled posts, `3` to `32` |
 
 ### Upload size limits (optional)
 
@@ -439,12 +479,35 @@ Otherwise (e.g. a Workers deployment, or to register against a custom URL),
 register them manually:
 
 ```sh
-jant telegram register-webhooks --base-url https://your-site.example
+jant telegram register-webhooks --url https://your-site.example
 ```
+
+### Maintenance commands (optional)
+
+| Variable               | Default | Description                                                 |
+| ---------------------- | ------- | ----------------------------------------------------------- |
+| `INTERNAL_ADMIN_TOKEN` | unset   | Token the maintenance commands and `/api/internal/*` accept |
+
+`jant search reindex`, `jant posts rebuild-html`, and `jant uploads cleanup`
+call the site with this token; see [Command line](cli.md#maintenance). Without
+it, `/api/internal/*` answers `404`. Use a long random value and keep it out of
+version control.
+
+### GitHub App (optional)
+
+`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_APP_SLUG`, and
+`GITHUB_APP_WEBHOOK_SECRET` connect GitHub Sync through your own GitHub App
+instead of a personal access token. See [GitHub Sync](github-sync.md).
+
+### Hosted service
+
+`SITE_RESOLUTION_MODE` and the `HOSTED_CONTROL_PLANE_*` variables configure the
+hosted service, where one server runs many sites. A self-hosted site leaves
+them unset. They can change in any release; see [Compatibility](compatibility.md).
 
 ## Settings page options
 
-These settings can be changed on Jant's Settings page after setup. Each one can also be seeded from an environment variable of the same name — values changed in Settings take precedence over the environment variable.
+These settings can be changed on Jant's Settings page after setup. Each one can also be seeded from an environment variable of the same name — values changed in Settings take precedence over the environment variable. Setup asks for the site's language with `SITE_LANGUAGE` filled in and stores the answer, and takes the time zone from the browser only when `TIME_ZONE` isn't set.
 
 | Setting                      | What it does                                     |
 | ---------------------------- | ------------------------------------------------ |
@@ -452,7 +515,6 @@ These settings can be changed on Jant's Settings page after setup. Each one can 
 | `SITE_DESCRIPTION`           | Meta description and feed description            |
 | `SITE_LANGUAGE`              | Primary language code                            |
 | `DASHBOARD_LANGUAGE`         | Private dashboard language                       |
-| `CJK_SERIF_FONT`             | CJK serif fallback                               |
 | `TIME_ZONE`                  | Display time zone, e.g. `UTC` or `Asia/Shanghai` |
 | `MAIN_RSS_FEED`              | What `/feed` returns                             |
 | `ARCHIVE_DEFAULT_LAYOUT`     | Layout `/archive` opens with                     |
@@ -508,13 +570,16 @@ display value, never custom code or storage keys.
 
 ## Reserved paths
 
-These top-level paths are reserved and can't be used as a post or custom page slug:
+These top-level paths are reserved. No post, collection, or custom URL address can have one as its first segment, in any letter case: `archive/2024` and `Archive` are taken, `archives` is free.
 
 ```text
-featured, latest, collections, signin, signout, setup, settings, dash,
-api, feed, search, archive, media, pages, reset, compose, preview, new, static, assets,
-_assets, healthz, readyz
+featured, latest, signin, signout, setup, settings, dash, api, feed, search,
+subscribe, archive, media, pages, reset, collections, compose, preview, new,
+static, assets, _assets, healthz, readyz, skill.md, robots.txt,
+manifest.webmanifest, favicon.ico, apple-touch-icon.png, sites
 ```
+
+Neither can any `sitemap.xml` or `sitemap-*.xml` name: the sitemap uses that family. An address of yours starts with a letter or digit, so every first segment that starts with `_` or `.`, `/.well-known/` included, belongs to Jant; new system addresses go there. With [multilingual content](multilingual.md) on, each additional language's prefix, such as `ja`, is reserved too.
 
 ## Config files
 
@@ -554,10 +619,13 @@ DATABASE_URL=file:./data/jant.sqlite
 # TRUST_PROXY=true
 ```
 
-Useful templates:
+`jant start` and the `jant` commands read `.env` in the current directory. A variable already set in the environment wins over the file. Docker Compose passes the file in with `env_file`.
 
-- Repo-root Docker / Node example: [`.env.example`](https://github.com/jant-me/jant/blob/main/.env.example)
-- Package-internal Node example: [`packages/core/.env.node.example`](https://github.com/jant-me/jant/blob/main/packages/core/.env.node.example)
+| Variable        | Default | Description                                                                        |
+| --------------- | ------- | ---------------------------------------------------------------------------------- |
+| `JANT_ENV_FILE` | `.env`  | The file `jant` reads instead, relative to the current directory. Empty reads none |
+
+Template: [`.env.example`](https://github.com/jant-me/jant/blob/main/.env.example).
 
 ### .dev.vars (local development)
 
@@ -571,7 +639,7 @@ DEMO_PASSWORD=jant-dev-debug-login
 DEMO_MODE=false
 ```
 
-`DEV_API_TOKEN`, `DEMO_EMAIL`, and `DEMO_PASSWORD` are local debugging helpers — they aren't part of a normal production setup.
+`DEV_API_TOKEN`, `DEMO_EMAIL`, and `DEMO_PASSWORD` are local debugging helpers — they aren't part of a normal production setup. They and `DEMO_MODE` can change in any release.
 
 ### Demo Mode
 

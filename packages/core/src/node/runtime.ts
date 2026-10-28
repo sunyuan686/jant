@@ -1,6 +1,6 @@
 import { serve, type ServerType } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
-import type { App } from "../types/app-context.js";
+import type { HonoApp } from "../types/app-context.js";
 import type { Bindings } from "../types/bindings.js";
 import {
   createNodeRequestHandler,
@@ -29,13 +29,24 @@ export interface NodeServerHandle {
   url: string;
 }
 
+/**
+ * How long a stop waits for requests in flight before cutting their
+ * connections. Docker kills a container ten seconds after asking it to stop,
+ * and the database has to be closed before then.
+ */
+const CLOSE_GRACE_MS = 5000;
+
 export async function start(
   env: Bindings = process.env as unknown as Bindings,
-  app?: App,
+  app?: HonoApp,
+  options: { assetRoot?: string | null } = {},
 ): Promise<NodeServerHandle> {
   const handler = await createNodeRequestHandler({
     env,
     app: async () => app ?? (await import("../app.js")).createApp(),
+    // Undefined finds the built assets; null serves none, for a test that
+    // runs before the build.
+    assetRoot: options.assetRoot,
   });
   const hostname = resolveHost(env);
   const port = resolvePort(env);
@@ -57,21 +68,36 @@ export async function start(
         resolvePromise({
           server,
           url: `http://${info.address}:${info.port}`,
+          // Closing the database is what writes SQLite's WAL back into
+          // `jant.sqlite`, so it runs even when the server fails to close.
           async close() {
             if (closed) {
               return;
             }
             closed = true;
-            await new Promise<void>((resolveClose, rejectClose) => {
-              server.close((error?: Error) => {
-                if (error) {
-                  rejectClose(error);
-                  return;
-                }
-                resolveClose();
+            try {
+              await new Promise<void>((resolveClose, rejectClose) => {
+                // `close()` drops idle keep-alive connections at once and
+                // waits for requests in flight; past the grace period those
+                // are cut too.
+                const cutConnections = setTimeout(() => {
+                  if ("closeAllConnections" in server) {
+                    server.closeAllConnections();
+                  }
+                }, CLOSE_GRACE_MS);
+                cutConnections.unref();
+                server.close((error?: Error) => {
+                  clearTimeout(cutConnections);
+                  if (error) {
+                    rejectClose(error);
+                    return;
+                  }
+                  resolveClose();
+                });
               });
-            });
-            await handler.close();
+            } finally {
+              await handler.close();
+            }
           },
         });
       },

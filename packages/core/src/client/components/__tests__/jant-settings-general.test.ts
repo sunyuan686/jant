@@ -123,7 +123,7 @@ const labels: SettingsLabels = {
   discoverEnabled: "Allow Jant Discover to list my site",
   discoverIntro:
     "Jant Discover is a directory of Jant blogs, curated by hand by the Jant community to help people find new Jant blogs and posts. A post you mark Featured appears on the Discover home page 24 hours later, and link and quote posts appear on the Links and Quotes lists 24 hours after they are published. You can keep editing them in the meantime. See the Discover community rules.",
-  discoverDemoLocked: "Demo sites are never listed in Discover.",
+  discoverDemoLocked: "Demo sites are never listed in Jant Discover.",
   discoverFeedsOffLocked:
     "Discover reads your Atom feed, so it needs feeds turned on.",
   discoverSearchOff:
@@ -766,38 +766,6 @@ describe("JantSettingsGeneral", () => {
       );
     });
 
-    // A site that chose the old featured-only mode reads as on, and the box
-    // widens it only when the owner ticks it again — never on its own.
-    it("keeps a stored featured choice ticked, and writes latest on re-tick", async () => {
-      const el = await createElement();
-      el.initData({ ...initialData, discover: "featured" });
-      await el.updateComplete;
-      const details: SettingsSaveDetail[] = [];
-      el.addEventListener("jant:settings-save", (event) => {
-        details.push((event as CustomEvent<SettingsSaveDetail>).detail);
-      });
-
-      const toggle = requireElement(
-        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
-        "expected the Discover checkbox",
-      );
-      expect(toggle.checked).toBe(true);
-      expect(details).toHaveLength(0);
-
-      toggle.click();
-      await el.updateComplete;
-      expect(details[0]?.data.discover).toBe("off");
-
-      el.sectionSaved("discover");
-      await el.updateComplete;
-      requireElement(
-        findCheckboxByLabel(el, labels.discoverEnabled) ?? null,
-        "expected the Discover checkbox",
-      ).click();
-      await el.updateComplete;
-      expect(details[1]?.data.discover).toBe("latest");
-    });
-
     // The controls stay disabled until the save answers, so a second click
     // cannot race the first.
     it("disables the controls while a save is in flight", async () => {
@@ -854,6 +822,26 @@ describe("JantSettingsGeneral", () => {
       expect(toggle.disabled).toBe(true);
       expect(toggle.checked).toBe(false);
       expect(el.textContent).toContain(labels.discoverDemoLocked);
+    });
+
+    // The notice replaces the help line, and with it the only link to the
+    // directory, so it carries that link itself.
+    it("links the directory from the demo notice", async () => {
+      const el = await createElement({ demoMode: true });
+      const notice = requireElement(
+        Array.from(el.querySelectorAll<HTMLElement>("p")).find(
+          (paragraph) =>
+            paragraph.textContent?.trim() === labels.discoverDemoLocked,
+        ) ?? null,
+        "expected the demo notice",
+      );
+      const links = Array.from(notice.querySelectorAll<HTMLAnchorElement>("a"));
+
+      expect(
+        links.map((link) => [link.textContent, link.getAttribute("href")]),
+      ).toEqual([[labels.discoverName, discoverPages.home]]);
+      expect(links[0]?.getAttribute("target")).toBe("_blank");
+      expect(links[0]?.getAttribute("rel")).toBe("noopener noreferrer");
     });
 
     // Discover reads the Atom feed, so with feeds off there is nothing to read.

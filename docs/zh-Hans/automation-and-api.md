@@ -9,26 +9,19 @@ Jant 提供两条通道：
 
 完整字段、请求体见 [API 参考（英文）](../API.md)。
 
-用 `create-jant` 生成的项目里还有这些文件：
-
-- `AGENTS.md`
-- `.agents/skills/`
-- `.claude/skills/`
-- `examples/agent-content-automation/README.md`
-
-这样 agent 拿到的不只是 API token，还有项目约定和现成样例。
+用 `create-jant` 生成的项目里还有 `AGENTS.md`，它把 agent 指向运行中站点的 `/skill.md`、`npx jant --help` 和这份文档；另有 `examples/agent-content-automation/README.md`，里面是可以直接运行的请求。
 
 ## 先选哪条路
 
 - 写脚本、跑定时任务、接外部系统：用 **HTTP API**。
 - 调用方本身就是 MCP client：用 **MCP**。
-- 让 AI 助手操作某个站点：把该站点的 `/skill.md` 地址（例如 `https://example.com/skill.md`）交给它——这是一份绑定当前站点的操作指南，讲清楚了怎么通过 HTTP 或 MCP 读取、发布、整理和迁移内容。迁移走其中专门的导入流程，另见[导出与导入](export-and-import.md#从别的博客或-cms-迁移过来)。
+- 让 AI 助手操作某个站点：把该站点的 `/skill.md` 地址（例如 `https://example.com/skill.md`）交给它。这是一份绑定当前站点的操作指南，讲清楚了怎么通过 HTTP 或 MCP 读取、发布、整理和迁移内容。迁移旧博客见[导出与导入](export-and-import.md#从别的博客或-cms-迁移过来)。
 
 拿不准就走 HTTP。
 
 ## 本机 CLI
 
-涉及本机环境和数据库的操作仍然走 CLI：`migrate`、`deploy`、`reset-password`、`site snapshot`、`site export`、`site import`、`db export` 等。这些命令直接读写数据库或站点部署，不走 HTTP，也不需要 API token。详见 [导出与导入](export-and-import.md)。
+站点的初始化、部署、迁移和备份仍然走 CLI：`setup`、`migrate`、`deploy`、`reset-password`、`site export`、`site import`、`site snapshot`、`db export` 等。`site export` 和 `site import` 用 API token 调用站点的 API，其余命令直接读写数据库。详见 [命令行](cli.md)。
 
 内容自动化（发帖、上传、改设置）一律走 HTTP 或 MCP。
 
@@ -52,23 +45,25 @@ Jant 提供两条通道：
 Authorization: Bearer jnt_...
 ```
 
-少量公开读接口默认不需要 token：`GET /api/collections`、`GET /api/collections/:id`、`GET /api/nav-items`、`GET /api/search`、`GET /api/public/posts`、`GET /api/public/posts/:slug`、`GET /api/public/archive`。如果设置了 `PUBLIC_API_ENABLED=false`，`/api/public/*` 会对所有调用方返回 `404`；合集、导航和搜索的 JSON 读取则需要浏览器 session 或 Bearer token。包括 `/search` 在内的公开 HTML 页面不受影响。
+少量公开读接口默认不需要 token：`GET /api/public/threads`、`GET /api/public/threads/:slug`、`GET /api/public/threads/:slug/posts` 和 `GET /api/public/posts/:slug`。如果设置了 `PUBLIC_API_ENABLED=false`，`/api/public/*` 会对所有调用方返回 `404`。包括 `/search` 在内的公开 HTML 页面不受影响。
 
 ### 常用端点
 
-| 端点                     | 方法                        | 用途                                                                                                   |
-| ------------------------ | --------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `/api/posts`             | GET / POST / PUT / DELETE   | 列出、读取、创建、更新、删除帖子                                                                       |
-| `/api/public/posts`      | GET                         | 公开读取已发布的帖子（无需 token）                                                                     |
-| `/api/public/archive`    | GET                         | 公开归档接口——包含 `latest_hidden`，支持按年份、合集、语言、媒体、标题、回复和可见性过滤（无需 token） |
-| `/api/upload`            | POST / GET / PATCH / DELETE | 一次性 multipart 上传，单次一文件，脚本首选                                                            |
-| `/api/uploads`           | POST → PUT → POST           | 分片上传会话，大文件或不稳定网络用                                                                     |
-| `/api/attachments`       | GET                         | 按 id 读取附件原始内容                                                                                 |
-| `/api/collections`       | GET / POST / PUT / DELETE   | 合集（GET 不需要 token）                                                                               |
-| `/api/smart-collections` | GET / POST / PUT / DELETE   | 智能合集——成员由条件决定的合集（读写都需要 token）                                                     |
-| `/api/settings`          | GET / PUT                   | 站点设置                                                                                               |
-| `/api/search`            | GET                         | 全文搜索（公开，按 IP 限速）                                                                           |
-| `/api/mcp`               | POST                        | MCP JSON-RPC（`initialize` / `tools/list` 等）                                                         |
+| 端点                     | 方法                      | 用途                                                                               |
+| ------------------------ | ------------------------- | ---------------------------------------------------------------------------------- |
+| `/api/posts`             | GET / POST / PUT / DELETE | 列出、读取、创建、更新、删除帖子                                                   |
+| `/api/threads`           | GET                       | 列出 Thread、读取单个 Thread、分页读取其中的帖子，含草稿和私密 Thread              |
+| `/api/public/threads`    | GET                       | 公开读取 Thread——默认是首页的列表，支持归档的过滤条件（无需 token）                |
+| `/api/public/posts`      | GET                       | 按 slug 公开读取一篇已发布的帖子（无需 token）。帖子列表改用 `/api/public/threads` |
+| `/api/upload`            | POST                      | 一次性 multipart 上传，单次一文件，脚本首选                                        |
+| `/api/media`             | GET / PUT / DELETE        | 列出、读取、改 alt 文本、删除已上传的文件                                          |
+| `/api/uploads`           | POST → PUT → POST         | 分片上传会话，大文件或不稳定网络用                                                 |
+| `/api/attachments`       | GET                       | 按 id 读取附件原始内容                                                             |
+| `/api/collections`       | GET / POST / PUT / DELETE | 合集                                                                               |
+| `/api/smart-collections` | GET / POST / PUT / DELETE | 智能合集——成员由条件决定的合集                                                     |
+| `/api/settings`          | GET / PUT                 | 站点设置                                                                           |
+| `/api/search`            | GET                       | 全文搜索已发布的帖子，含私密帖子                                                   |
+| `/api/mcp`               | POST                      | MCP JSON-RPC（`initialize` / `tools/list` 等）                                     |
 
 `/api/upload` 与 `/api/uploads` 只差一个 s，但语义完全不同——前者是单文件 multipart 一次完成，后者是 init/part/complete 三步分片会话。脚本首选 `/api/upload`，遇到大文件或不稳定连接再换 `/api/uploads`。
 
@@ -80,18 +75,18 @@ curl -X POST "$JANT_URL/api/posts" \
   -H "Content-Type: application/json" \
   -d '{
     "format": "note",
-    "body": "Hello from curl."
+    "bodyMarkdown": "Hello from curl."
   }'
 ```
 
-更多 format（`link`、`quote`）和高级字段（`collections`、`publishedAt`、`slug`、`pinned`、`featured`）见 `examples/agent-content-automation/`。
+`examples/agent-content-automation/` 里有一个 `quote` 帖子和一次设置更新可以照着改。全部字段（包括 `collectionIds`、`publishedAt`、`slug`、`pinned`、`featured`）见 [API 参考（英文）](../API.md#create-a-post)。
 
 ### 上传一张图
 
 ```bash
 curl -X POST "$JANT_URL/api/upload" \
   -H "Authorization: Bearer $JANT_API_TOKEN" \
-  -F "file=@./path/to/photo.webp" \
+  -F "file=@./path/to/photo.webp;type=image/webp" \
   -F "alt=封面图"
 ```
 
@@ -112,11 +107,14 @@ curl -X PUT "$JANT_URL/api/settings" \
 {
   "error": "human readable message",
   "code": "ERROR_CODE",
-  "details": "..."
+  "details": {
+    "formErrors": [],
+    "fieldErrors": { "title": ["..."] }
+  }
 }
 ```
 
-`details` 仅在 400 校验失败时出现，包含具体字段信息。常见状态码：
+`details` 仅在 400 校验失败时出现，列出没通过的字段。常见状态码：
 
 | 状态 | `code`                      | 含义与处理                                   |
 | ---- | --------------------------- | -------------------------------------------- |
@@ -125,12 +123,11 @@ curl -X PUT "$JANT_URL/api/settings" \
 | 403  | `FORBIDDEN`                 | token 有效但无权访问该资源                   |
 | 404  | `NOT_FOUND`                 | 资源不存在                                   |
 | 409  | `CONFLICT` 等               | 状态冲突（如 slug 重复、托管媒体配额超限）   |
-| 429  | `RATE_LIMIT`                | 触发速率限制，见下节                         |
 | 500  | `EXTERNAL_SERVICE_ERROR` 等 | 服务端错误，重试；持续失败就带上请求详情反馈 |
 
 ### 速率限制
 
-目前只有 `/api/search` 设了按 IP 的每分钟上限（值由部署侧 `appConfig.rateLimit.searchPerMinute` 控制，默认值见 [配置](configuration.md)）。其他接口暂未做硬性限速，但 Cloudflare Workers 单实例并发有限——批量写入按顺序调用，必要时在两次写之间留一点间隔。以后如果加了更多限速，会通过 `429` 加 `Retry-After` 返回，本节同步更新。
+API 没有硬性限速。搜索限速（[配置](configuration.md)里的 `RATE_LIMIT_SEARCH_PER_MIN`）只作用于未登录读者访问的 `/search` 页面，不作用于 `/api/search`。不过 Cloudflare Workers 单实例并发有限——批量写入按顺序调用，必要时在两次写之间留一点间隔。以后如果给 API 加了限速，会通过 `429` 加 `Retry-After` 返回，本节同步更新。
 
 ## MCP 接口
 
@@ -138,10 +135,10 @@ curl -X PUT "$JANT_URL/api/settings" \
 
 - **路径**：`/api/mcp`
 - **认证**：脚本/agent 用 `Authorization: Bearer jnt_...`；同源浏览器扩展可复用 session cookie。
-- **协议头**：`MCP-Protocol-Version: 2025-06-18`。版本升级时本页同步更新。
+- **协议头**：`MCP-Protocol-Version: 2025-06-18`。不带这个头按这个版本处理，带其他版本返回 `400`。版本升级时本页同步更新。
 - **方法**：`initialize`、`ping`、`tools/list`、`tools/call`。
 
-工具按资源分组：`posts`、`media`、`attachments`、`collections`、`settings`、`search`。具体工具名和入参用 `tools/list` 拿到，和 HTTP 端点一一对应。
+工具覆盖帖子、Thread、媒体、附件、合集、设置和搜索，每个工具的行为和对应的 HTTP 端点一致。导航、自定义 URL、智能合集、合集目录、在合集中置顶 Thread、译文、头像和图标上传以及导出只能走 HTTP。具体工具名和入参用 `tools/list` 拿到。
 
 最小初始化请求：
 

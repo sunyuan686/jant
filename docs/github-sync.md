@@ -10,6 +10,8 @@ Jant is the source of truth. The GitHub repository mirrors Jant's content with a
 
 **Jant → GitHub**: when you create, edit, or delete a post, Jant pushes the change to your repository as a Markdown file with YAML front matter. Thread replies become individual files nested under the root post directory. Media is not copied into the repository — it stays at its URL.
 
+Every post is pushed, drafts and private posts included. They carry `draft: true`, so a Hugo build of the repository leaves them out, but anyone who can read the repository can read them.
+
 **GitHub → Jant**: when you edit a Markdown file on GitHub and push, a webhook notifies Jant. Jant matches the file to an existing post by the `slug` field in front matter and updates its content. **The webhook only updates content fields on existing posts — adding or deleting `.md` files on GitHub does not create or delete posts in Jant.** This avoids accidental loss (clearing the repository will not take down the site).
 
 Jant's own commits are tagged with `[jant-sync]`. Webhooks carrying that marker are ignored, so changes never bounce back and forth.
@@ -35,7 +37,7 @@ The method for deployments without a configured GitHub App. You need a GitHub **
 
 Create the token at [github.com/settings/tokens?type=beta](https://github.com/settings/tokens?type=beta). Scope it to a single repository and grant only the Contents and Webhooks permissions.
 
-1. Create a repository on GitHub (public or private — both work).
+1. Create a repository on GitHub. Make it private if you have drafts or private posts: they are pushed too.
 2. Open **Settings > Site > GitHub Sync** in Jant.
 3. Paste the token and enter the repository as `owner/repo`.
 4. Click **Connect**.
@@ -49,6 +51,8 @@ Available when the deployment has a GitHub App configured. You never touch a lon
 1. Open **Settings > Site > GitHub Sync** in Jant.
 2. Click **Install GitHub App**. You're redirected to GitHub to pick which repositories the App can access.
 3. After installing, return to Jant, choose the repository to sync, and click **Connect**.
+
+A GitHub account holds one installation of the App, so connecting a second site to the same account skips the trip to GitHub: **Install GitHub App** opens the repository picker directly, listing the accounts you have already authorized. Each site syncs its own repository. To bring in a different account, use **Install on another account** in the picker.
 
 ## Full sync
 
@@ -66,6 +70,8 @@ These paths are managed entirely by Jant and overwritten on every push:
 - `.jant-sync` — ownership marker
 
 Files inside these paths that Jant no longer generates are removed on the next push. For example, deleting a post in Jant deletes the corresponding bundle from GitHub on the next sync.
+
+`wrangler.jsonc` is the exception: Jant writes it when the repository does not have one and never touches it again. Its Worker name defaults to the repository name, which is what Cloudflare names a Worker imported from the repository. If yours is named differently, the corrected name survives later pushes — see [Deploying to Cloudflare Workers](export-and-import.md#deploying-to-cloudflare-workers).
 
 Everything else in the repository is left alone. To customize the site:
 

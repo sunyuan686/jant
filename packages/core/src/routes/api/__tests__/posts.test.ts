@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createTestApp } from "../../../__tests__/helpers/app.js";
+import { walkPostPages } from "../../../__tests__/helpers/cursor-walk.js";
 import { createEntityId } from "../../../lib/ids.js";
 import { postsApiRoutes } from "../posts.js";
 
@@ -143,6 +144,165 @@ describe("Posts API Routes", () => {
       expect(body.nextCursor).toBeTruthy();
     });
 
+    it("pages published posts and drafts with an opaque cursor", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+
+      const published = [];
+      for (let i = 0; i < 5; i++) {
+        published.push(
+          await services.posts.create({
+            format: "note",
+            bodyMarkdown: `post ${i}`,
+            publishedAt: 1000 + (i % 2), // Ties, broken by ID.
+          }),
+        );
+      }
+      const root = published[0];
+      await services.posts.create({
+        format: "note",
+        bodyMarkdown: "reply",
+        replyToId: root?.id,
+        publishedAt: 900,
+      });
+      for (let i = 0; i < 3; i++) {
+        await services.posts.create({
+          format: "note",
+          bodyMarkdown: `draft ${i}`,
+          status: "draft",
+        });
+      }
+
+      for (const path of ["/api/posts", "/api/posts?status=draft"]) {
+        const res = await app.request(path);
+        const expected = (await res.json()).posts.map(
+          (post: { id: string }) => post.id,
+        );
+        expect(expected.length).toBeGreaterThan(2);
+        for (const limit of [1, 2]) {
+          expect(await walkPostPages(app, path, limit)).toEqual(expected);
+        }
+      }
+
+      const first = await (await app.request("/api/posts?limit=2")).json();
+      expect(first.nextCursor).not.toMatch(/^pst_/);
+    });
+
+    it("reads a limit past its range as the nearest end", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+      for (const bodyMarkdown of ["one", "two"]) {
+        await services.posts.create({ format: "note", bodyMarkdown });
+      }
+
+      const large = await app.request("/api/posts?limit=500");
+      expect(large.status).toBe(200);
+      expect((await large.json()).posts).toHaveLength(2);
+      const small = await app.request("/api/posts?limit=0");
+      expect(small.status).toBe(200);
+      expect((await small.json()).posts).toHaveLength(1);
+    });
+
+    it("refuses a post ID as a cursor", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+
+      const older = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "older",
+        publishedAt: 1000,
+      });
+      await services.posts.create({
+        format: "note",
+        bodyMarkdown: "newer",
+        publishedAt: 2000,
+      });
+
+      for (const cursor of [older.id, "nope"]) {
+        const res = await app.request(`/api/posts?cursor=${cursor}`);
+        expect(res.status).toBe(400);
+        expect((await res.json()).code).toBe("VALIDATION_ERROR");
+      }
+    });
+
+    // The failure this guards: ordered by thread activity with pins first, a
+    // reply lifted a long-published root to the top — past a walk's cursor,
+    // so the walk never returned it.
+    it("orders published posts by publication alone", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+
+      const root = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "old root",
+        publishedAt: 1000,
+      });
+      const pinned = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "pinned",
+        publishedAt: 2000,
+        pinned: true,
+      });
+      const recent = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "recent",
+        publishedAt: 3000,
+      });
+
+      const first = await (await app.request("/api/posts?limit=1")).json();
+      expect(first.posts[0].id).toBe(recent.id);
+      const reply = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "late reply",
+        replyToId: root.id,
+        publishedAt: 4000,
+      });
+
+      const rest = await walkPostPages(app, "/api/posts", 1, first.nextCursor);
+      expect(rest).toEqual([pinned.id, root.id]);
+      const all = await (await app.request("/api/posts")).json();
+      expect(all.posts.map((post: { id: string }) => post.id)).toEqual([
+        reply.id,
+        recent.id,
+        pinned.id,
+        root.id,
+      ]);
+      expect(
+        all.posts.map(
+          (post: { threadPostCount: number }) => post.threadPostCount,
+        ),
+      ).toEqual([2, 1, 1, 2]);
+    });
+
+    it("keeps drafts in last-edited order", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+
+      const first = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "first",
+        status: "draft",
+        createdAt: 1000,
+        updatedAt: 1000,
+      });
+      const second = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "second",
+        status: "draft",
+        createdAt: 2000,
+        updatedAt: 2000,
+      });
+      await services.posts.update(first.id, { bodyMarkdown: "edited" });
+
+      const res = await app.request("/api/posts?status=draft");
+      const body = await res.json();
+      expect(body.posts.map((post: { id: string }) => post.id)).toEqual([
+        first.id,
+        second.id,
+      ]);
+      expect(body.posts[0].threadPostCount).toBe(0);
+    });
+
     it("serializes quote attribution as sourceName/sourceUrl", async () => {
       const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/posts", postsApiRoutes);
@@ -226,20 +386,8 @@ describe("Posts API Routes", () => {
     });
   });
 
-  describe("GET /api/posts/:id/content", () => {
-    it("returns 401 when not authenticated", async () => {
-      const { app, services } = createTestApp({ authenticated: false });
-      app.route("/api/posts", postsApiRoutes);
-
-      const post = await services.posts.create({
-        format: "note",
-        bodyMarkdown: "test post",
-      });
-      const res = await app.request(`/api/posts/${post.id}/content`);
-      expect(res.status).toBe(401);
-    });
-
-    it("returns markdown for a note body", async () => {
+  describe("content=markdown", () => {
+    it("returns the body as Markdown in place of the rendered fields", async () => {
       const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/posts", postsApiRoutes);
 
@@ -248,71 +396,62 @@ describe("Posts API Routes", () => {
         bodyMarkdown: "# Heading\n\nBody text",
       });
 
-      const res = await app.request(`/api/posts/${post.id}/content`);
+      const res = await app.request(`/api/posts/${post.id}?content=markdown`);
       expect(res.status).toBe(200);
-      await expect(res.json()).resolves.toEqual({
-        id: post.id,
-        type: "post",
-        format: "note",
-        contentFormat: "markdown",
-        content: "# Heading\n\nBody text",
-        chars: 17,
-      });
+      const body = await res.json();
+      expect(body.bodyMarkdown).toBe("# Heading\n\nBody text");
+      expect(body).not.toHaveProperty("body");
+      expect(body).not.toHaveProperty("bodyHtml");
+      expect(body).not.toHaveProperty("bodyText");
+      expect(body.collectionIds).toEqual([]);
+
+      const list = await (
+        await app.request("/api/posts?content=markdown")
+      ).json();
+      expect(list.posts[0].bodyMarkdown).toBe("# Heading\n\nBody text");
     });
 
-    it("returns quote commentary without quoteText or source metadata", async () => {
+    it("keeps a quote's own fields and answers null without a body", async () => {
       const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/posts", postsApiRoutes);
 
-      const post = await services.posts.create({
+      const quote = await services.posts.create({
         format: "quote",
         title: "Marcus Aurelius",
-        url: "https://example.com/meditations",
         quoteText: "What stands in the way becomes the way.",
         bodyMarkdown: "Short commentary",
       });
-
-      const res = await app.request(`/api/posts/${post.id}/content`);
-      expect(res.status).toBe(200);
-      await expect(res.json()).resolves.toEqual({
-        id: post.id,
-        type: "post",
-        format: "quote",
-        contentFormat: "markdown",
-        content: "Short commentary",
-        chars: 16,
-      });
-    });
-
-    it("returns empty markdown when a link has no commentary body", async () => {
-      const { app, services } = createTestApp({ authenticated: true });
-      app.route("/api/posts", postsApiRoutes);
-
-      const post = await services.posts.create({
+      const link = await services.posts.create({
         format: "link",
         title: "Example",
         url: "https://example.com",
       });
 
-      const res = await app.request(`/api/posts/${post.id}/content`);
-      expect(res.status).toBe(200);
-      await expect(res.json()).resolves.toEqual({
-        id: post.id,
-        type: "post",
-        format: "link",
-        contentFormat: "markdown",
-        content: "",
-        chars: 0,
-      });
+      const quoteBody = await (
+        await app.request(`/api/posts/${quote.id}?content=markdown`)
+      ).json();
+      expect(quoteBody.bodyMarkdown).toBe("Short commentary");
+      expect(quoteBody.quoteText).toBe(
+        "What stands in the way becomes the way.",
+      );
+      expect(quoteBody.sourceName).toBe("Marcus Aurelius");
+
+      const linkBody = await (
+        await app.request(`/api/posts/${link.id}?content=markdown`)
+      ).json();
+      expect(linkBody.bodyMarkdown).toBeNull();
     });
 
-    it("returns 404 for a non-existent post", async () => {
-      const { app } = createTestApp({ authenticated: true });
+    it("refuses a content format it doesn't know", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/posts", postsApiRoutes);
-      const missingId = createEntityId("post");
 
-      const res = await app.request(`/api/posts/${missingId}/content`);
-      expect(res.status).toBe(404);
+      const post = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "text",
+      });
+      const res = await app.request(`/api/posts/${post.id}?content=html`);
+      expect(res.status).toBe(400);
     });
   });
 
@@ -449,6 +588,30 @@ describe("Posts API Routes", () => {
       expect(body.attachments).toEqual([]);
     });
 
+    it("keeps the creation and edit times a restore sends", async () => {
+      const { app } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+
+      const res = await app.request("/api/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          format: "note",
+          bodyMarkdown: "Moved from another site",
+          publishedAt: 1700000500,
+          createdAt: 1700000000,
+          updatedAt: 1700009000,
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(await res.json()).toMatchObject({
+        publishedAt: 1700000500,
+        createdAt: 1700000000,
+        updatedAt: 1700009000,
+      });
+    });
+
     it("creates a post with bodyMarkdown", async () => {
       const { app } = createTestApp({ authenticated: true });
       app.route("/api/posts", postsApiRoutes);
@@ -467,6 +630,47 @@ describe("Posts API Routes", () => {
       const body = await res.json();
       expect(body.bodyText).toContain("Hello");
       expect(body.bodyHtml).toContain("<strong>bold</strong>");
+    });
+
+    // A first segment that starts with `_` or `.` is Jant's, so a post stored
+    // there would answer 404 at its own address.
+    it.each(["_notes/plan", ".plan", "~me", "日记/第一篇"])(
+      "refuses the path %s",
+      async (path) => {
+        const { app } = createTestApp({ authenticated: true });
+        app.route("/api/posts", postsApiRoutes);
+
+        const res = await app.request("/api/posts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ format: "note", bodyMarkdown: "x", path }),
+        });
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({
+          code: "VALIDATION_ERROR",
+        });
+      },
+    );
+
+    it("takes a path that starts with a letter or digit", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+
+      const res = await app.request("/api/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          format: "note",
+          bodyMarkdown: "x",
+          path: "/Notes/2024/plan.v2/",
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const created = await res.json();
+      const resolved = await services.paths.resolve("notes/2024/plan.v2");
+      expect(resolved?.postId).toBe(created.id);
     });
 
     it("treats single newlines in bodyMarkdown as paragraph whitespace", async () => {
@@ -640,8 +844,11 @@ describe("Posts API Routes", () => {
         }),
       ]);
       expect(body.attachments[0].contentUrl).toContain("/api/attachments/");
-      // Markdown-only storage: a single .md object per text attachment.
+      // Markdown-only storage: a single .md object per text attachment, and
+      // `url` is that file.
       expect(storage.files.size).toBe(1);
+      const [storedKey] = [...storage.files.keys()];
+      expect(body.attachments[0].url.endsWith(storedKey)).toBe(true);
     });
 
     it("creates quote posts with sourceName/sourceUrl", async () => {
@@ -706,6 +913,42 @@ describe("Posts API Routes", () => {
       expect(res.status).toBe(400);
       const body = await res.json();
       expect(body.error).toContain("invalid media IDs");
+    });
+
+    // Attaching it here would move it off the other post, and deleting this
+    // post would then delete the file.
+    it("refuses media attached to another post", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+      const original = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "original",
+      });
+      const media = await services.media.create({
+        filename: "a.jpg",
+        originalName: "a.jpg",
+        mimeType: "image/jpeg",
+        size: 1024,
+        storageKey: "media/a.jpg",
+      });
+      await services.media.attachToPost(original.id, [media.id]);
+
+      const res = await app.request("/api/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          format: "note",
+          bodyMarkdown: "copy",
+          attachments: [{ type: "media", mediaId: media.id }],
+        }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({ code: "CONFLICT" });
+      expect((await services.media.getById(media.id))?.postId).toBe(
+        original.id,
+      );
+      expect(await services.posts.list()).toHaveLength(1);
     });
 
     it("returns 400 for invalid body", async () => {
@@ -778,6 +1021,57 @@ describe("Posts API Routes", () => {
       expect(body.attachments).toEqual([]);
     });
 
+    it("refuses a field the post's format doesn't take", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+      const note = await services.posts.create({
+        format: "note",
+        title: "Kept",
+        bodyMarkdown: "original",
+      });
+
+      const res = await app.request(`/api/posts/${note.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceName: "Someone" }),
+      });
+
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toMatchObject({
+        code: "VALIDATION_ERROR",
+        error: "Notes can't include a source name.",
+      });
+      expect((await services.posts.getById(note.id))?.title).toBe("Kept");
+    });
+
+    it("ignores the fields a post gets only when it's created", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+      const root = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "root",
+      });
+      const note = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "original",
+      });
+
+      const res = await app.request(`/api/posts/${note.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bodyMarkdown: "updated",
+          replyToId: root.id,
+          path: "somewhere-else",
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const updated = await services.posts.getById(note.id);
+      expect(updated?.replyToId).toBeNull();
+      expect(updated?.slug).toBe(note.slug);
+    });
+
     it("updates post with attachments to replace attachments", async () => {
       const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/posts", postsApiRoutes);
@@ -820,6 +1114,87 @@ describe("Posts API Routes", () => {
         type: "media",
         id: m2.id,
       });
+    });
+
+    it("keeps an attachment's alt text when omitted and clears it when empty", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+
+      const post = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "test",
+      });
+      const photo = await services.media.create({
+        filename: "a.jpg",
+        originalName: "a.jpg",
+        mimeType: "image/jpeg",
+        size: 1024,
+        storageKey: "media/a.jpg",
+        alt: "A harbour at dusk",
+      });
+      await services.media.attachToPost(post.id, [photo.id]);
+
+      const update = (attachment: Record<string, unknown>) =>
+        app.request(`/api/posts/${post.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            attachments: [{ type: "media", mediaId: photo.id, ...attachment }],
+          }),
+        });
+
+      const kept = await update({});
+      expect(kept.status).toBe(200);
+      expect((await kept.json()).attachments[0].alt).toBe("A harbour at dusk");
+
+      const cleared = await update({ alt: "" });
+      expect(cleared.status).toBe(200);
+      expect((await cleared.json()).attachments[0].alt).toBeNull();
+      expect((await services.media.getById(photo.id))?.alt).toBeNull();
+    });
+
+    it("refuses to take media from another post on update", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/posts", postsApiRoutes);
+      const owner = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "owner",
+      });
+      const other = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "other",
+      });
+      const own = await services.media.create({
+        filename: "own.jpg",
+        originalName: "own.jpg",
+        mimeType: "image/jpeg",
+        size: 1024,
+        storageKey: "media/own.jpg",
+      });
+      const taken = await services.media.create({
+        filename: "taken.jpg",
+        originalName: "taken.jpg",
+        mimeType: "image/jpeg",
+        size: 1024,
+        storageKey: "media/taken.jpg",
+      });
+      await services.media.attachToPost(owner.id, [own.id]);
+      await services.media.attachToPost(other.id, [taken.id]);
+
+      const res = await app.request(`/api/posts/${owner.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          attachments: [
+            { type: "media", mediaId: own.id },
+            { type: "media", mediaId: taken.id },
+          ],
+        }),
+      });
+
+      expect(res.status).toBe(409);
+      expect((await services.media.getById(taken.id))?.postId).toBe(other.id);
+      expect((await services.media.getById(own.id))?.postId).toBe(owner.id);
     });
 
     it("preserves existing attachments when attachments is omitted", async () => {

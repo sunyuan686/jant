@@ -1,6 +1,6 @@
 # 使用 Docker 部署
 
-官方镜像 [`owenyoung/jant`](https://hub.docker.com/r/owenyoung/jant) 运行 Node 版本的 Jant，启动前会自动跑数据库迁移。
+官方镜像 [`owenyoung/jant`](https://hub.docker.com/r/owenyoung/jant) 运行 Node 版本的 Jant。Compose 文件会在启动应用前跑数据库迁移；单独运行镜像不会迁移，而且数据库没迁移时会拒绝启动。
 
 ## 开始前
 
@@ -17,7 +17,10 @@
 mkdir jant-site && cd jant-site
 curl -O https://raw.githubusercontent.com/jant-me/jant/main/compose.yml
 curl -o .env https://raw.githubusercontent.com/jant-me/jant/main/.env.example
+mkdir -p data
 ```
+
+容器以 ID 为 1000 的用户运行。在 Linux 上要把数据目录交给它，否则建不了数据库：`sudo chown 1000:1000 data`。macOS 和 Windows 上的 Docker Desktop 不需要这一步。
 
 编辑 `.env`，把 `AUTH_SECRET` 换成实际生成的密钥：
 
@@ -117,7 +120,7 @@ S3_SECRET_ACCESS_KEY=<secret-access-key>
 只有这两种情况需要显式设置：
 
 - **反向代理没正确传 `X-Forwarded-Host` / `X-Forwarded-Proto`**：RSS、sitemap、导出文件、auth 回调里的绝对 URL 会用错域名。在 `.env` 里写死 `SITE_ORIGIN=https://<your-domain>`。
-- **挂在子路径下**（如 `example.com/blog`）：设 `SITE_PATH_PREFIX=/blog`。`SITE_ORIGIN` 是独立变量，只接受 origin（scheme + host + port），路径部分会被忽略——按上一条决定要不要设。
+- **挂在子路径下**（如 `example.com/blog`）：设 `SITE_PATH_PREFIX=/blog`。`SITE_ORIGIN` 是独立变量，只接受 origin（scheme + host + port），带路径时站点会在启动时停下——按上一条决定要不要设。
 
 完整变量表见 [配置](configuration.md)。
 
@@ -130,8 +133,8 @@ S3_SECRET_ACCESS_KEY=<secret-access-key>
 docker run --rm \
   -e AUTH_SECRET=<auth-secret> \
   -v "$(pwd)/data:/var/lib/jant" \
-  owenyoung/jant:latest \
-  node bin/jant.js migrate
+  owenyoung/jant:1 \
+  jant migrate
 
 # 再启动应用
 docker run -d \
@@ -140,14 +143,27 @@ docker run -d \
   -e AUTH_SECRET=<auth-secret> \
   -e TRUST_PROXY=false \
   -v "$(pwd)/data:/var/lib/jant" \
-  owenyoung/jant:latest
+  owenyoung/jant:1
 ```
 
 容器在你自己的反向代理后面时，把 `TRUST_PROXY` 改成 `true`。
 
+## 用命令行创建管理员账号
+
+不在浏览器里初始化（比如用脚本部署）时，迁移之后跑 `jant setup`。它创建管理员账号和站点，并完成初始化。密码从标准输入读：
+
+```bash
+printf '%s' "$OWNER_PASSWORD" | docker compose run --rm -T jant \
+  jant setup --email you@example.com --password-stdin --site-name "My Blog"
+```
+
+`docker compose run` 让这条命令用上站点的 `.env` 和数据目录，账号会写进站点实际读取的数据库，用 Postgres 时也一样。
+
+`--language` 默认是 `en`，`--time-zone` 默认是 `UTC`，全部参数见 `jant setup --help`。已经初始化过的站点不会被改动，所以每次启动都跑这条命令，也不会把之后改过的密码改回去。
+
 ## 更新站点
 
-拉最新镜像并重启就行：
+先备份 `./data`，见 [备份](#备份)。然后拉最新镜像并重启：
 
 ```bash
 docker compose pull
@@ -162,6 +178,8 @@ docker compose up -d
 IMAGE=owenyoung/jant:<version>
 ```
 
+0.x 的站点要改什么，见[升级](upgrading.md)。
+
 ## 常用命令
 
 ```bash
@@ -174,7 +192,7 @@ docker compose down          # 停止整个栈
 
 默认 Docker 配置下，一次完整备份至少要包含：
 
-- `./data/jant.sqlite` —— 数据库
+- `./data/jant.sqlite` —— 数据库；容器没有正常停止时，旁边还有 `jant.sqlite-wal`
 - `./data/media/` —— 上传的媒体
 
 详见 [备份与恢复](backups.md)。

@@ -22,7 +22,7 @@
 
 ## 支持评论吗？
 
-不内置，未来可能会加。现在可以通过 [代码注入](code-injection.md) 嵌入 giscus、Disqus 等第三方系统。
+Jant 不内置评论。需要的话，可以通过[代码注入](code-injection.md)嵌入 giscus、Disqus 等第三方评论系统。
 
 ## Jant 有独立页面吗（比如 About 页）？
 
@@ -46,7 +46,7 @@
 - **Cloudflare**：`npm install @jant/core@latest && npm run deploy`，迁移会在部署时自动跑。
 - **Docker**：`docker compose pull && docker compose up -d`，这个命令会先运行数据库迁移，再启动应用。
 
-升级前建议先做一次完整备份，见 [备份与恢复](backups.md)。
+先备份。各种部署方式的步骤、0.x 的站点要改什么，见[升级](upgrading.md)。
 
 ## Cloudflare 免费额度真的够吗？
 
@@ -106,6 +106,7 @@ feeds。内容会立即显示在网页上，等待的只有 feed 分发。这段
 
 - [GitHub Issues](https://github.com/jant-me/jant/issues) —— bug 和功能请求
 - 邮件 `support#jant.me`（请把 `#` 换成 `@`）—— 托管账户问题
+- Jant 作者群 —— 群内会讨论 Jant、写作和阅读等话题。添加微信 `heyitsowen`，备注「加 Jant 作者群」，二维码见[联系页面](https://jant.me/zh-hans/contact)
 
 ## AI agent 能发帖吗？
 
@@ -114,7 +115,7 @@ feeds。内容会立即显示在网页上，等待的只有 feed 分发。这段
 - **HTTP JSON API**：默认推荐——`POST /api/posts` 加 Bearer token，外部脚本、定时任务、第三方集成都用它。
 - **MCP 接口**（`/api/mcp`）：调用方本身就是 MCP client 时。
 
-`create-jant` 生成的项目自带 `AGENTS.md`、`.claude/skills/` 和 `examples/agent-content-automation/`，里面有可以直接复制的 curl 示例。详见 [自动化与 API](automation-and-api.md)。
+`create-jant` 生成的项目自带 `AGENTS.md`（把 agent 指向站点的 `/skill.md`）和 `examples/agent-content-automation/`，里面有可以直接复制的 curl 示例。详见 [自动化与 API](automation-and-api.md)。
 
 启用 [GitHub 同步](github-sync.md) 后，AI 也可以直接读写 Git 仓库里的 Markdown——对很多 coding agent 来说比 API 更顺手。
 
@@ -140,13 +141,28 @@ feeds。内容会立即显示在网页上，等待的只有 feed 分发。这段
 
 所有已登录会话立即失效，所有人需要重新登录。生产环境上线后**不要轻易更换**——除非怀疑泄露。生成方式：`openssl rand -base64 32`。
 
-## Pre-1.0，破坏性变更会很多吗？
+## 忘了密码怎么登录？
 
-可能会有，但不到必要不会做。每次破坏性变更都会写在 commit 和 changelog 里。升级前扫一眼变更记录，留一份最近的备份。
+自部署的站点，对站点的数据库运行 `jant reset-password`。它会打印一个 `/reset?token=…` 这样的路径，15 分钟内在你的站点上打开它，设置新密码。
+
+- Cloudflare，在项目目录里：`npx jant reset-password --remote`。不加 `--remote` 重置的是本地开发数据库。
+- Docker，在 `compose.yml` 所在目录：`docker compose exec jant jant reset-password`
+
+选项见[命令行](cli.md)。
+
+## 1.x 之内升级，会有破坏性变更吗？
+
+[兼容性](compatibility.md)承诺的内容，每个 1.x 版本都保持可用。第二档的改动要等到 2.0，改动写在该版本的升级说明里。各类站点的升级步骤见[升级](upgrading.md)。
 
 ## 怎么把别的博客的内容迁进来（WordPress、Tumblr 等）？
 
-没有固定的导入器——每个平台的导出格式都不一样。最省事的办法是把当前站点的 `/skill.md` 地址（例如 `https://example.com/skill.md`）交给 AI 助手。这份绑定当前站点的 Jant 操作指南包含专门的导入流程，讲清楚了数据模型、来源格式映射、断点续跑和迁移验证。把导出文件和站点的 API token 给它，让它来跑这次迁移。详见[导出与导入](export-and-import.md#从别的博客或-cms-迁移过来)。
+没有固定的导入器，每个平台的导出格式都不一样。创建 Jant 站点后，把下面这句话发给 Claude Code、Codex 这类能运行命令的 AI 助手，`example.com` 换成你的站点地址：
+
+```text
+读取 https://example.com/skill.md，帮我把旧博客迁移到这里。
+```
+
+具体的步骤 AI 助手会引导你完成，包括导出旧博客和创建 API token。详见[导出与导入](export-and-import.md#从别的博客或-cms-迁移过来)。
 
 ## 能迁回 WordPress / Ghost 吗？
 

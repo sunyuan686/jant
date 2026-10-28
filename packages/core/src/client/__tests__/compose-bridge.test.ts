@@ -1240,4 +1240,91 @@ describe("compose bridge", () => {
     await flushBridgeWork();
     expect(progressToastText()).toBe("Draft saved.");
   });
+
+  // Removing an attachment the post already had takes effect on save, which
+  // deletes the file then. Deleting it on the spot would lose it for good
+  // when the author discards the edit.
+  it("leaves an attachment the post already had until the edit is saved", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 204 }));
+
+    document.dispatchEvent(
+      new CustomEvent("jant:attachment-removed", {
+        detail: {
+          clientId: "c-saved",
+          mediaId: "med_01kn8jq3t4famtyg9hjd074ckr",
+          persisted: true,
+        },
+      }),
+    );
+    await flushBridgeWork();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    document.dispatchEvent(
+      new CustomEvent("jant:attachment-removed", {
+        detail: {
+          clientId: "c-new",
+          mediaId: "med_01kn8jq3t4famtyg9hjd074ckz",
+          persisted: false,
+        },
+      }),
+    );
+    await flushBridgeWork();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [input, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(input)).toContain(
+      "/api/media/med_01kn8jq3t4famtyg9hjd074ckz",
+    );
+    expect(init?.method).toBe("DELETE");
+  });
+
+  // The save is what removes it, and only a list that leaves it out does: an
+  // edit whose last attachment was removed has to say so with an empty list.
+  it("sends an empty attachment list when an edit removes the last one", async () => {
+    const composeEl = document.createElement(
+      "jant-compose-dialog",
+    ) as ComposeHarness;
+    composeEl.refreshCollections = vi.fn(async () => true);
+    composeEl.pageMode = false;
+    document.body.appendChild(composeEl);
+
+    const bodies: unknown[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const raw =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      const url = new URL(raw, "http://localhost");
+      if (url.pathname === "/api/posts/pst_123") {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(
+          JSON.stringify({ id: "pst_123", slug: "photo", status: "published" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      });
+    });
+
+    composeEl.dispatchEvent(
+      new CustomEvent("jant:compose-submit-deferred", {
+        bubbles: true,
+        detail: {
+          ...singlePostDetail({ status: "published" }),
+          attachments: [],
+          pendingAttachments: [],
+          editPostId: "pst_123",
+        },
+      }),
+    );
+    await flushBridgeWork();
+
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ attachments: [] });
+  });
 });

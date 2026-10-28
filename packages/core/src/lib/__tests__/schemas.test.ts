@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createEntityId } from "../ids.js";
 import {
+  pageLimitSchema,
   FormatSchema,
   StatusSchema,
   RedirectTypeSchema,
@@ -42,6 +43,29 @@ describe("FormatSchema", () => {
   });
 });
 
+describe("pageLimitSchema", () => {
+  const limit = pageLimitSchema(100, 20);
+
+  it("reads a value past either end of the range as that end", () => {
+    expect(limit.parse("500")).toBe(100);
+    expect(limit.parse(101)).toBe(100);
+    expect(limit.parse("0")).toBe(1);
+    expect(limit.parse(-3)).toBe(1);
+    expect(limit.parse("42")).toBe(42);
+  });
+
+  it("falls back when limit is absent or empty", () => {
+    expect(limit.parse(undefined)).toBe(20);
+    expect(limit.parse("")).toBe(20);
+  });
+
+  it("refuses a value that isn't an integer", () => {
+    for (const value of ["abc", "1.5", 2.5]) {
+      expect(limit.safeParse(value).success, String(value)).toBe(false);
+    }
+  });
+});
+
 describe("StatusSchema", () => {
   it("accepts all valid statuses", () => {
     for (const status of STATUSES) {
@@ -61,10 +85,17 @@ describe("RedirectTypeSchema", () => {
     expect(RedirectTypeSchema.parse("302")).toBe("302");
   });
 
+  // The custom URL list answers `redirectType: 301`; sending that back to
+  // create one has to work.
+  it("accepts 301 and 302 as numbers, as the API answers them", () => {
+    expect(RedirectTypeSchema.parse(301)).toBe("301");
+    expect(RedirectTypeSchema.parse(302)).toBe("302");
+  });
+
   it("rejects other values", () => {
     expect(() => RedirectTypeSchema.parse("200")).toThrow();
     expect(() => RedirectTypeSchema.parse("404")).toThrow();
-    expect(() => RedirectTypeSchema.parse(301)).toThrow();
+    expect(() => RedirectTypeSchema.parse(308)).toThrow();
   });
 });
 
@@ -387,9 +418,13 @@ describe("CreatePostSchema", () => {
     expect(result.pinned).toBe(true);
   });
 
-  it("accepts pinned as 'on' (transforms to true)", () => {
-    const result = CreatePostSchema.parse({ ...validPost, pinned: "on" });
-    expect(result.pinned).toBe(true);
+  it("takes pinned only as a boolean", () => {
+    expect(
+      CreatePostSchema.safeParse({ ...validPost, pinned: "on" }).success,
+    ).toBe(false);
+    expect(CreatePostSchema.parse({ ...validPost, pinned: true }).pinned).toBe(
+      true,
+    );
   });
 
   it("accepts optional quoteText for quote posts", () => {
@@ -514,9 +549,29 @@ describe("CreatePostSchema", () => {
     expect(result.rating).toBeUndefined();
   });
 
-  it("accepts empty string rating (transforms to undefined)", () => {
-    const result = CreatePostSchema.parse({ ...validPost, rating: "" });
-    expect(result.rating).toBeUndefined();
+  it("takes a rating only as a number", () => {
+    expect(
+      CreatePostSchema.safeParse({ ...validPost, rating: "" }).success,
+    ).toBe(false);
+    expect(
+      CreatePostSchema.safeParse({ ...validPost, rating: "3" }).success,
+    ).toBe(false);
+    expect(
+      CreatePostSchema.parse({ ...validPost, rating: 0 }).rating,
+    ).toBeUndefined();
+  });
+
+  it("takes pinnedAt and featuredAt only as Unix seconds", () => {
+    expect(
+      CreatePostSchema.safeParse({
+        ...validPost,
+        pinnedAt: "2026-09-28T00:00:00Z",
+      }).success,
+    ).toBe(false);
+    expect(
+      CreatePostSchema.parse({ ...validPost, featuredAt: 1790000000 })
+        .featuredAt,
+    ).toBe(1790000000);
   });
 
   it("accepts optional collectionIds as array of non-empty strings", () => {
@@ -538,12 +593,10 @@ describe("CreatePostSchema", () => {
     ).toThrow();
   });
 
-  it("accepts empty string collectionIds (transforms to undefined)", () => {
-    const result = CreatePostSchema.parse({
-      ...validPost,
-      collectionIds: "",
-    });
-    expect(result.collectionIds).toBeUndefined();
+  it("takes collectionIds only as an array", () => {
+    expect(
+      CreatePostSchema.safeParse({ ...validPost, collectionIds: "" }).success,
+    ).toBe(false);
   });
 
   it("accepts optional replyToId", () => {
@@ -617,6 +670,27 @@ describe("CreatePostApiSchema", () => {
     status: "published",
   };
 
+  it("accepts the creation and edit times a restore passes", () => {
+    expect(
+      CreatePostApiSchema.parse({
+        ...validPost,
+        createdAt: 1700000000,
+        updatedAt: 1700009000,
+      }),
+    ).toMatchObject({ createdAt: 1700000000, updatedAt: 1700009000 });
+  });
+
+  it("leaves record timestamps out of updates", () => {
+    // Unknown fields are ignored rather than refused, so a record timestamp
+    // sent with an update never reaches it.
+    expect(
+      UpdatePostApiSchema.parse({ createdAt: 1700000000 }),
+    ).not.toHaveProperty("createdAt");
+    expect(
+      UpdatePostApiSchema.parse({ updatedAt: 1700000000 }),
+    ).not.toHaveProperty("updatedAt");
+  });
+
   it("accepts ordered attachment inputs", () => {
     const mediaId = createEntityId("media");
     const result = CreatePostApiSchema.parse({
@@ -643,13 +717,14 @@ describe("CreatePostApiSchema", () => {
     ]);
   });
 
-  it("rejects legacy mediaIds in API requests", () => {
-    expect(() =>
-      CreatePostApiSchema.parse({
-        ...validPost,
-        mediaIds: ["media-1"],
-      }),
-    ).toThrow();
+  it("ignores fields it doesn't know, such as the legacy mediaIds", () => {
+    const parsed = CreatePostApiSchema.parse({
+      ...validPost,
+      mediaIds: ["media-1"],
+      somethingNew: true,
+    });
+    expect(parsed).not.toHaveProperty("mediaIds");
+    expect(parsed).not.toHaveProperty("somethingNew");
   });
 
   it("rejects text attachments without content", () => {

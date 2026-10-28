@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createTestDatabase } from "../../__tests__/helpers/db.js";
+import { describePendingMigrations } from "../../db/migration-status.js";
+import type { RawQueryClient } from "../../db/raw-query.js";
+import { sqliteSchemaBundle } from "../../db/schema-bundle.js";
 import { getInstanceReadiness } from "../readiness.js";
 
 const HOSTED_SHARED_ENV = {
@@ -24,10 +27,34 @@ describe("getInstanceReadiness", () => {
       }),
     ).resolves.toEqual({
       status: "ok",
+      version: "test-version",
       checks: {
         startupConfig: { ok: true },
         database: { ok: true },
       },
+    });
+  });
+
+  it("reports a database with schema migrations it hasn't applied", async () => {
+    const { db, sqlite } = createTestDatabase();
+
+    const result = await getInstanceReadiness({
+      AUTH_SECRET: "test-secret-with-enough-entropy-for-readiness",
+      NODE_DATABASE: {
+        db,
+        dialect: "sqlite",
+        rawQuery: {} as RawQueryClient,
+        schema: sqliteSchemaBundle,
+        pendingMigrations: async () => ["0034_add_x"],
+      },
+      NODE_SQLITE: sqlite,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.checks.startupConfig).toEqual({ ok: true });
+    expect(result.checks.database).toEqual({
+      ok: false,
+      error: describePendingMigrations(["0034_add_x"]),
     });
   });
 
@@ -40,6 +67,7 @@ describe("getInstanceReadiness", () => {
       }),
     ).resolves.toEqual({
       status: "error",
+      version: "test-version",
       checks: {
         startupConfig: {
           ok: false,
@@ -67,6 +95,22 @@ describe("getInstanceReadiness", () => {
     expect(result.checks.startupConfig.error).toContain(
       "openssl rand -base64 32",
     );
+  });
+
+  it("reports an environment value Jant can't use", async () => {
+    const { sqlite } = createTestDatabase();
+
+    const result = await getInstanceReadiness({
+      AUTH_SECRET: "test-secret-with-enough-entropy-for-readiness",
+      NODE_SQLITE: sqlite,
+      TRUST_PROXY: "yes",
+    } as Parameters<typeof getInstanceReadiness>[0]);
+
+    expect(result.status).toBe("error");
+    expect(result.checks.startupConfig).toEqual({
+      ok: false,
+      error: 'TRUST_PROXY can\'t be "yes". Use true or false.',
+    });
   });
 
   it("reports startup configuration failures when AUTH_SECRET is still the placeholder", async () => {
@@ -104,6 +148,26 @@ describe("getInstanceReadiness", () => {
     );
   });
 
+  // What a deploy check compares: the build that answers, and when its
+  // process started. A Worker has no process, so it reports only the build.
+  it("reports the build, and the process start where there is one", async () => {
+    const { sqlite } = createTestDatabase();
+    const env = {
+      AUTH_SECRET: "test-secret-with-enough-entropy-for-readiness",
+      NODE_SQLITE: sqlite,
+    };
+
+    const withoutStart = await getInstanceReadiness(env);
+    expect(withoutStart.version).toBe("test-version");
+    expect(withoutStart).not.toHaveProperty("startedAt");
+
+    const withStart = await getInstanceReadiness({
+      ...env,
+      NODE_STARTED_AT: 1789000000,
+    });
+    expect(withStart.startedAt).toBe(1789000000);
+  });
+
   it("reports a missing database binding", async () => {
     await expect(
       getInstanceReadiness({
@@ -111,6 +175,7 @@ describe("getInstanceReadiness", () => {
       }),
     ).resolves.toEqual({
       status: "error",
+      version: "test-version",
       checks: {
         startupConfig: { ok: true },
         database: {

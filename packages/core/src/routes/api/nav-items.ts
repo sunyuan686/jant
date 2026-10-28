@@ -3,17 +3,18 @@
  */
 
 import { Hono } from "hono";
+import { toApiNavItem } from "../../lib/api-nav-items.js";
 import type { Context } from "hono";
 import { z } from "zod";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { requireAuthApi } from "../../middleware/auth.js";
-import { requirePublicApiAccess } from "../../middleware/public-content-access.js";
+import { validate } from "../../middleware/validate.js";
 import {
   CreateNavItemSchema,
   NavItemIdSchema,
+  pageLimitSchema,
   UpdateNavItemSchema,
-  parseValidated,
 } from "../../lib/schemas.js";
 import { assertFound, parseIdParam, NotFoundError } from "../../lib/errors.js";
 import { AddressQuerySchema, requestInternalPath } from "../../lib/address.js";
@@ -35,7 +36,7 @@ const MoveSchema = z.object({
 
 const PageCandidatesQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
+  limit: pageLimitSchema(50, 20),
 });
 
 async function withSiteHeaderHtml<T extends object>(
@@ -55,20 +56,25 @@ async function withSiteHeaderHtml<T extends object>(
 }
 
 // List nav items
-navItemsApiRoutes.get("/", requirePublicApiAccess(), async (c) => {
+navItemsApiRoutes.get("/", requireAuthApi(), async (c) => {
   const items = await c.var.services.navItems.list();
-  return c.json({ navItems: items });
+  return c.json({ navItems: items.map(toApiNavItem) });
 });
 
 // Search published titled notes that can be added as pages (requires auth)
-navItemsApiRoutes.get("/pages", requireAuthApi(), async (c) => {
-  const query = parseValidated(PageCandidatesQuerySchema, c.req.query());
-  const pages = await c.var.services.navItems.listPageCandidates({
-    query: query.q,
-    limit: query.limit,
-  });
-  return c.json({ pages });
-});
+navItemsApiRoutes.get(
+  "/pages",
+  requireAuthApi(),
+  validate("query", PageCandidatesQuerySchema),
+  async (c) => {
+    const query = c.req.valid("query");
+    const pages = await c.var.services.navItems.listPageCandidates({
+      query: query.q,
+      limit: query.limit,
+    });
+    return c.json({ pages });
+  },
+);
 
 /**
  * What a pasted address could become in navigation.
@@ -77,117 +83,137 @@ navItemsApiRoutes.get("/pages", requireAuthApi(), async (c) => {
  * them. The rules stay in the service; this only says which address was asked
  * about, so the picker can name it back.
  */
-navItemsApiRoutes.get("/resolve", requireAuthApi(), async (c) => {
-  const { url } = parseValidated(AddressQuerySchema, c.req.query());
-  const path = requestInternalPath(c, url);
-  if (path === null) {
-    return c.json({ resolution: { kind: "external", address: url.trim() } });
-  }
+navItemsApiRoutes.get(
+  "/resolve",
+  requireAuthApi(),
+  validate("query", AddressQuerySchema),
+  async (c) => {
+    const { url } = c.req.valid("query");
+    const path = requestInternalPath(c, url);
+    if (path === null) {
+      return c.json({ resolution: { kind: "external", address: url.trim() } });
+    }
 
-  const resolution = await c.var.services.navItems.resolveNavTarget(path);
-  const address = toPublicPath(path, c.var.appConfig.sitePathPrefix);
+    const resolution = await c.var.services.navItems.resolveNavTarget(path);
+    const address = toPublicPath(path, c.var.appConfig.sitePathPrefix);
 
-  if (resolution.status === "page") {
-    return c.json({
-      resolution: { kind: "page", address, page: resolution.page },
-    });
-  }
-  if (resolution.status === "collection") {
-    return c.json({
-      resolution: {
-        kind: "collection",
-        address,
-        collection: resolution.collection,
-      },
-    });
-  }
+    if (resolution.status === "page") {
+      return c.json({
+        resolution: { kind: "page", address, page: resolution.page },
+      });
+    }
+    if (resolution.status === "collection") {
+      return c.json({
+        resolution: {
+          kind: "collection",
+          address,
+          collection: resolution.collection,
+        },
+      });
+    }
 
-  if (resolution.status === "smart_collection") {
-    return c.json({
-      resolution: {
-        kind: "smart_collection",
-        address,
-        smartCollection: resolution.smartCollection,
-      },
-    });
-  }
+    if (resolution.status === "smart_collection") {
+      return c.json({
+        resolution: {
+          kind: "smart_collection",
+          address,
+          smartCollection: resolution.smartCollection,
+        },
+      });
+    }
 
-  return c.json({ resolution: { kind: resolution.status, address } });
-});
+    return c.json({ resolution: { kind: resolution.status, address } });
+  },
+);
 
 // Move nav item (requires auth) — must be before /:id
-navItemsApiRoutes.put("/:id/move", requireAuthApi(), async (c) => {
-  const id = parseIdParam(c.req.param("id"), ID_PREFIX.navItem);
-  const body = parseValidated(MoveSchema, await c.req.json());
+navItemsApiRoutes.put(
+  "/:id/move",
+  requireAuthApi(),
+  validate("json", MoveSchema),
+  async (c) => {
+    const id = parseIdParam(c.req.param("id"), ID_PREFIX.navItem);
+    const body = c.req.valid("json");
 
-  const item = assertFound(
-    await c.var.services.navItems.move(
-      id,
-      body.after ?? null,
-      body.before ?? null,
-    ),
-    "Nav item",
-  );
+    const item = assertFound(
+      await c.var.services.navItems.move(
+        id,
+        body.after ?? null,
+        body.before ?? null,
+      ),
+      "Nav item",
+    );
 
-  return c.json(await withSiteHeaderHtml(c, item));
-});
+    return c.json(await withSiteHeaderHtml(c, toApiNavItem(item)));
+  },
+);
 
 // Create nav item (requires auth)
-navItemsApiRoutes.post("/", requireAuthApi(), async (c) => {
-  const body = parseValidated(CreateNavItemSchema, await c.req.json());
+navItemsApiRoutes.post(
+  "/",
+  requireAuthApi(),
+  validate("json", CreateNavItemSchema),
+  async (c) => {
+    const body = c.req.valid("json");
 
-  let item;
-  if (body.type === "system") {
-    item = await c.var.services.navItems.create({
-      type: "system",
-      systemKey: body.systemKey,
-      placement: body.placement,
-    });
-  } else if (body.type === "collection") {
-    item = await c.var.services.navItems.create({
-      type: "collection",
-      collectionId: body.collectionId,
-      label: body.label,
-      placement: body.placement,
-    });
-  } else if (body.type === "smart_collection") {
-    item = await c.var.services.navItems.create({
-      type: "smart_collection",
-      smartCollectionId: body.smartCollectionId,
-      label: body.label,
-      placement: body.placement,
-    });
-  } else if (body.type === "page") {
-    item = await c.var.services.navItems.create({
-      type: "page",
-      postId: body.postId,
-      label: body.label,
-      placement: body.placement,
-    });
-  } else {
-    item = await c.var.services.navItems.create({
-      type: "link",
-      label: body.label,
-      url: body.url,
-      placement: body.placement,
-    });
-  }
+    let item;
+    if (body.type === "system") {
+      item = await c.var.services.navItems.create({
+        type: "system",
+        systemKey: body.systemKey,
+        placement: body.placement,
+      });
+    } else if (body.type === "collection") {
+      item = await c.var.services.navItems.create({
+        type: "collection",
+        collectionId: body.collectionId,
+        label: body.label,
+        placement: body.placement,
+      });
+    } else if (body.type === "smart_collection") {
+      item = await c.var.services.navItems.create({
+        type: "smart_collection",
+        smartCollectionId: body.smartCollectionId,
+        label: body.label,
+        placement: body.placement,
+      });
+    } else if (body.type === "page") {
+      item = await c.var.services.navItems.create({
+        type: "page",
+        postId: body.postId,
+        label: body.label,
+        placement: body.placement,
+      });
+    } else {
+      item = await c.var.services.navItems.create({
+        type: "link",
+        label: body.label,
+        url: body.url,
+        placement: body.placement,
+      });
+    }
 
-  return c.json(await withSiteHeaderHtml(c, item), 201);
-});
+    return c.json(await withSiteHeaderHtml(c, toApiNavItem(item)), 201);
+  },
+);
 
 // Update nav item (requires auth)
-navItemsApiRoutes.put("/:id", requireAuthApi(), async (c) => {
-  const id = parseIdParam(c.req.param("id"), ID_PREFIX.navItem);
-  const body = parseValidated(UpdateNavItemSchema, await c.req.json());
+navItemsApiRoutes.put(
+  "/:id",
+  requireAuthApi(),
+  validate("json", UpdateNavItemSchema),
+  async (c) => {
+    const id = parseIdParam(c.req.param("id"), ID_PREFIX.navItem);
+    const body = c.req.valid("json");
 
-  const item = assertFound(
-    await c.var.services.navItems.update(id, body),
-    "Nav item",
-  );
+    const item = assertFound(
+      await c.var.services.navItems.update(id, body),
+      "Nav item",
+    );
 
-  return c.json(await withSiteHeaderHtml(c, item));
-});
+    return c.json(await withSiteHeaderHtml(c, toApiNavItem(item)));
+  },
+);
 
 // Delete nav item (requires auth)
 navItemsApiRoutes.delete("/:id", requireAuthApi(), async (c) => {

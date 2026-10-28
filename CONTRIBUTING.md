@@ -60,7 +60,9 @@ mise run dev-auth-bootstrap
 
 This creates or updates `packages/core/.dev.vars`, ensures a local credential admin exists, marks onboarding complete when needed, and prints both the sign-in URL and the local-only auto-login URL. Use the printed `http://localhost:19xxx/...` URL for browser testing.
 
-`mise run dev-debug` runs this automatically before starting the first free debug port beginning at `19020`.
+It writes to the local D1 database, so the schema has to exist first. On an unmigrated database it stops and names the task to run: `mise run db-wrangler-migrate`, or `mise run db-wrangler-bootstrap-shell` to migrate and bootstrap in one step.
+
+`mise run dev-debug` migrates local D1 and runs this automatically, then starts on the first free debug port from `19020`.
 
 If you only need the bare minimum, create `.dev.vars` in `packages/core/`:
 
@@ -68,7 +70,7 @@ If you only need the bare minimum, create `.dev.vars` in `packages/core/`:
 AUTH_SECRET=your-secret-at-least-32-chars
 ```
 
-Or start from [packages/core/.dev.vars.example](/Users/green/project/jant/main/packages/core/.dev.vars.example) when you want the full list of supported local development variables with inline explanations.
+Or start from [packages/core/.dev.vars.example](packages/core/.dev.vars.example) when you want the full list of supported local development variables with inline explanations.
 
 ## Project Structure
 
@@ -119,7 +121,7 @@ jant/
 - **Database**: D1 (SQLite) + Drizzle ORM
 - **Auth**: better-auth
 - **i18n**: @lingui/core + @lingui/swc-plugin
-- **Interactions**: Datastar v1.0.0-RC.7 (vendored)
+- **Interactions**: Datastar v1.0.4 (vendored)
 - **Code Quality**: ESLint + Prettier + husky + lint-staged
 - **Validation**: Zod
 - **Testing**: Vitest + better-sqlite3 (in-memory)
@@ -173,6 +175,11 @@ mise run db-wrangler-migrate       # Apply migrations (local Wrangler/D1) — us
 mise run db-wrangler-load-demo     # Reload the canonical demo snapshot into the current local DB shell
 mise run db-wrangler-rebuild-demo  # Recreate the local Wrangler DB shell and load the canonical demo snapshot
 mise run db-wrangler-clean         # Delete local Wrangler/D1 database (.wrangler) — alias: `clean`
+mise run db-node-migrate           # Apply migrations (local Node database from packages/core/.env.node)
+mise run db-node-bootstrap-shell   # Set up an empty local Node site with the dev account and credentials
+mise run db-node-load-demo         # Import the canonical demo site export into an empty local Node database
+mise run db-node-rebuild-demo      # Recreate the local Node SQLite database and load the canonical demo snapshot
+mise run db-node-clean             # Delete the local Node SQLite database and media
 ```
 
 ### Auth Debugging
@@ -220,7 +227,8 @@ mise run auth-reset-token # Generate password reset link (local)
 ### CI
 
 ```bash
-mise run check-ci         # Run all CI checks (lint + typecheck + test + build + i18n + template)
+mise run check-ci           # Run all CI checks (lint + typecheck + test + build + i18n + template)
+mise run check-docker-smoke # Build the Docker image and run the Compose quick start against it
 ```
 
 ## Development Workflow
@@ -449,13 +457,25 @@ The local development workflow is intentionally simple:
    mise run db-node-load-demo
    ```
 
-   This migrates the configured local Node database, bootstraps the local shell, and imports `sites/demo-source/canonical/site-export/`. It is intended for single-site local PostgreSQL or SQLite development with local filesystem storage, and it refuses to run against a non-empty content database.
+   This migrates the configured local Node database, sets up the local site, and imports `sites/demo-source/canonical/site-export/` with `jant site import`, through a server on `127.0.0.1` that runs only for the import. It is intended for single-site local PostgreSQL or SQLite development with local filesystem storage, and it refuses to run against a non-empty content database.
 
-4. **Reload just the canonical demo snapshot** into the current local shell:
+4. **Set up an empty local Node site** when you want the dev account without demo content:
+
+   ```bash
+   mise run db-node-bootstrap-shell
+   ```
+
+   This migrates the configured local Node database and sets up its site the way the `/setup` screens do: the dev account, default navigation, and completed onboarding. It adds no content and works with SQLite and PostgreSQL. A site that already finished setup is left unchanged; if the printed credentials do not sign in to it, the task says which part differs.
+
+5. **Reload just the canonical demo snapshot** into the current local shell:
 
    ```bash
    mise run db-wrangler-load-demo
    ```
+
+The Node tasks read `packages/core/.env.node` and write the dev credentials they
+generate back to it. Set `JANT_ENV_FILE` to use another file, or to an empty
+value to use none.
 
 The canonical snapshot remains the primary development truth source. The
 canonical `site-export/` fixture is a derived portability fixture for `jant site
@@ -489,11 +509,11 @@ Those three values are the whole connection string. Put it in
 DATABASE_URL=postgres://jant:jant@localhost:5432/jant_dev
 ```
 
-Then migrate, and optionally load the canonical demo site:
+Then set up the site with one of these. Both run the migrations first:
 
 ```bash
-mise run db-node-migrate
-mise run db-node-load-demo
+mise run db-node-bootstrap-shell   # An empty site with the dev account
+mise run db-node-load-demo         # The same, with the canonical demo site imported
 ```
 
 Already running Postgres? Jant never creates the database itself — `DATABASE_URL` has
@@ -523,11 +543,24 @@ PG_SMOKE_DATABASE_URL=postgres://jant:jant@localhost:5432/jant_pg_smoke \
 mise run check-pg-smoke
 ```
 
+The S3 storage driver, and the media trash that relies on its server-side copy, run
+against a real S3-compatible server in the `s3-smoke` job. Locally, start one and point
+the test at it:
+
+```bash
+docker run -d --name jant-s3-smoke -p 59000:9000 \
+  -e RUSTFS_ACCESS_KEY=jantsmoke -e RUSTFS_SECRET_KEY=jantsmoke-secret \
+  rustfs/rustfs:1.0.0
+S3_SMOKE_ENDPOINT=http://127.0.0.1:59000 \
+S3_SMOKE_ACCESS_KEY_ID=jantsmoke S3_SMOKE_SECRET_ACCESS_KEY=jantsmoke-secret \
+mise run check-s3-smoke
+```
+
 ### Reset
 
 ```bash
 mise run db-wrangler-clean   # Delete local Wrangler/D1 database only (alias: `clean`)
-mise run db-node-clean       # Delete local Node SQLite database and media storage
+mise run db-node-clean       # Delete local Node SQLite database and media storage (paths from packages/core/.env.node)
 mise run clean-reset         # Nuclear reset — everything (node_modules, dist, db, cache, lockfile)
 ```
 

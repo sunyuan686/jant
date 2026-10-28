@@ -12,6 +12,7 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Context } from "hono";
 import { raw } from "hono/utils/html";
 import { escapeHtml } from "../../lib/html.js";
+import type { PageName } from "../../types/constants.js";
 import { msg } from "@lingui/core/macro";
 import {
   getPreconnectHints,
@@ -35,6 +36,7 @@ import {
   CLIENT_CJK_TC_CSS_FILE,
   CLIENT_CSS_FILE,
   CLIENT_JS_FILE,
+  CLIENT_SHARE_CSS_FILE,
   CORE_VERSION,
 } from "../../lib/version.js";
 import { IS_VITE_DEV } from "../../lib/build-env.js";
@@ -65,6 +67,8 @@ export interface PageFeedLink {
 
 export interface BaseLayoutProps {
   title: string;
+  /** Written to `<body data-page>`; left off pages outside the public set. */
+  page?: PageName;
   description?: string;
   lang?: string;
   c?: Context;
@@ -133,6 +137,7 @@ export interface BaseLayoutProps {
 
 export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
   title,
+  page,
   description,
   lang,
   c,
@@ -251,10 +256,10 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
   )
     .map(([name, value]) => `  ${name}: ${value};`)
     .join("\n");
-  // `:root:root` matches the specificity `buildThemeStyle` uses, so ordering
+  // `:root`, the rung `buildThemeStyle` writes light values on, so ordering
   // alone decides the winner.
   const cjkFontStyle = cjkFontDeclarations
-    ? `:root:root {\n${cjkFontDeclarations}\n}`
+    ? `:root {\n${cjkFontDeclarations}\n}`
     : "";
   const cjkStylesheetPath =
     cjkFontProfile === "zh-Hans"
@@ -284,6 +289,11 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
         ? assetPath("/src/style-author.css")
         : toPublicAssetPath(CLIENT_AUTHOR_CSS_FILE, assetBasePath)
       : null;
+  // "Share as image" is rare enough to stay off every page's critical path:
+  // the post menu links this when it opens, for a reader or the author.
+  const shareStylesheetPath = IS_VITE_DEV
+    ? assetPath("/src/style-share.css")
+    : toPublicAssetPath(CLIENT_SHARE_CSS_FILE, assetBasePath);
   const clientScriptPath = IS_VITE_DEV
     ? resolvedClientBundle === "full"
       ? assetPath("/src/client-auth.ts")
@@ -398,6 +408,7 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
         data-view-lang={viewLang ?? undefined}
         data-asset-base-path={assetBasePath}
         data-media-base={mediaBase}
+        data-share-stylesheet={shareStylesheetPath}
       >
         <head>
           <meta charset="UTF-8" />
@@ -601,6 +612,7 @@ export const BaseLayout: FC<PropsWithChildren<BaseLayoutProps>> = ({
         </head>
         <body
           class="bg-background text-foreground antialiased"
+          {...(page ? { "data-page": page } : {})}
           {...(isAuthenticated ? { "data-authenticated": true } : {})}
         >
           {content}

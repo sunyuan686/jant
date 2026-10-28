@@ -29,11 +29,7 @@ import {
 } from "../ui/font-themes.js";
 import type { Site, SiteDomain } from "../types.js";
 import { createCollectionService } from "./collection.js";
-// Note: `./export.js` is loaded lazily inside `exportManagedSite` because it
-// pulls in Vite-specific `?raw` asset imports (CSS/HTML/JS templates) at
-// module-load time. Importing it eagerly here would force every consumer of
-// `services/index.ts` — including Node-only dev scripts run under tsx — to
-// resolve those Vite-only imports just to construct the services bundle.
+import { createExportService } from "./export.js";
 import { createMediaService } from "./media.js";
 import { createNavItemService } from "./navigation.js";
 import { createPathService } from "./path.js";
@@ -84,7 +80,8 @@ export interface ExportManagedSiteDeps {
 
 export interface ManagedSiteExportResult {
   filename: string;
-  zip: Uint8Array;
+  /** The site's Hugo export as a ZIP stream; see `generateHugoSite`. */
+  zip: ReadableStream<Uint8Array>;
 }
 
 export interface ManagedSiteMediaUsageResult {
@@ -803,14 +800,9 @@ export function createSiteAdminService(
         ...getCjkFontCssVariables(appConfig.siteLanguage),
         ...(fontTheme ? getFontThemeCssVariables(fontTheme) : {}),
       };
-      const themeCss = buildThemeStyle(
-        activeTheme,
-        appConfig.themeMode,
-        fontOverrides,
-      );
+      const themeCss = buildThemeStyle(activeTheme, fontOverrides);
       const navItemList = await navItems.list();
       const appleTouchKey = allSettings[SETTINGS_KEYS.SITE_FAVICON_APPLE_TOUCH];
-      const { createExportService } = await import("./export.js");
       const exportService = createExportService(
         {
           collections,
@@ -830,6 +822,7 @@ export function createSiteAdminService(
           rssFeedsEnabled: appConfig.rssFeedsEnabled,
           mainRssFeed: appConfig.mainRssFeed,
           archiveDefaultLayout: appConfig.archiveDefaultLayout,
+          timeZone: appConfig.timeZone,
           siteFooter: appConfig.siteFooter,
           showHeaderAvatar: appConfig.showHeaderAvatar,
           siteAvatarUrl: appConfig.siteAvatarUrl,

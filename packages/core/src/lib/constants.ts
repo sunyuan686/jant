@@ -31,7 +31,22 @@ export const RESERVED_PATHS = [
   "healthz",
   "readyz",
   "skill.md",
+  // Files served at the root. Only a custom URL could take one of these (a
+  // slug has no dot), and the route answering first would leave it unreachable.
+  "robots.txt",
+  "manifest.webmanifest",
+  "favicon.ico",
+  "apple-touch-icon.png",
+  // Public storage for keys stored before the `media/` layout.
+  "sites",
 ] as const;
+
+/**
+ * Sitemap file names, reserved as a family: `sitemap.xml` and every
+ * `sitemap-*.xml` it links to, including the numbered post sitemaps, and any
+ * the sitemap adds later.
+ */
+const RESERVED_SITEMAP_PATTERN = /^sitemap(?:-[a-z0-9-]+)?\.xml$/;
 
 export type ReservedPath = (typeof RESERVED_PATHS)[number];
 
@@ -47,6 +62,9 @@ export type ReservedPath = (typeof RESERVED_PATHS)[number];
  * @returns Whether the path's first segment is unavailable
  * @example
  * isReservedPath("archive"); // true
+ * isReservedPath("_drafts"); // true — Jant's namespace
+ * isReservedPath(".well-known/security.txt"); // true
+ * isReservedPath("sitemap-posts-2.xml"); // true
  * isReservedPath("ja/hello", ["ja"]); // true
  * isReservedPath("ja/hello"); // false — no language configured
  */
@@ -56,7 +74,12 @@ export function isReservedPath(
 ): boolean {
   const firstSegment = path.split("/")[0]?.toLowerCase();
   if (!firstSegment) return false;
+  // A slug starts with a letter or digit, so a first segment that starts with
+  // `_` or `.` can only be Jant's: new system addresses go there (`/_assets`,
+  // `/__sso`, `/.well-known/`) and never take an address the author has.
+  if (/^[_.]/.test(firstSegment)) return true;
   if (RESERVED_PATHS.includes(firstSegment as ReservedPath)) return true;
+  if (RESERVED_SITEMAP_PATTERN.test(firstSegment)) return true;
   return languagePrefixes.includes(firstSegment);
 }
 
@@ -100,3 +123,23 @@ export const ONBOARDING_STATUS = {
 
 export type OnboardingStatus =
   (typeof ONBOARDING_STATUS)[keyof typeof ONBOARDING_STATUS];
+
+/**
+ * Read the stored `ONBOARDING_STATUS` setting. Anything but a known later
+ * stage, including no value at all, is `pending`.
+ *
+ * @param value - The stored setting, if any
+ * @returns How far first-run setup has got
+ * @example
+ * parseOnboardingStatus("completed"); // "completed"
+ * parseOnboardingStatus(undefined); // "pending"
+ */
+export function parseOnboardingStatus(
+  value: string | null | undefined,
+): OnboardingStatus {
+  if (value === ONBOARDING_STATUS.COMPLETED) return ONBOARDING_STATUS.COMPLETED;
+  if (value === ONBOARDING_STATUS.PROVISIONED) {
+    return ONBOARDING_STATUS.PROVISIONED;
+  }
+  return ONBOARDING_STATUS.PENDING;
+}

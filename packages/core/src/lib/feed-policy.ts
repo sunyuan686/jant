@@ -1,5 +1,7 @@
 import type { Context } from "hono";
-import type { Bindings, FeedData, Post } from "../types.js";
+import { msg } from "@lingui/core/macro";
+import { getI18n } from "../i18n/index.js";
+import type { Bindings, FeedData, FeedLabels, Post } from "../types.js";
 import type { AppVariables } from "../types/app-context.js";
 import type { PostFilters, ThreadRootPageOptions } from "../services/post.js";
 import { DISCOVER_STATUS_PATH, getDiscoverFeedPath } from "./discover.js";
@@ -19,6 +21,108 @@ const RSS_FEED_CACHE_CONTROL = "public, max-age=60";
 
 /** Media type every Jant Atom feed is served as. */
 const FEED_CONTENT_TYPE = "application/atom+xml; charset=utf-8";
+
+/**
+ * The display text a feed writes, in the language the site's reader pages
+ * use, so a feed says "3 more posts" the way the page beside it does.
+ *
+ * @param c - The feed request, whose locale the reader pages use
+ * @returns The labels the renderer writes
+ * @example
+ * ```ts
+ * defaultFeedRenderer({ ...fields, labels: buildFeedLabels(c) });
+ * ```
+ */
+export function buildFeedLabels(c: FeedContext): FeedLabels {
+  const i18n = getI18n(c);
+  return {
+    watchVideo: i18n._(
+      msg({
+        message: "Watch video",
+        comment: "@context: Feed link under a video attachment or preview",
+      }),
+    ),
+    watchOn: (provider) =>
+      i18n._(
+        msg({
+          message: "Watch on {provider}",
+          comment:
+            "@context: Feed link under a linked video's preview, naming the site that hosts it",
+        }),
+        { provider },
+      ),
+    morePosts: (count) =>
+      i18n._(
+        msg({
+          message: "{count, plural, one {# more post} other {# more posts}}",
+          comment:
+            "@context: Link showing count of hidden thread posts between root and latest",
+        }),
+        { count },
+      ),
+    linkPreview: i18n._(
+      msg({
+        message: "Link preview",
+        comment: "@context: Feed alt text for a link preview image",
+      }),
+    ),
+    videoPreview: i18n._(
+      msg({
+        message: "Video preview",
+        comment: "@context: Feed alt text for a linked video's preview image",
+      }),
+    ),
+    providerVideo: (provider) =>
+      i18n._(
+        msg({
+          message: "{provider} video",
+          comment:
+            "@context: Feed alt text for a linked video's preview image, naming the site that hosts it",
+        }),
+        { provider },
+      ),
+    audio: i18n._(
+      msg({
+        message: "Audio",
+        comment:
+          "@context: Feed name for an audio attachment with no file name",
+      }),
+    ),
+    attachedText: i18n._(
+      msg({
+        message: "Attached text",
+        comment: "@context: Feed name for a text attachment with no file name",
+      }),
+    ),
+    attachment: i18n._(
+      msg({
+        message: "Attachment",
+        comment: "@context: Feed name for an attachment with no file name",
+      }),
+    ),
+  };
+}
+
+/**
+ * Whether the site publishes feeds.
+ *
+ * Every route that renders a feed, or redirects to one, checks this first and
+ * answers 404 when it is off. The check belongs to those routes rather than to
+ * a path pattern: a post or custom URL whose address ends in `/feed` is not a
+ * feed and stays reachable.
+ *
+ * @param c - Anything carrying the request's resolved config
+ * @returns Whether feed routes should answer
+ * @example
+ * ```ts
+ * if (!feedsPublished(c)) return c.notFound();
+ * ```
+ */
+export function feedsPublished(c: {
+  var: { appConfig: { rssFeedsEnabled: boolean } };
+}): boolean {
+  return c.var.appConfig.rssFeedsEnabled;
+}
 
 /**
  * Serve a rendered Atom document.
@@ -262,12 +366,11 @@ export function buildFeedDiscoveryFields(
     );
   const feedPath = getDiscoverFeedPath(appConfig.discover);
   const discoverFeedUrl = feedPath ? absoluteFeedUrl(feedPath) : null;
-  // Only beside `latest`: under `featured` the `feed` attribute already is the
-  // featured feed, and there is nothing wider to name.
-  const discoverFeaturedFeedUrl =
-    appConfig.discover === "latest"
-      ? absoluteFeedUrl(getDiscoverFeedPath("featured") ?? "/featured/feed")
-      : null;
+  // Named beside `feed`, so a directory shows featured posts on one list and
+  // everything on another without guessing the address.
+  const discoverFeaturedFeedUrl = feedPath
+    ? absoluteFeedUrl("/featured/feed")
+    : null;
   // The API lives outside language views, so the view travels as `lang`: the
   // answer must be about the feeds this declaration sits in.
   const viewLang = getViewLang(c);

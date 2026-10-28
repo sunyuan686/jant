@@ -7,10 +7,14 @@ on:
         description: Docker image version tag without a leading v
         required: false
         type: string
-      push_latest:
-        description: Also update the latest tag
+      ref:
+        description: Commit to build, the one the release published
         required: false
-        default: true
+        type: string
+      push_latest:
+        description: Also move the latest and major tags to this version
+        required: false
+        default: false
         type: boolean
   workflow_dispatch:
     inputs:
@@ -18,10 +22,13 @@ on:
         description: Docker image version tag without a leading v (defaults to packages/core/package.json on main)
         required: false
         type: string
+      # Off by default: a manual run is usually a republish, and republishing
+      # an older version with this on would move `:latest` and `:1` back to it.
+      # The release workflow passes true for a new release.
       push_latest:
-        description: Also update the latest tag
+        description: Also move the latest and major tags to this version (leave off to republish an older version)
         required: false
-        default: true
+        default: false
         type: boolean
 
 concurrency:
@@ -35,10 +42,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      # A release passes the commit it published; github.sha would be main's
+      # head, which may have moved on since.
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.sha }}
+          ref: ${{ inputs.ref || (github.event_name == 'workflow_dispatch' && 'main' || github.sha) }}
 
       - name: Resolve image metadata
         id: meta
@@ -63,10 +72,18 @@ jobs:
           tags="owenyoung/jant:${version}"
           if [[ "${PUSH_LATEST}" == "true" ]]; then
             tags="${tags}"$'\n'"owenyoung/jant:latest"
+            # From 1.0, `:<major>` follows the newest release of that major, so
+            # a compose file pinned to `:1` never pulls across a breaking release.
+            # 0.x has no such tag: its minor releases can break.
+            major="${version%%.*}"
+            if [[ "$version" != *-* && "$major" =~ ^[0-9]+$ && "$major" -ge 1 ]]; then
+              tags="${tags}"$'\n'"owenyoung/jant:${major}"
+            fi
           fi
 
           {
             echo "version=${version}"
+            echo "revision=$(git rev-parse HEAD)"
             echo "tags<<EOF"
             echo "${tags}"
             echo "EOF"
@@ -98,7 +115,7 @@ jobs:
             org.opencontainers.image.source=https://github.com/jant-me/jant
             org.opencontainers.image.url=https://github.com/jant-me/jant
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.revision }}
             org.opencontainers.image.licenses=AGPL-3.0-or-later
           cache-from: type=gha
           cache-to: type=gha,mode=max

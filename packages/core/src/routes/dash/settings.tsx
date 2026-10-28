@@ -22,6 +22,7 @@ import { getTimeZoneOptions } from "../../lib/timezones.js";
 import { getOrBuildEntry } from "../../i18n/supported-locales.js";
 import {
   DomainError,
+  ForbiddenError,
   LanguageInUseError,
   UnauthorizedError,
   ValidationError,
@@ -95,6 +96,7 @@ import {
   getInstallation,
   listInstallationReposPage,
   searchInstallationRepos,
+  type InstallationAccount,
 } from "../../lib/github-app.js";
 import {
   isSyncPending,
@@ -103,6 +105,7 @@ import {
   triggerGitHubSyncInline,
 } from "../../lib/github-sync-trigger.js";
 import { buildSyncSiteConfig } from "../../lib/github-sync-site-config.js";
+import { suggestSyncRepoName } from "../../lib/github-sync-repo-name.js";
 import { buildConfigEditorFields } from "../../lib/api-settings.js";
 import {
   readGitHubSyncStatus,
@@ -180,6 +183,23 @@ function requireSessionId(c: Context<Env>): string {
   }
 
   return sessionId;
+}
+
+/**
+ * The user behind the current request.
+ *
+ * Same contract as `requireSessionId`: `requireAuth` has already proven the
+ * session belongs to a member of this site, so an absent user is a wiring
+ * mistake. Used wherever a decision is scoped to the person rather than to
+ * the site — the GitHub App installations they may reuse, most of all.
+ */
+function requireSessionUserId(c: Context<Env>): string {
+  const userId = c.var.session?.user?.id;
+  if (!userId) {
+    throw new UnauthorizedError();
+  }
+
+  return userId;
 }
 
 /**
@@ -297,7 +317,8 @@ function breadcrumbLabel(
   }
 }
 
-type DemoRestriction = "sessions" | "password" | "accountDeletion";
+type DemoRestriction =
+  "sessions" | "password" | "accountDeletion" | "customCss" | "codeInjection";
 
 function getDemoRestrictionMessage(
   c: Context<Env>,
@@ -333,15 +354,42 @@ function getDemoRestrictionMessage(
             "@context: Error shown when account deletion is blocked in demo mode",
         }),
       );
+    case "customCss":
+      return i18n._(
+        msg({
+          message:
+            "Custom CSS is off in demo mode. Every visitor shares the demo site.",
+          comment:
+            "@context: Error shown when saving custom CSS is blocked in demo mode",
+        }),
+      );
+    case "codeInjection":
+      return i18n._(
+        msg({
+          message:
+            "Code injection is off in demo mode. Every visitor shares the demo site.",
+          comment:
+            "@context: Error shown when saving code injection is blocked in demo mode",
+        }),
+      );
   }
 }
 
-function demoRestrictionResponse(c: Context<Env>, message: string): Response {
-  const wantsJson = c.req.header("accept")?.includes("application/json");
-  if (wantsJson) {
-    return c.json({ error: message, code: "FORBIDDEN" }, 403);
-  }
-  return dsToast(message, "error");
+/**
+ * Refuse an action the demo turns off, with a message that says so.
+ *
+ * Thrown rather than answered here, so the error handler formats it for
+ * whoever asked: a toast for a Datastar form, JSON for a script. This used to
+ * pick JSON whenever `Accept` allowed it, and Datastar's `Accept` always does,
+ * so every settings form got a 403 that Datastar drops, and the demo refused
+ * the save without a word.
+ *
+ * @param c - The request context
+ * @param restriction - Which demo lock the request ran into
+ * @throws {ForbiddenError} Always
+ */
+function refuseInDemo(c: Context<Env>, restriction: DemoRestriction): never {
+  throw new ForbiddenError(getDemoRestrictionMessage(c, restriction));
 }
 
 // ===========================================================================
@@ -357,6 +405,7 @@ settingsRoutes.get("/", async (c) => {
   );
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Settings", navData.siteName),
     navData,
     content: (
@@ -403,27 +452,18 @@ settingsRoutes.get("/general", async (c) => {
     excludeLatestHidden: true,
     excludePrivate: true,
   };
-  const [
-    navData,
-    aboutPage,
-    announceState,
-    publicPostCount,
-    featuredPostCount,
-  ] = await Promise.all([
-    getNavigationData(c),
-    c.var.services.aboutPage.getStatus(),
-    c.var.services.settings.getDiscoverAnnounceState(),
-    c.var.services.posts.count(publicPostFilters),
-    c.var.services.posts.countFeaturedThreadRoots({
-      status: "published",
-      excludePrivate: true,
-      excludeLatestHidden: true,
-    }),
-  ]);
+  const [navData, aboutPage, announceState, publicPostCount] =
+    await Promise.all([
+      getNavigationData(c),
+      c.var.services.aboutPage.getStatus(),
+      c.var.services.settings.getDiscoverAnnounceState(),
+      c.var.services.posts.count(publicPostFilters),
+    ]);
   const siteUrlForDisplay =
     appConfig.siteUrl || new URL(publicPath(c, "/"), c.req.url).toString();
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("General", navData.siteName),
     navData,
     toast: saved ? { message: "Settings updated." } : undefined,
@@ -485,7 +525,6 @@ settingsRoutes.get("/general", async (c) => {
             // miss the deployment default.
             declaredMode: appConfig.discover,
             ...measureDiscoverMaturity({ publicPostCount }),
-            featuredPostCount,
             minPublicPosts: DISCOVER_MIN_PUBLIC_POSTS,
             firstReadMaxHours: DISCOVER_FIRST_READ_MAX_HOURS,
           }}
@@ -606,6 +645,7 @@ settingsRoutes.get("/language", async (c) => {
   ]);
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Language", navData.siteName),
     navData,
     content: (
@@ -1034,6 +1074,7 @@ settingsRoutes.get("/avatar", async (c) => {
   const navData = await getNavigationData(c);
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Avatar", navData.siteName),
     navData,
     toast: saved ? { message: "Avatar updated." } : undefined,
@@ -1236,7 +1277,10 @@ settingsRoutes.post("/avatar/display", async (c) => {
 settingsRoutes.get("/navigation", async (c) => {
   const [navItems, directoryData, suggestedLinks] = await Promise.all([
     c.var.services.navItems.list(),
-    c.var.services.collections.listDirectoryData({ isAuthenticated: true }),
+    c.var.services.collections.listDirectoryData({
+      isAuthenticated: true,
+      timeZone: c.var.appConfig.timeZone,
+    }),
     c.var.services.navItems.listSuggestedLinks({
       siteOrigin: c.var.appConfig.siteOrigin,
       sitePathPrefix: c.var.appConfig.sitePathPrefix,
@@ -1245,6 +1289,7 @@ settingsRoutes.get("/navigation", async (c) => {
   const navData = await getNavigationData(c);
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Navigation", navData.siteName),
     navData,
     content: (
@@ -1280,6 +1325,7 @@ settingsRoutes.get("/color-theme", async (c) => {
   const navData = await getNavigationData(c);
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Color Theme", navData.siteName),
     navData,
     toast: saved ? { message: "Theme updated." } : undefined,
@@ -1345,6 +1391,7 @@ settingsRoutes.get("/font-theme", async (c) => {
   const navData = await getNavigationData(c);
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Font Theme", navData.siteName),
     navData,
     toast: saved ? { message: "Font theme updated." } : undefined,
@@ -1398,6 +1445,7 @@ settingsRoutes.get("/custom-css", async (c) => {
   const navData = await getNavigationData(c);
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Custom CSS", navData.siteName),
     navData,
     content: (
@@ -1417,6 +1465,10 @@ settingsRoutes.get("/custom-css", async (c) => {
 });
 
 settingsRoutes.post("/custom-css", async (c) => {
+  if (c.var.appConfig.demoMode) {
+    refuseInDemo(c, "customCss");
+  }
+
   const i18n = getI18n(c);
   const body = await c.req.json<{ customCSS: string }>();
   const { settings } = c.var.services;
@@ -1451,6 +1503,7 @@ settingsRoutes.get("/code-injection", async (c) => {
   const navData = await getNavigationData(c);
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Code Injection", navData.siteName),
     navData,
     content: (
@@ -1471,6 +1524,12 @@ settingsRoutes.get("/code-injection", async (c) => {
 });
 
 settingsRoutes.post("/code-injection", async (c) => {
+  // The demo's credentials are public, so a script saved here would run for
+  // every visitor until the nightly reset.
+  if (c.var.appConfig.demoMode) {
+    refuseInDemo(c, "codeInjection");
+  }
+
   const i18n = getI18n(c);
   const body = await c.req.json<{
     customHeadHtml?: string;
@@ -1516,6 +1575,7 @@ settingsRoutes.get("/config", async (c) => {
   );
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Config Editor", navData.siteName),
     navData,
     content: (
@@ -1547,6 +1607,7 @@ settingsRoutes.get("/account", async (c) => {
   );
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Account", navData.siteName),
     navData,
     content: (
@@ -1610,6 +1671,7 @@ settingsRoutes.get("/account/sessions", async (c) => {
   });
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Sessions", navData.siteName),
     navData,
     content: (
@@ -1630,7 +1692,7 @@ settingsRoutes.get("/account/sessions", async (c) => {
 
 settingsRoutes.post("/account/sessions/:token/revoke", async (c) => {
   if (c.var.appConfig.demoMode) {
-    return demoRestrictionResponse(c, getDemoRestrictionMessage(c, "sessions"));
+    refuseInDemo(c, "sessions");
   }
 
   const token = c.req.param("token");
@@ -1665,6 +1727,7 @@ settingsRoutes.get("/account/password", async (c) => {
   const navData = await getNavigationData(c);
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Password", navData.siteName),
     navData,
     content: (
@@ -1688,7 +1751,7 @@ settingsRoutes.post("/account/password", async (c) => {
   }
 
   if (c.var.appConfig.demoMode) {
-    return demoRestrictionResponse(c, getDemoRestrictionMessage(c, "password"));
+    refuseInDemo(c, "password");
   }
 
   const i18n = getI18n(c);
@@ -1778,6 +1841,7 @@ settingsRoutes.get("/account/delete-account", async (c) => {
   );
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Delete Account", navData.siteName),
     navData,
     content: (
@@ -1811,10 +1875,7 @@ settingsRoutes.post("/account/delete-account", async (c) => {
   }
 
   if (c.var.appConfig.demoMode) {
-    return demoRestrictionResponse(
-      c,
-      getDemoRestrictionMessage(c, "accountDeletion"),
-    );
+    refuseInDemo(c, "accountDeletion");
   }
 
   const i18n = getI18n(c);
@@ -1882,6 +1943,7 @@ settingsRoutes.get("/api-tokens", async (c) => {
   const siteUrl = c.var.appConfig.siteUrl;
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("API Tokens", navData.siteName),
     navData,
     content: (
@@ -2081,6 +2143,49 @@ settingsRoutes.post("/github-sync/disconnect", async (c) => {
 // ---------------------------------------------------------------------------
 
 /**
+ * Recreate installation bindings for sites that sync through the App
+ * but have no row to prove it.
+ *
+ * GitHub is the only source for the account behind an installation id,
+ * so the repair costs one call per distinct id — bounded by how many
+ * sites the author has, and only ever reached when they would otherwise
+ * be shown a GitHub page that cannot lead anywhere. Ids GitHub no longer
+ * recognizes are skipped: an uninstalled App has nothing to rebuild.
+ */
+async function rebuildInstallationBindings(
+  c: Context<Env>,
+  app: import("../../lib/env.js").GitHubAppEnvConfig,
+  userId: string,
+): Promise<void> {
+  const syncing =
+    await c.var.services.githubAppInstallations.listSyncingInstallationsForUser(
+      userId,
+    );
+  if (syncing.length === 0) return;
+
+  const accounts = new Map<string, InstallationAccount>();
+  for (const { installationId } of syncing) {
+    if (accounts.has(installationId)) continue;
+    try {
+      const installation = await getInstallation(app, installationId);
+      accounts.set(installationId, installation.account);
+    } catch {
+      continue;
+    }
+  }
+
+  for (const { siteId, installationId } of syncing) {
+    const account = accounts.get(installationId);
+    if (!account) continue;
+    await c.var.services.githubAppInstallations.upsertInstallation(
+      installationId,
+      siteId,
+      account,
+    );
+  }
+}
+
+/**
  * Redirect the user to GitHub to install the App on their account/org.
  *
  * Only available when GitHub App env vars are configured. Uses a signed
@@ -2092,27 +2197,48 @@ settingsRoutes.get("/github-sync/app/install", async (c) => {
     return c.text("GitHub App is not configured on this deployment.", 404);
   }
 
-  // Reinstall-same-account predicate (§5): when this site already has at
-  // least one authorized installation, skip the GitHub round-trip and
-  // render the picker directly. The GitHub redirect is a dead end when
-  // the App is already installed on the chosen account — GitHub shows
-  // its Configure page and never comes back with installation_id.
+  // Reinstall-same-account predicate: when the signed-in author has
+  // already authorized an installation — on this site or on any other
+  // site they belong to — skip the GitHub round-trip and render the
+  // picker directly. The GitHub redirect is a dead end once the App is
+  // installed on the chosen account: GitHub shows its Configure page
+  // and never comes back with installation_id.
+  //
+  // The scope is the user's sites rather than this one because a GitHub
+  // App installs once per GitHub account. An author connecting their
+  // second blog to the same account has no binding here yet and cannot
+  // create one through GitHub, so site-scoping this check would leave
+  // them with no way in at all.
   //
   // `?force=new` bypasses the predicate so the picker's "Install on
   // another account" action can still reach GitHub to add a fresh
   // install.
   const forceNew = c.req.query("force") === "new";
   if (!forceNew) {
-    const existing =
-      await c.var.services.githubAppInstallations.listInstallationsForSite(
-        c.var.currentSite.id,
+    const userId = requireSessionUserId(c);
+    let existing =
+      await c.var.services.githubAppInstallations.listInstallationsForUser(
+        userId,
       );
+    // An author with nothing to show but a site already syncing through
+    // the App is in the one state the redirect cannot rescue: GitHub
+    // will not install the App a second time on that account. Rebuild
+    // the binding from the sync settings instead of sending them into
+    // the dead end.
+    if (existing.length === 0) {
+      await rebuildInstallationBindings(c, app, userId);
+      existing =
+        await c.var.services.githubAppInstallations.listInstallationsForUser(
+          userId,
+        );
+    }
     if (existing.length > 0) {
       const navData = await getNavigationData(c);
       const base = publicPath(c, "/settings/github-sync");
-      const labels = buildRepoPickerLabels(c);
-      const suggestedRepoName = buildSuggestedRepoName(c);
+      const suggestedRepoName = suggestSyncRepoName(c.var.appConfig.siteUrl);
+      const labels = buildRepoPickerLabels(c, suggestedRepoName);
       return renderPublicPage(c, {
+        page: "settings",
         title: buildPageTitle(
           "GitHub Sync — Pick Repository",
           navData.siteName,
@@ -2209,19 +2335,17 @@ settingsRoutes.get("/github-sync/app/callback", async (c) => {
     }
   }
 
-  // One-shot: clear the cookie so it can't be replayed.
-  setCookie(c, "jant_gh_app_state", "", {
-    httpOnly: true,
-    sameSite: "Lax",
-    path: "/",
-    maxAge: 0,
-  });
-
   // Fetch the account info for this installation and remember it. The
-  // picker's owner dropdown reads the stored list, so subsequent visits
-  // can switch between accounts without re-running the install flow.
-  // Failures are non-fatal: this callback must still render the picker
-  // so the user isn't locked out right after a successful install.
+  // binding is what every later step reads: the picker's account
+  // dropdown, the endpoints that authorize an installation id, and the
+  // App webhook's fan-out. Rendering the picker without it would show an
+  // empty account list and nothing to pick.
+  //
+  // So a failure here has to stay recoverable, and the only thing that
+  // makes this page replayable is the state cookie — GitHub will not
+  // hand out a second callback for an App that is now installed. Hence
+  // the clearing below sits *after* the binding is written: until then,
+  // reloading this URL is the whole retry.
   try {
     const installation = await getInstallation(app, installationId);
     await c.var.services.githubAppInstallations.upsertInstallation(
@@ -2230,16 +2354,27 @@ settingsRoutes.get("/github-sync/app/callback", async (c) => {
       installation.account,
     );
   } catch {
-    // Swallow — the legacy inline picker still works with just the
-    // installation_id from the URL, just without the owner list.
+    return c.text(
+      "The App was installed, but GitHub did not answer with the account details. Reload this page to try again.",
+      502,
+    );
   }
+
+  // One-shot: clear the cookie so it can't be replayed.
+  setCookie(c, "jant_gh_app_state", "", {
+    httpOnly: true,
+    sameSite: "Lax",
+    path: "/",
+    maxAge: 0,
+  });
 
   const navData = await getNavigationData(c);
   const base = publicPath(c, "/settings/github-sync");
-  const labels = buildRepoPickerLabels(c);
-  const suggestedRepoName = buildSuggestedRepoName(c);
+  const suggestedRepoName = suggestSyncRepoName(c.var.appConfig.siteUrl);
+  const labels = buildRepoPickerLabels(c, suggestedRepoName);
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("GitHub Sync — Pick Repository", navData.siteName),
     navData,
     content: (
@@ -2253,7 +2388,7 @@ settingsRoutes.get("/github-sync/app/callback", async (c) => {
           labels={labels}
           api-base={`${base}/app`}
           connect-url={`${base}/app/connect`}
-          install-url={`${base}/app/install`}
+          install-url={`${base}/app/install?force=new`}
           cancel-url={publicPath(c, "/settings")}
           create-repo-name-hint={suggestedRepoName}
         >
@@ -2271,29 +2406,36 @@ settingsRoutes.get("/github-sync/app/callback", async (c) => {
 });
 
 /**
- * Derive a default repository name to prefill on github.com/new.
+ * Values that keep a placeholder literal for the client to fill in.
  *
- * Uses the site's host — the first DNS label is a stable, URL-safe
- * identifier tied to this specific Jant instance. Fallback to
- * "jant-site-sync" when the host parse fails so we never hand GitHub an
- * empty `name=`. The `-jant-sync` suffix disambiguates the sync mirror
- * from a user's own `{slug}-jant` source repo.
+ * `i18n._()` renders a placeholder it has no value for as an empty string, so
+ * a label whose value only exists in the browser — a repo count, the picked
+ * repo — must be formatted with the placeholder's own token as its value.
+ * `{repo}` then survives into the serialized labels and the component's
+ * `.replace("{repo}", …)` finds it.
+ *
+ * @param names - Placeholder names the client interpolates.
+ * @returns A values object mapping each name to its own `{name}` token.
+ * @example
+ * i18n._(msg({ message: "Type {repo} to confirm" }), keepForClient("repo"));
+ * // "Type {repo} to confirm"
  */
-function buildSuggestedRepoName(c: Context<Env>): string {
-  let firstLabel = "";
-  try {
-    firstLabel = new URL(c.var.appConfig.siteUrl).host.split(".")[0] ?? "";
-  } catch {
-    /* fall through */
-  }
-  const slug = firstLabel
-    .toLowerCase()
-    .replace(/[^a-z0-9-_]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug ? `${slug}-jant-sync` : "jant-site-sync";
+function keepForClient(...names: string[]): Record<string, string> {
+  return Object.fromEntries(names.map((name) => [name, `{${name}}`]));
 }
 
-function buildRepoPickerLabels(c: Context<Env>): string {
+/**
+ * Serialize the picker's strings for the client component.
+ *
+ * @param c - Request context, for the active locale.
+ * @param suggestedRepoName - Repository name prefilled on github.com/new;
+ *   interpolated here because the client cannot format ICU messages.
+ * @returns The labels as a JSON string for the `labels` attribute.
+ */
+function buildRepoPickerLabels(
+  c: Context<Env>,
+  suggestedRepoName: string,
+): string {
   const i18n = getI18n(c);
   return JSON.stringify({
     pageTitle: i18n._(
@@ -2380,6 +2522,7 @@ function buildRepoPickerLabels(c: Context<Env>): string {
         comment:
           "@context: GitHub sync picker — paginated repo count hint. Placeholders {shown} and {total} are integers.",
       }),
+      keepForClient("shown", "total"),
     ),
     repoSearchHint: i18n._(
       msg({
@@ -2404,10 +2547,12 @@ function buildRepoPickerLabels(c: Context<Env>): string {
     ),
     createOnGitHubHint: i18n._(
       msg({
-        message: "We'll prefill the name {name}. The list refreshes on return.",
+        message:
+          "Name prefilled as {name}. The list refreshes when you return.",
         comment:
           "@context: GitHub sync picker — hint under the create-on-github entry. Placeholder {name} is the suggested repo name.",
       }),
+      { name: suggestedRepoName },
     ),
     classifyLoading: i18n._(
       msg({
@@ -2437,6 +2582,7 @@ function buildRepoPickerLabels(c: Context<Env>): string {
         comment:
           "@context: GitHub sync picker — blocking message when marker belongs to another site. Placeholder {host} is the other site's host.",
       }),
+      keepForClient("host"),
     ),
     classificationForeign: i18n._(
       msg({
@@ -2459,6 +2605,7 @@ function buildRepoPickerLabels(c: Context<Env>): string {
         comment:
           "@context: GitHub sync picker — explanatory body for foreign-repo confirmation. Placeholder {repo} is the owner/repo slug.",
       }),
+      keepForClient("repo"),
     ),
     confirmInputLabel: i18n._(
       msg({
@@ -2466,6 +2613,7 @@ function buildRepoPickerLabels(c: Context<Env>): string {
         comment:
           "@context: GitHub sync picker — label above the typed-confirmation input",
       }),
+      keepForClient("repo"),
     ),
     confirmInputPlaceholder: i18n._(
       msg({
@@ -2544,6 +2692,16 @@ settingsRoutes.post("/github-sync/app/connect", async (c) => {
       : c.text("Missing installationId or repo.", 400);
   }
 
+  // The installation has to be one the author already authorized, here
+  // or on another of their sites. The account snapshot also spares us a
+  // GitHub round-trip when recording the binding further down.
+  const installation = await findVisibleInstallation(c, installationId);
+  if (!installation) {
+    return wantsJson
+      ? c.json({ error: "Unknown installation." }, 404)
+      : c.text("Unknown installation.", 404);
+  }
+
   const { parseRepoSlug, createGitHubClient } =
     await import("../../lib/github-api.js");
   const parsed = parseRepoSlug(repo);
@@ -2603,6 +2761,18 @@ settingsRoutes.post("/github-sync/app/connect", async (c) => {
         )
       : c.text(msg, 409);
   }
+
+  // Bind the installation to this site. The callback does this too, but
+  // only for the site that ran the install; connecting a second site to
+  // an installation the author already has is exactly the case that
+  // never passes through there. Without the row, the App-level webhook's
+  // fan-out (uninstall, suspend, repository removed) skips this site
+  // while it happily keeps syncing.
+  await c.var.services.githubAppInstallations.upsertInstallation(
+    installationId,
+    c.var.currentSite.id,
+    installation.account,
+  );
 
   // Persist config before creating webhook so the sync service can load it.
   await c.var.services.settings.set("GITHUB_SYNC_AUTH_MODE", "app");
@@ -2688,20 +2858,37 @@ async function getInstallationTokenFromApp(
   return getInstallationToken(app, installationId);
 }
 
-/** List GitHub App installations authorized for this site. */
+/**
+ * List the GitHub App installations the signed-in author may connect
+ * this site to: everything authorized on any site they belong to, this
+ * one included.
+ */
 settingsRoutes.get("/github-sync/app/installations", async (c) => {
   const installations =
-    await c.var.services.githubAppInstallations.listInstallationsForSite(
-      c.var.currentSite.id,
+    await c.var.services.githubAppInstallations.listInstallationsForUser(
+      requireSessionUserId(c),
     );
-  return c.json({
-    installations: installations.map((entry) => ({
-      installationId: entry.installationId,
-      account: entry.account,
-      addedAt: entry.addedAt,
-    })),
-  });
+  return c.json({ installations });
 });
+
+/**
+ * Resolve an `installationId` that arrived in a request into an
+ * installation the caller is allowed to act on.
+ *
+ * Every endpoint below takes the id from the client, and an installation
+ * id is a small integer — without this check a signed-in author on one
+ * site could name another tenant's installation and read their private
+ * repository names, or push this site's content into one of their repos.
+ */
+async function findVisibleInstallation(
+  c: Context<Env>,
+  installationId: string,
+) {
+  return c.var.services.githubAppInstallations.findInstallationForUser(
+    installationId,
+    requireSessionUserId(c),
+  );
+}
 
 /**
  * List (or search) repositories accessible via an installation.
@@ -2727,18 +2914,13 @@ settingsRoutes.get("/github-sync/app/repos", async (c) => {
   const page =
     Number.isFinite(pageParam) && pageParam > 0 ? Math.floor(pageParam) : 1;
 
+  const installation = await findVisibleInstallation(c, installationId);
+  if (!installation) {
+    return c.json({ error: "Unknown installation." }, 404);
+  }
+
   try {
     if (q) {
-      const installations =
-        await c.var.services.githubAppInstallations.listInstallationsForSite(
-          c.var.currentSite.id,
-        );
-      const installation = installations.find(
-        (i) => i.installationId === installationId,
-      );
-      if (!installation) {
-        return c.json({ error: "Unknown installation." }, 404);
-      }
       const result = await searchInstallationRepos(
         app,
         installationId,
@@ -2765,11 +2947,13 @@ settingsRoutes.get("/github-sync/app/repos", async (c) => {
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     // GitHub returns 401 when an installation was uninstalled on their
-    // side. Clean up our cached entry so the UI stops showing a dead owner.
+    // side. Clean up our cached entries so the UI stops showing a dead
+    // owner — across the user's sites, since the binding that surfaced
+    // this account may well belong to another one of them.
     if (/\b401\b/.test(detail) || /\b404\b/.test(detail)) {
-      await c.var.services.githubAppInstallations.removeInstallation(
+      await c.var.services.githubAppInstallations.removeInstallationForUser(
         installationId,
-        c.var.currentSite.id,
+        requireSessionUserId(c),
       );
       return c.json(
         { error: "Installation is no longer accessible.", removed: true },
@@ -2798,6 +2982,9 @@ settingsRoutes.post("/github-sync/app/classify", async (c) => {
   const repo = String(body.repo ?? "").trim();
   if (!installationId || !repo) {
     return c.json({ error: "Missing installationId or repo." }, 400);
+  }
+  if (!(await findVisibleInstallation(c, installationId))) {
+    return c.json({ error: "Unknown installation." }, 404);
   }
 
   const { parseRepoSlug, createGitHubClient } =
@@ -2862,6 +3049,7 @@ settingsRoutes.get("/github-sync", async (c) => {
   const navData = await getNavigationData(c);
 
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("GitHub Sync", navData.siteName),
     navData,
     content: (
@@ -2889,6 +3077,7 @@ settingsRoutes.get("/telegram", async (c) => {
   const streamUrl = getTelegramStatusStreamUrl(c);
   const navData = await getNavigationData(c);
   return renderPublicPage(c, {
+    page: "settings",
     title: buildPageTitle("Telegram", navData.siteName),
     navData,
     content: (

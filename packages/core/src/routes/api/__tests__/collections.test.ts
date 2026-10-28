@@ -7,7 +7,7 @@ import { collectionsApiRoutes } from "../collections.js";
 describe("Collections API Routes", () => {
   describe("GET /api/collections", () => {
     it("returns empty list when no collections exist", async () => {
-      const { app } = createTestApp();
+      const { app } = createTestApp({ authenticated: true });
       app.route("/api/collections", collectionsApiRoutes);
 
       const res = await app.request("/api/collections");
@@ -19,7 +19,7 @@ describe("Collections API Routes", () => {
     });
 
     it("returns collections with Thread counts and directory items", async () => {
-      const { app, services } = createTestApp();
+      const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/collections", collectionsApiRoutes);
 
       const col = await services.collections.create({
@@ -46,7 +46,7 @@ describe("Collections API Routes", () => {
     });
 
     it("returns smart collections with the same two measures", async () => {
-      const { app, services } = createTestApp();
+      const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/collections", collectionsApiRoutes);
 
       await services.smartCollections.create({
@@ -67,6 +67,36 @@ describe("Collections API Routes", () => {
       expect(body.smartCollections[0].recentActivityAt).toBe(
         quote.lastActivityAt,
       );
+    });
+
+    it("counts private Threads for a Bearer token, as for a session", async () => {
+      const { app, services } = createTestApp();
+      app.route("/api/collections", collectionsApiRoutes);
+      const { plaintext } = await services.apiTokens.create("Test client");
+
+      const col = await services.collections.create({
+        slug: "journal",
+        title: "Journal",
+      });
+      await services.smartCollections.create({
+        slug: "notes",
+        title: "Notes",
+        selection: { format: "note" },
+      });
+      await services.posts.create({
+        format: "note",
+        bodyMarkdown: "private entry",
+        visibility: "private",
+        collectionIds: [col.id],
+      });
+
+      const res = await app.request("/api/collections", {
+        headers: { Authorization: `Bearer ${plaintext}` },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.collections[0].threadCount).toBe(1);
+      expect(body.smartCollections[0].threadCount).toBe(1);
     });
 
     it("returns divider labels", async () => {
@@ -133,7 +163,7 @@ describe("Collections API Routes", () => {
 
   describe("GET /api/collections/:id", () => {
     it("returns a collection by id", async () => {
-      const { app, services } = createTestApp();
+      const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/collections", collectionsApiRoutes);
 
       const col = await services.collections.create({
@@ -150,7 +180,7 @@ describe("Collections API Routes", () => {
     });
 
     it("returns 400 for invalid id", async () => {
-      const { app } = createTestApp();
+      const { app } = createTestApp({ authenticated: true });
       app.route("/api/collections", collectionsApiRoutes);
 
       const res = await app.request("/api/collections/!!invalid!!");
@@ -158,7 +188,7 @@ describe("Collections API Routes", () => {
     });
 
     it("returns 404 for non-existent collection", async () => {
-      const { app } = createTestApp();
+      const { app } = createTestApp({ authenticated: true });
       app.route("/api/collections", collectionsApiRoutes);
       const missingId = createEntityId("collection");
 
@@ -447,6 +477,12 @@ describe("Collections API Routes", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.success).toBe(true);
+
+      const again = await app.request(
+        `/api/collections/directory-items/${item.id}`,
+        { method: "DELETE" },
+      );
+      expect(again.status).toBe(404);
     });
   });
 
@@ -737,6 +773,68 @@ describe("Collections API Routes", () => {
       expect(await services.collections.getPinnedThreadIds([col.id])).toEqual(
         new Set(),
       );
+    });
+
+    it("refuses to pin a Thread that isn't in the collection", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/collections", collectionsApiRoutes);
+
+      const col = await services.collections.create({
+        slug: "tech",
+        title: "Tech",
+      });
+      const post = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "outside",
+      });
+
+      const pinRes = await app.request(
+        `/api/collections/${col.id}/threads/${post.id}/pin`,
+        { method: "PUT" },
+      );
+      expect(pinRes.status).toBe(409);
+      expect((await pinRes.json()).code).toBe("CONFLICT");
+
+      // Already in the state asked for.
+      const unpinRes = await app.request(
+        `/api/collections/${col.id}/threads/${post.id}/pin`,
+        { method: "DELETE" },
+      );
+      expect(unpinRes.status).toBe(200);
+    });
+  });
+
+  describe("Thread membership of a collection that doesn't exist", () => {
+    it("answers 404 to add, remove, pin, and unpin", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/collections", collectionsApiRoutes);
+
+      const post = await services.posts.create({
+        format: "note",
+        bodyMarkdown: "test",
+      });
+      const missing = createEntityId("collection");
+
+      const requests: [string, string, string?][] = [
+        [
+          "POST",
+          `/api/collections/${missing}/threads`,
+          JSON.stringify({ threadId: post.id }),
+        ],
+        ["DELETE", `/api/collections/${missing}/threads/${post.id}`],
+        ["PUT", `/api/collections/${missing}/threads/${post.id}/pin`],
+        ["DELETE", `/api/collections/${missing}/threads/${post.id}/pin`],
+      ];
+      for (const [method, path, body] of requests) {
+        const res = await app.request(path, {
+          method,
+          ...(body
+            ? { body, headers: { "Content-Type": "application/json" } }
+            : {}),
+        });
+        expect(res.status, `${method} ${path}`).toBe(404);
+        expect((await res.json()).error).toBe("Collection not found");
+      }
     });
   });
 });

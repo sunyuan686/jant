@@ -1,35 +1,110 @@
+import { readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
+import {
+  listSchemaMigrationFiles,
+  resolveBundledSchemaMigrationsDir,
+} from "./migration-artifacts.js";
 
 export const SNAPSHOT_FORMAT = "jant-site-snapshot";
 export const SNAPSHOT_VERSION = 2;
 export const SUPPORTED_SNAPSHOT_VERSIONS = [1, SNAPSHOT_VERSION];
 
+/**
+ * Site content, in the order rows are inserted on import.
+ *
+ * Membership is what this list decides: a table absent from it is never read,
+ * so its rows leave no trace in the snapshot and `--replace` cannot clear them.
+ *
+ * The order here is kept as a foreign-key topological sort for readability, but
+ * it is not what an export follows — `sortExportTables` re-sorts by
+ * `TABLE_EXPORT_ORDER` in `sql-export.js`, and that is the list to change when
+ * the dump order has to change. `src/__tests__/snapshot-tables.test.ts` checks
+ * the sorted result for that reason.
+ */
 export const SNAPSHOT_TABLES = [
   "site_setting",
   "collection",
-  "nav_item",
-  "collection_directory_item",
+  "smart_collection",
   "post",
   "thread_collection",
+  "nav_item",
+  "collection_directory_item",
   "path_registry",
   "media",
 ];
 
+/**
+ * The same content, in the order `--replace` deletes it: children first, so no
+ * delete depends on a cascade to clean up after it. `site_setting` is absent on
+ * purpose — `buildReplaceSql` clears it by key, because a site's settings hold
+ * more than the snapshot carries.
+ */
 export const SNAPSHOT_CLEAR_TABLES = [
-  "thread_collection",
   "media",
   "path_registry",
   "collection_directory_item",
   "nav_item",
+  "thread_collection",
   "post",
+  "smart_collection",
   "collection",
 ];
 
+/**
+ * Site-scoped tables the snapshot deliberately leaves alone.
+ *
+ * Every table carrying a `site_id` has to appear here or in `SNAPSHOT_TABLES`
+ * — `src/__tests__/snapshot-tables.test.ts` fails the build otherwise, so a new
+ * table forces a decision rather than being silently dropped. The reasons fall
+ * into three groups: auth and routing shell that a content restore must
+ * preserve, credentials and external integration bindings that do not travel
+ * with content, and transient runtime bookkeeping.
+ */
+export const SNAPSHOT_EXCLUDED_TABLES = [
+  // Auth and routing shell. `--replace` restores content into an existing
+  // site; its members and domains belong to the deployment, not the content.
+  "site_member",
+  "site_domain",
+  // Credentials. Reissued per deployment, never copied between sites. The demo
+  // rebuild clears these through the internal admin route instead.
+  "api_token",
+  // External integration bindings. They point at an installation or a chat on
+  // someone else's service, so restoring them into another site would aim that
+  // site at a binding it does not own.
+  "github_app_installation",
+  "telegram_binding",
+  "telegram_pending_binding",
+  "telegram_media_group_item",
+  // Transient runtime bookkeeping, rebuilt by the runtime as it goes:
+  // in-flight uploads, and the recycle-window ledger for deleted objects.
+  "upload_session",
+  "storage_purge",
+];
+
+/**
+ * Settings the snapshot carries: the site's published identity and appearance.
+ *
+ * `site_setting` holds more than a site's content — deployment wiring, secrets,
+ * integration bindings, local UI state — so both the export and `--replace`
+ * work through this allowlist rather than the whole table. Membership is what
+ * it decides: a key absent from it is neither exported nor cleared on import.
+ *
+ * Every DB-backed key in `CONFIG_FIELDS` has to appear here or in
+ * `SNAPSHOT_EXCLUDED_SETTING_KEYS`, and
+ * `src/__tests__/snapshot-settings.test.ts` fails the build otherwise, so a new
+ * setting forces a decision instead of being silently dropped.
+ */
 export const SNAPSHOT_SETTING_KEYS = [
   "SITE_NAME",
   "SITE_DESCRIPTION",
+  // The language trio travels together. `post.language` and
+  // `post.translation_group_id` are already carried by the whole-row `post`
+  // dump, so leaving the switch behind restored a site whose posts were
+  // stamped per language while every per-language view was gone.
   "SITE_LANGUAGE",
+  "MULTILINGUAL_ENABLED",
+  "ADDITIONAL_LANGUAGES",
   "MAIN_RSS_FEED",
   "PUBLIC_API_ENABLED",
   "RSS_FEEDS_ENABLED",
@@ -46,6 +121,68 @@ export const SNAPSHOT_SETTING_KEYS = [
   "SITE_FOOTER",
   "SHOW_JANT_BRANDING_ON_HOME",
   "NOINDEX",
+];
+
+/**
+ * DB-backed settings the snapshot deliberately leaves alone.
+ *
+ * `envOnly` keys are absent from both lists on purpose: they never reach
+ * `site_setting`, so there is no row to carry or clear.
+ */
+export const SNAPSHOT_EXCLUDED_SETTING_KEYS = [
+  // The operator's own dashboard locale, not the site's published language.
+  // A content restore should not relabel the dashboard of whoever runs the
+  // target site.
+  "DASHBOARD_LANGUAGE",
+  // Sizing and pacing knobs. They describe how much the target deployment
+  // serves at a time, not what it publishes, and they carry env defaults the
+  // deployment picked.
+  "ARCHIVE_DEFAULT_LAYOUT",
+  "PAGE_SIZE",
+  "SEARCH_PAGE_SIZE",
+  "ARCHIVE_PAGE_SIZE",
+  "SUMMARY_MAX_PARAGRAPHS",
+  "SUMMARY_MAX_CHARS",
+  "RSS_FEED_LIMIT",
+  "RSS_PUBLISH_DELAY_SECONDS",
+  // Code injection. `CUSTOM_CSS` is declarative and travels; these two are
+  // executable markup, and importing an archive must not be a way to run
+  // script on the importing site.
+  "CUSTOM_HEAD_HTML",
+  "CUSTOM_BODY_END_HTML",
+  // Being listed in the Jant Discover directory is the site owner's consent,
+  // and the announcement state below it belongs to the announcing instance.
+  "DISCOVER",
+  "DISCOVER_ANNOUNCE_STATE",
+  // Local UI state: which affordances this author has already been shown, and
+  // how far setup got.
+  "DISCOVERY_COMPOSE_OPEN_SHORTCUT_AT",
+  "DISCOVERY_SLASH_COMMAND_AT",
+  "ONBOARDING_STATUS",
+  // Credential. Reissued per deployment, never copied between sites.
+  "PASSWORD_RESET_TOKEN",
+  // External integration bindings, their secrets, and their sync bookkeeping.
+  // They point at a repo, an installation, or a chat on someone else's
+  // service, so restoring them would aim the target site at a binding it does
+  // not own — the same reason `github_app_installation` and `telegram_binding`
+  // are excluded tables.
+  "GITHUB_SYNC_ENABLED",
+  "GITHUB_SYNC_REPO",
+  "GITHUB_SYNC_TOKEN",
+  "GITHUB_SYNC_WEBHOOK_SECRET",
+  "GITHUB_SYNC_WEBHOOK_ID",
+  "GITHUB_SYNC_LAST_PUSH_SHA",
+  "GITHUB_SYNC_LAST_PUSH_AT",
+  "GITHUB_SYNC_PENDING",
+  "GITHUB_SYNC_PENDING_AT",
+  "GITHUB_SYNC_DIRTY",
+  "GITHUB_SYNC_LAST_ERROR",
+  "GITHUB_SYNC_AUTH_MODE",
+  "GITHUB_SYNC_APP_INSTALLATION_ID",
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_BOT_ID",
+  "TELEGRAM_BOT_USERNAME",
+  "TELEGRAM_BOT_WEBHOOK_SECRET",
 ];
 
 function escapeSqlString(value) {
@@ -77,6 +214,12 @@ const SELECT_SQL_BY_TABLE = {
     FROM "collection_directory_item"
     WHERE "site_id" = ?1
     ORDER BY "position", "id"
+  `,
+  smart_collection: `
+    SELECT *
+    FROM "smart_collection"
+    WHERE "site_id" = ?1
+    ORDER BY "created_at", "id"
   `,
   post: `
     SELECT *
@@ -118,6 +261,23 @@ export function getSnapshotSelectSql(tableName, siteId) {
   return statement.trim().replaceAll("?1", `'${escapeSqlString(siteId)}'`);
 }
 
+/**
+ * Settings that hold a storage key. The snapshot restores these settings, so
+ * the files they point at travel with it, whether or not a media row
+ * records them: sites that set an avatar before avatars had media rows have
+ * none.
+ */
+const STORAGE_KEY_SETTINGS = ["SITE_AVATAR", "SITE_FAVICON_APPLE_TOUCH"];
+
+/**
+ * SQL listing a site's stored objects: media originals, video posters, and
+ * the files the avatar and icon settings name.
+ *
+ * @param {string} siteId Site whose media rows to read
+ * @returns {string} A query returning `key` and `contentType` columns
+ * @example
+ * collectSnapshotObjects(await query(buildSnapshotStorageQuery(site.id)))
+ */
 export function buildSnapshotStorageQuery(siteId) {
   return `
     SELECT "key", "contentType"
@@ -139,6 +299,17 @@ export function buildSnapshotStorageQuery(siteId) {
       WHERE "poster_key" IS NOT NULL
         AND "site_id" = '${escapeSqlString(siteId)}'
         AND trim("poster_key") <> ''
+
+      UNION ALL
+
+      SELECT
+        "value" AS "key",
+        NULL AS "contentType"
+      FROM "site_setting"
+      WHERE "site_id" = '${escapeSqlString(siteId)}'
+        AND "key" IN (${quoteList(STORAGE_KEY_SETTINGS)})
+        AND "value" IS NOT NULL
+        AND trim("value") <> ''
     )
     WHERE "key" IS NOT NULL
       AND trim("key") <> ''
@@ -146,6 +317,27 @@ export function buildSnapshotStorageQuery(siteId) {
   `.trim();
 }
 
+/**
+ * A storage object a snapshot carries.
+ *
+ * @typedef {object} SnapshotObject
+ * @property {string} key Storage key
+ * @property {string} contentType MIME type, or `""` when neither the row nor
+ *   the key's extension gives one
+ */
+
+/**
+ * Deduplicate the rows of `buildSnapshotStorageQuery` into storage objects.
+ *
+ * Rows with a blank key are skipped. A row without a content type takes one
+ * from the key's extension.
+ *
+ * @param {Record<string, unknown>[]} rows Rows with `key` and `contentType`
+ * @returns {SnapshotObject[]} One entry per distinct key
+ * @example
+ * collectSnapshotObjects([{ key: "media/a.png", contentType: null }])
+ * // => [{ key: "media/a.png", contentType: "image/png" }]
+ */
 export function collectSnapshotObjects(rows) {
   const objects = new Map();
 
@@ -179,6 +371,43 @@ export function snapshotObjectPath(key) {
 
 export const SNAPSHOT_DIALECTS = ["sqlite", "pg"];
 
+/**
+ * Version of the installed `@jant/core`, which a snapshot records as `jant`.
+ *
+ * @returns {string} The package version, e.g. `0.8.0`
+ */
+export function readInstalledJantVersion() {
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+  );
+  return String(packageJson.version);
+}
+
+/**
+ * Schema migrations the installed `@jant/core` ships for a dialect, oldest
+ * first.
+ *
+ * @param {"sqlite" | "pg"} dialect Snapshot dialect
+ * @returns {string[]} Migration tags, e.g. `0034_cheerful_rumiko_fujikawa`
+ */
+export function listInstalledSchemaTags(dialect) {
+  return listSchemaMigrationFiles(
+    resolveBundledSchemaMigrationsDir(dialect),
+  ).map((migration) => migration.tag);
+}
+
+/**
+ * Build a snapshot's `meta.json`.
+ *
+ * Besides the format, it records the `@jant/core` version that wrote the
+ * snapshot (`jant`) and, when the dialect is known, the last schema migration
+ * that version ships (`schema`). The CLI that exports is the one the site
+ * runs and migrates with, so `schema` is the schema the rows were read from.
+ *
+ * @param {{ id: string, key: string }} site The exported site
+ * @param {{ dialect?: "sqlite" | "pg" }} [options] Source database dialect
+ * @returns {SnapshotMeta} The object to write as `meta.json`
+ */
 export function buildSnapshotMeta(site, options = {}) {
   const dialect = options.dialect;
   if (dialect && !SNAPSHOT_DIALECTS.includes(dialect)) {
@@ -187,10 +416,14 @@ export function buildSnapshotMeta(site, options = {}) {
     );
   }
 
+  const schema = dialect ? listInstalledSchemaTags(dialect).at(-1) : undefined;
+
   return {
     format: SNAPSHOT_FORMAT,
     version: SNAPSHOT_VERSION,
     ...(dialect ? { dialect } : {}),
+    jant: readInstalledJantVersion(),
+    ...(schema ? { schema } : {}),
     site: {
       id: site.id,
       key: site.key,
@@ -198,6 +431,32 @@ export function buildSnapshotMeta(site, options = {}) {
   };
 }
 
+/**
+ * A snapshot's `meta.json`, as `assertSnapshotMeta` accepts it.
+ *
+ * @typedef {object} SnapshotMeta
+ * @property {typeof SNAPSHOT_FORMAT} format
+ * @property {number} version One of `SUPPORTED_SNAPSHOT_VERSIONS`
+ * @property {"sqlite" | "pg"} [dialect] Absent from snapshots that predate it
+ * @property {string} [jant] The `@jant/core` version that wrote the snapshot;
+ *   absent before 0.8.0
+ * @property {string} [schema] The last schema migration of that version, for
+ *   `dialect`; absent before 0.8.0
+ * @property {{ id: string, key: string }} [site] The site the snapshot was
+ *   exported from; absent from legacy snapshots
+ * @property {unknown} [tables] Listed by legacy snapshots only
+ */
+
+/**
+ * Refuse a `meta.json` this version cannot import.
+ *
+ * @param {unknown} meta Parsed `meta.json`
+ * @returns {asserts meta is SnapshotMeta}
+ * @throws {Error} When the format, version, dialect, or site is not supported
+ * @example
+ * const meta = JSON.parse(await readFile(metaPath, "utf8"));
+ * assertSnapshotMeta(meta);
+ */
 export function assertSnapshotMeta(meta) {
   if (!meta || typeof meta !== "object") {
     throw new Error("Snapshot meta.json is missing or invalid.");
@@ -210,8 +469,11 @@ export function assertSnapshotMeta(meta) {
   }
 
   if (!SUPPORTED_SNAPSHOT_VERSIONS.includes(meta.version)) {
+    const newest = Math.max(...SUPPORTED_SNAPSHOT_VERSIONS);
     throw new Error(
-      `Unsupported snapshot version: expected one of ${SUPPORTED_SNAPSHOT_VERSIONS.join(", ")}, got ${String(meta.version)}`,
+      typeof meta.version === "number" && meta.version > newest
+        ? `This snapshot uses format version ${meta.version}, and this Jant reads up to version ${newest}. Upgrade @jant/core, then import again.`
+        : `Unsupported snapshot version: expected one of ${SUPPORTED_SNAPSHOT_VERSIONS.join(", ")}, got ${String(meta.version)}`,
     );
   }
 
@@ -230,6 +492,38 @@ export function assertSnapshotMeta(meta) {
   ) {
     throw new Error("Snapshot meta site must contain string id and key.");
   }
+
+  for (const field of ["jant", "schema"]) {
+    if (meta[field] !== undefined && typeof meta[field] !== "string") {
+      throw new Error(`Snapshot meta ${field} must be a string.`);
+    }
+  }
+}
+
+/**
+ * Refuse a snapshot written by a newer Jant than the installed one.
+ *
+ * A snapshot's rows fit the schema it records. When the installed
+ * `@jant/core` does not ship that migration, its schema is older than the
+ * snapshot's, and the rows can name columns it doesn't have. Snapshots from
+ * before 0.8.0 record no schema and are accepted.
+ *
+ * @param {SnapshotMeta} meta Checked by `assertSnapshotMeta`
+ * @returns {void}
+ * @throws {Error} When the installed package lacks the snapshot's schema
+ * @example
+ * assertSnapshotSchemaInstalled({ format: "jant-site-snapshot", version: 2, schema: "9999_later" });
+ * // throws: This snapshot was written by a newer Jant …
+ */
+export function assertSnapshotSchemaInstalled(meta) {
+  if (typeof meta.schema !== "string") return;
+  const dialect = meta.dialect ?? "sqlite";
+  if (listInstalledSchemaTags(dialect).includes(meta.schema)) return;
+
+  const writer = meta.jant ? `Jant ${meta.jant}` : "a newer Jant";
+  throw new Error(
+    `This snapshot was written by ${writer}, whose schema reaches ${meta.schema}. The installed @jant/core (${readInstalledJantVersion()}) doesn't have that migration. Upgrade @jant/core, run jant migrate, then import again.`,
+  );
 }
 
 /**
@@ -262,7 +556,7 @@ export function assertSnapshotDialectMatches(meta, targetDialect) {
         `Snapshot dialect mismatch: source is ${sourceDialect}, target is ${targetDialect}.`,
         "Snapshot db.sql is dialect-specific (BLOB literals, generated columns, FTS, etc.)",
         "and cannot be replayed across SQLite and Postgres safely.",
-        "Use `jant site export <url>` (HTTP, dialect-neutral) to move content between",
+        "Use `jant site export --url <url>` (HTTP, dialect-neutral) to move content between",
         "different DB engines.",
       ].join("\n"),
     );
@@ -274,6 +568,15 @@ export function isLegacySnapshotMeta(meta) {
   return !meta?.site || tables.includes("setting");
 }
 
+/**
+ * The site a snapshot was exported from, for creating or remapping the target.
+ *
+ * @param {SnapshotMeta} meta Snapshot meta accepted by `assertSnapshotMeta`
+ * @returns {{ id: string, key: string } | undefined} The source site, or
+ *   undefined for a legacy snapshot, which records none
+ * @example
+ * const snapshotSite = getSnapshotBootstrapSite(meta);
+ */
 export function getSnapshotBootstrapSite(meta) {
   if (isLegacySnapshotMeta(meta)) {
     return undefined;
@@ -285,6 +588,18 @@ export function getSnapshotBootstrapSite(meta) {
   };
 }
 
+/**
+ * Refuse to import a snapshot into a site other than the one it came from.
+ *
+ * Legacy snapshots record no site and pass.
+ *
+ * @param {SnapshotMeta} meta Snapshot meta accepted by `assertSnapshotMeta`
+ * @param {{ id: string }} site The import target
+ * @returns {void}
+ * @throws {Error} When the snapshot names a different site
+ * @example
+ * validateSnapshotTargetSite(meta, targetSite);
+ */
 export function validateSnapshotTargetSite(meta, site) {
   if (isLegacySnapshotMeta(meta)) {
     return;
@@ -297,6 +612,17 @@ export function validateSnapshotTargetSite(meta, site) {
   }
 }
 
+/**
+ * Replace a snapshot's source site id with the target's throughout its SQL.
+ *
+ * @param {string} sql Snapshot `db.sql`
+ * @param {string} sourceSiteId Site the snapshot was exported from; empty
+ *   leaves the SQL unchanged
+ * @param {string} targetSiteId Site the snapshot is imported into
+ * @returns {string} The rewritten SQL
+ * @example
+ * rewriteSnapshotSiteIdentifiers(dbSql, snapshotSite.id, targetSite.id)
+ */
 export function rewriteSnapshotSiteIdentifiers(
   sql,
   sourceSiteId,
@@ -311,6 +637,17 @@ export function rewriteSnapshotSiteIdentifiers(
   return sql.replaceAll(escapedSource, escapedTarget);
 }
 
+/**
+ * Move a storage key from the source site's namespace to the target's.
+ *
+ * @param {string} key Storage key as exported
+ * @param {string} sourceSiteId Site the snapshot was exported from; empty
+ *   leaves the key unchanged
+ * @param {string} targetSiteId Site the snapshot is imported into
+ * @returns {string} The key to store the object under
+ * @example
+ * remapSnapshotObjectKey(entry.key, snapshotSite.id, targetSite.id)
+ */
 export function remapSnapshotObjectKey(key, sourceSiteId, targetSiteId) {
   if (!sourceSiteId || sourceSiteId === targetSiteId) {
     return key;
@@ -325,6 +662,12 @@ export function remapSnapshotObjectKey(key, sourceSiteId, targetSiteId) {
  * export time (with forward slashes). If the snapshot was produced by a
  * different site than the import target, callers apply
  * `remapSnapshotObjectKey()` before uploading.
+ *
+ * @param {string} rootDir Snapshot directory
+ * @returns {Promise<{ key: string, filePath: string, contentType: string }[]>}
+ *   Files sorted by key; empty when there is no `objects/` directory
+ * @example
+ * const objectFiles = await enumerateSnapshotObjectFiles(snapshotDir);
  */
 export async function enumerateSnapshotObjectFiles(rootDir) {
   const objectsRoot = join(rootDir, "objects");
@@ -485,6 +828,16 @@ function splitSqlStatements(sql) {
   return statements;
 }
 
+/**
+ * Scope a legacy single-site dump to a site: global `setting` rows become
+ * `site_setting` rows, and site-owned tables gain a `site_id` column.
+ *
+ * @param {string} sql Legacy snapshot `db.sql`
+ * @param {string} siteId Site the snapshot is imported into
+ * @returns {string} Site-scoped SQL
+ * @example
+ * rewriteLegacySnapshotSql(dbSql, targetSite.id)
+ */
 export function rewriteLegacySnapshotSql(sql, siteId) {
   const rewrittenStatements = splitSqlStatements(sql).map((statement) => {
     const normalized = statement.trim();
@@ -840,6 +1193,72 @@ function parseSqlScalar(raw) {
   return trimmed;
 }
 
+/**
+ * SQL clearing a site's snapshot content before a replacing import.
+ *
+ * @param {string} siteId Site to clear
+ * @returns {string} `DELETE` statements for every `SNAPSHOT_CLEAR_TABLES`
+ *   table and the snapshot's setting keys
+ * @example
+ * await execute(`${buildReplaceSql(site.id)}\n${dbSql}`);
+ */
+/**
+ * Order `post` rows so every row comes after its Thread root and the post it
+ * replies to.
+ *
+ * The dump reads posts by creation time, and `(site_id, thread_id)` and
+ * `(site_id, reply_to_id)` are foreign keys. A post moved into a Thread keeps
+ * its own creation time, and an import restores creation times, so a reply
+ * can be older than its root; inserted in creation order it names a row that
+ * isn't there yet, and the whole import fails. Otherwise the order is kept.
+ *
+ * @param {Record<string, unknown>[]} rows - `post` rows in dump order
+ * @returns {Record<string, unknown>[]} The same rows, parents first
+ * @example
+ * orderSnapshotPostRows([reply, root]); // [root, reply]
+ */
+export function orderSnapshotPostRows(rows) {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const placed = new Set();
+  const ordered = [];
+
+  const place = (row, visiting) => {
+    if (placed.has(row.id) || visiting.has(row.id)) return;
+    visiting.add(row.id);
+    for (const parentId of [row.thread_id, row.reply_to_id]) {
+      const parent = parentId !== row.id ? byId.get(parentId) : undefined;
+      if (parent) place(parent, visiting);
+    }
+    placed.add(row.id);
+    ordered.push(row);
+  };
+
+  for (const row of rows) place(row, new Set());
+  return ordered;
+}
+
+/**
+ * SQL a snapshot import runs before its inserts on SQLite and D1: foreign
+ * keys are checked at commit rather than per row, so a snapshot written
+ * before posts were ordered parents-first still loads. Postgres has no
+ * equivalent for its non-deferrable keys; its snapshots are ordered at export.
+ */
+export const DEFER_FOREIGN_KEYS_SQL = "PRAGMA defer_foreign_keys = ON;";
+
+/**
+ * `ON CONFLICT` clauses a snapshot's inserts carry.
+ *
+ * `--replace` clears the settings the importing version knows to be in a
+ * snapshot. A later version's snapshot can carry a setting this one doesn't
+ * list; written as a plain INSERT, it would collide with the target's own row
+ * and fail the import after its files were already uploaded. As an upsert it
+ * replaces that row, whichever version imports it.
+ */
+export const SNAPSHOT_CONFLICT_CLAUSES = {
+  site_setting:
+    'ON CONFLICT ("site_id", "key") DO UPDATE SET "value" = excluded."value", "updated_at" = excluded."updated_at"',
+};
+
 export function buildReplaceSql(siteId) {
   const statements = [];
 
@@ -854,6 +1273,41 @@ export function buildReplaceSql(siteId) {
   );
 
   return statements.join("\n");
+}
+
+/** The storage drivers a `media` row can name as its `provider`. */
+const MEDIA_STORAGE_PROVIDERS = ["r2", "s3", "local"];
+
+/**
+ * SQL recording a site's media under the storage an import just wrote it to.
+ *
+ * A snapshot carries each media row's `provider` from the site it was exported
+ * from, but the import uploads every object into the target's own storage. A
+ * row exported on R2 and imported into S3 would still say `r2`, and everything
+ * that reads `provider` as where the bytes live goes wrong: the public URL looks
+ * for `R2_PUBLIC_URL`, replacing the avatar or favicon misses the existing row
+ * and inserts a second one for the same key, and a trashed object is never
+ * purged because the sweep only handles the active driver. Run after the
+ * snapshot's inserts, while every media row of the site is one the snapshot
+ * brought.
+ *
+ * @param {string} siteId - Site whose media was imported
+ * @param {string} provider - Storage driver the import uploaded through
+ * @returns {string} An `UPDATE` statement for the site's media rows
+ * @throws {Error} When `provider` is not one of r2, s3, or local
+ * @example
+ * await execute(
+ *   `${buildReplaceSql(site.id)}\n${dbSql}\n${buildMediaProviderSql(site.id, "s3")}`,
+ * );
+ */
+export function buildMediaProviderSql(siteId, provider) {
+  if (!MEDIA_STORAGE_PROVIDERS.includes(provider)) {
+    throw new Error(
+      `Snapshot import cannot record media under storage driver "${provider}". Expected one of: ${MEDIA_STORAGE_PROVIDERS.join(", ")}.`,
+    );
+  }
+
+  return `UPDATE "media" SET "provider" = '${provider}' WHERE "site_id" = '${escapeSqlString(siteId)}';`;
 }
 
 export function normalizeD1Sql(sql) {

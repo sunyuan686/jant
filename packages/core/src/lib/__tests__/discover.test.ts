@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   discoverIntroRuns,
+  getAuthorGroupUrl,
   getDiscoverFeedPath,
   getDiscoverPageUrls,
   getDiscoverSubmitUrl,
+  isDiscoverLanguage,
   linkTerms,
   measureDiscoverMaturity,
   parseDiscoverSetting,
@@ -29,10 +31,15 @@ function resolve(
 }
 
 describe("parseDiscoverSetting", () => {
-  it("accepts the three stored values", () => {
+  it("accepts the two stored values", () => {
     expect(parseDiscoverSetting("latest")).toBe("latest");
-    expect(parseDiscoverSetting("featured")).toBe("featured");
     expect(parseDiscoverSetting("off")).toBe("off");
+  });
+
+  // Earlier releases offered a featured-only choice; backfill 0008 turns a
+  // stored one off, and nothing reads it any more.
+  it("treats the retired featured choice as unset", () => {
+    expect(parseDiscoverSetting("featured")).toBeNull();
   });
 
   it("treats absent, blank, and unrecognized values as unset", () => {
@@ -52,7 +59,6 @@ describe("resolveDiscoverMode", () => {
   });
 
   it("honours the owner's stored choice", () => {
-    expect(resolve({ storedValue: "featured" })).toBe("featured");
     expect(resolve({ storedValue: "latest" })).toBe("latest");
     expect(resolve({ storedValue: "off" })).toBe("none");
   });
@@ -60,7 +66,6 @@ describe("resolveDiscoverMode", () => {
   // How hosted Jant lists its fleet without asking every owner.
   it("takes the deployment default when nothing is stored", () => {
     expect(resolve({ defaultValue: "latest" })).toBe("latest");
-    expect(resolve({ defaultValue: "featured" })).toBe("featured");
     expect(resolve({ defaultValue: "off" })).toBe("none");
   });
 
@@ -87,15 +92,12 @@ describe("resolveDiscoverMode", () => {
 
   it("lets a stored choice override noindex", () => {
     expect(resolve({ noindex: true, storedValue: "latest" })).toBe("latest");
-    expect(resolve({ noindex: true, storedValue: "featured" })).toBe(
-      "featured",
-    );
   });
 
   // Demos exist to be thrown away; nothing they publish belongs in a directory.
   it("locks demo sites out even when they ask to be listed", () => {
     expect(resolve({ demoMode: true })).toBe("none");
-    expect(resolve({ demoMode: true, storedValue: "featured" })).toBe("none");
+    expect(resolve({ demoMode: true, storedValue: "latest" })).toBe("none");
     expect(resolve({ demoMode: true, defaultValue: "latest" })).toBe("none");
   });
 
@@ -118,7 +120,6 @@ describe("resolveDiscoverMode", () => {
 describe("getDiscoverFeedPath", () => {
   it("names the feed each mode draws from", () => {
     expect(getDiscoverFeedPath("latest")).toBe("/latest/feed");
-    expect(getDiscoverFeedPath("featured")).toBe("/featured/feed");
     expect(getDiscoverFeedPath("none")).toBeNull();
   });
 });
@@ -249,6 +250,29 @@ describe("measureDiscoverMaturity", () => {
   });
 });
 
+describe("isDiscoverLanguage", () => {
+  // One list for both scripts: splitting an already small community over a
+  // script boundary is what the directory decided against.
+  it("accepts Chinese in either script", () => {
+    expect(isDiscoverLanguage("zh-Hans")).toBe(true);
+    expect(isDiscoverLanguage("zh-Hant")).toBe(true);
+  });
+
+  // A stored tag is not always one the picker offers; a region form or a bare
+  // `zh` is still Chinese.
+  it("reads the primary subtag, whatever follows it", () => {
+    expect(isDiscoverLanguage("zh")).toBe(true);
+    expect(isDiscoverLanguage("zh-TW")).toBe(true);
+    expect(isDiscoverLanguage("ZH-hans")).toBe(true);
+  });
+
+  it("turns away every other language", () => {
+    expect(isDiscoverLanguage("en")).toBe(false);
+    expect(isDiscoverLanguage("ja")).toBe(false);
+    expect(isDiscoverLanguage("")).toBe(false);
+  });
+});
+
 describe("getDiscoverSubmitUrl", () => {
   it("finds the form beside the directory's own ping endpoint", () => {
     expect(getDiscoverSubmitUrl("https://jant.me/api/discover/ping")).toBe(
@@ -268,6 +292,26 @@ describe("getDiscoverSubmitUrl", () => {
     expect(getDiscoverSubmitUrl(undefined)).toBeNull();
     expect(getDiscoverSubmitUrl("")).toBeNull();
     expect(getDiscoverSubmitUrl("not a url")).toBeNull();
+  });
+});
+
+describe("getAuthorGroupUrl", () => {
+  it("finds the group's QR code on the directory's Chinese contact page", () => {
+    expect(getAuthorGroupUrl("https://jant.me/api/discover/ping")).toBe(
+      "https://jant.me/zh-hans/contact#wechat",
+    );
+  });
+
+  it("follows a directory of your own", () => {
+    expect(
+      getAuthorGroupUrl("https://directory.example/api/discover/ping"),
+    ).toBe("https://directory.example/zh-hans/contact#wechat");
+  });
+
+  it("has nothing to offer when no directory is configured", () => {
+    expect(getAuthorGroupUrl(undefined)).toBeNull();
+    expect(getAuthorGroupUrl("")).toBeNull();
+    expect(getAuthorGroupUrl("not a url")).toBeNull();
   });
 });
 

@@ -47,21 +47,24 @@ Jant 提供三种自定义外观的方式，按粒度从粗到细：
 
 这些变量默认从核心色盘派生。内建主题会单独设置 `--site-accent`；如果你只手动覆盖核心色盘，`--site-accent` 会回退到 `--primary`。
 
-| 变量                    | 默认值                      | 作用                                  |
-| ----------------------- | --------------------------- | ------------------------------------- |
-| `--site-accent`         | `var(--primary)`            | 阅读区强调色（链接、Thread 连接点等） |
-| `--site-accent-text`    | `var(--primary-foreground)` | 站点强调色上的文本                    |
-| `--site-page-bg`        | `var(--background)`         | 页面整体背景                          |
-| `--site-elevated-bg`    | `var(--background)`         | 主内容区和浮层（菜单、popover）的背景 |
-| `--site-nav-hover-bg`   | `var(--accent)`             | 导航 hover 背景                       |
-| `--site-text-primary`   | `var(--foreground)`         | 主文本                                |
-| `--site-text-secondary` | `var(--muted-foreground)`   | 次级 / 说明文本                       |
-| `--site-divider`        | `var(--border)`             | 内容分隔线                            |
-| `--site-threadline`     | `var(--border)`             | Thread 连线                           |
-| `--site-column-outline` | `var(--border)`             | 内容块描边的派生基色                  |
-| `--site-media-outline`  | `var(--border)`             | 图片 / 视频边框                       |
-| `--search-mark-bg`      | 内置黄底                    | 搜索结果高亮背景                      |
-| `--search-mark-color`   | 内置深字                    | 搜索结果高亮文字                      |
+| 变量                            | 默认值                          | 作用                                                                   |
+| ------------------------------- | ------------------------------- | ---------------------------------------------------------------------- |
+| `--site-accent`                 | `var(--primary)`                | 阅读区强调色：引号、Thread 连接点、链接卡片的底色、hover 和焦点环      |
+| `--site-page-bg`                | `var(--background)`             | 页面背景，以及放在页面上的区块                                         |
+| `--site-subtle-bg`              | `var(--accent)`                 | 导航 hover、信息流里的卡片和代码块的浅底色                             |
+| `--site-text-primary`           | `var(--foreground)`             | 主文本                                                                 |
+| `--site-text-secondary`         | `var(--muted-foreground)`       | 次级 / 说明文本                                                        |
+| `--site-divider`                | `var(--border)`                 | 内容分隔线                                                             |
+| `--site-threadline`             | `var(--border)`                 | Thread 连线                                                            |
+| `--site-reading-body`           | 由 `--site-text-primary` 派生   | 帖子详情页的正文。内建主题会设置它，所以只改 `--foreground` 管不到正文 |
+| `--site-reading-caption`        | 由文字颜色派生                  | 帖子详情页的图注和脚注                                                 |
+| `--site-content-link`           | `inherit`                       | 帖子里的链接文字                                                       |
+| `--site-content-link-hover`     | `var(--site-text-primary)`      | 链接 hover 时的文字                                                    |
+| `--site-content-link-underline` | 由 `--site-text-secondary` 派生 | 链接下划线                                                             |
+| `--site-footnote-text`          | `var(--site-reading-caption)`   | 宽屏侧栏里的脚注文字                                                   |
+| `--site-footnote-marker`        | 由 `--site-text-secondary` 派生 | 侧栏里的脚注编号                                                       |
+| `--site-search-mark-bg`         | 内置黄底                        | 搜索结果高亮背景                                                       |
+| `--site-search-mark-color`      | 内置深字                        | 搜索结果高亮文字                                                       |
 
 ### 示例：自定义主色和站点强调色
 
@@ -72,14 +75,22 @@ Jant 提供三种自定义外观的方式，按粒度从粗到细：
   --site-accent: oklch(0.56 0.06 240);
 }
 
+:root[data-theme-mode="dark"] {
+  --primary: oklch(0.79 0.06 255);
+  --primary-foreground: oklch(0.19 0.01 255);
+  --site-accent: oklch(0.74 0.07 240);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme-mode="light"]) {
     --primary: oklch(0.79 0.06 255);
     --primary-foreground: oklch(0.19 0.01 255);
     --site-accent: oklch(0.74 0.07 240);
   }
 }
 ```
+
+两条深色规则的写法见[深色模式](#深色模式)。
 
 ### 示例：让 Thread 连线带颜色
 
@@ -91,25 +102,24 @@ Jant 提供三种自定义外观的方式，按粒度从粗到细：
 
 ## 排版变量
 
-| 变量                | 默认值                  | 作用                                       |
-| ------------------- | ----------------------- | ------------------------------------------ |
-| `--font-body`       | 系统 sans-serif         | 正文、输入框                               |
-| `--font-heading`    | 偏编辑风格的 serif 组合 | 帖子标题、h1–h3                            |
-| `--font-site-title` | 偏编辑风格的 serif 组合 | 站点 logo（标题栏）                        |
-| `--font-ui`         | 系统 sans-serif         | 按钮、导航、标签、徽章（不受字型主题影响） |
-| `--font-serif`      | 系统 serif + Noto 回退  | serif 强调文本                             |
-| `--font-blockquote` | `inherit`               | 引用块字族，默认跟随正文字体               |
-| `--font-mono`       | 系统 monospace          | 代码块                                     |
-| `--fw-light`        | 300                     | 轻量强调                                   |
-| `--fw-regular`      | 400                     | 正文                                       |
-| `--fw-medium`       | 500                     | 标签、激活导航                             |
-| `--fw-semibold`     | 600                     | 标题、按钮                                 |
-| `--fw-bold`         | 700                     | 强强调                                     |
-| `--fw-extrabold`    | 800                     | 站点 logo                                  |
+| 变量                  | 默认值                  | 作用                                         |
+| --------------------- | ----------------------- | -------------------------------------------- |
+| `--font-body`         | 系统 sans-serif         | 正文、输入框                                 |
+| `--font-heading`      | 偏编辑风格的 serif 组合 | 帖子标题、h1–h3                              |
+| `--font-site-title`   | 偏编辑风格的 serif 组合 | 站点 logo（标题栏）                          |
+| `--font-ui`           | 系统 sans-serif         | 按钮、导航、标签、徽章（不受字型主题影响）   |
+| `--font-serif`        | 系统 serif + Noto 回退  | serif 强调文本                               |
+| `--font-blockquote`   | `inherit`               | 引用块字族，默认跟随正文字体                 |
+| `--font-mono`         | 系统 monospace          | 代码块                                       |
+| `--type-body-size`    | 正文字号                | 帖子正文的字号；脚注引用和代码的字号按它换算 |
+| `--type-footnote-ref` | 正文字号的 `75%`        | 行内脚注引用的字号                           |
+| `--fw-regular`        | 400                     | 正文                                         |
+| `--fw-medium`         | 500                     | 标签、激活导航                               |
+| `--fw-semibold`       | 600                     | 标题、按钮                                   |
 
 在 **Settings > Font Theme** 选字型主题后，`--font-heading`、`--font-body` 以及若干相关字重会随之切换。`--font-ui` 不在切换范围内——按钮、导航这些界面文字始终用系统 sans-serif，方便阅读。要进一步调整，仍然可以在 Custom CSS 里覆盖任意变量。
 
-如果想用 Google Fonts 这类外部字体源，需要先用 [代码注入](code-injection.md#配方自定义字体) 加载字体文件，再在 Custom CSS 里把变量指向新字体。
+如果想用 Google Fonts 这类外部字体源，需要先用 [代码注入](code-injection.md#自定义字体) 加载字体文件，再在 Custom CSS 里把变量指向新字体。
 
 ### 示例：更细的字重
 
@@ -122,61 +132,72 @@ Jant 提供三种自定义外观的方式，按粒度从粗到细：
 
 ## 布局变量
 
-| 变量                  | 默认值   | 作用                 |
-| --------------------- | -------- | -------------------- |
-| `--content-max-width` | `42rem`  | 内容最大宽度         |
-| `--site-padding`      | `1.5rem` | 横向内边距           |
-| `--content-gap`       | `1rem`   | 信息流条目之间的间距 |
+| 变量                      | 默认值   | 作用                                       |
+| ------------------------- | -------- | ------------------------------------------ |
+| `--layout-body-max-width` | `1088px` | 页面框架（页头、内容、页脚）的最大宽度     |
+| `--site-feed-rhythm`      | `4.4rem` | 列表里帖子之间的间距，以及第一篇之上的间距 |
+| `--layout-sidenote-width` | `50%`    | 宽屏下脚注侧栏的宽度                       |
+| `--layout-sidenote-gap`   | `10%`    | 正文和脚注侧栏之间的间距                   |
 
 ### 示例：更宽的内容区
 
-```css
-:root {
-  --content-max-width: 55rem;
-}
-```
-
-## 卡片与媒体
-
-| 变量                  | 默认值   | 作用             |
-| --------------------- | -------- | ---------------- |
-| `--card-radius`       | `0`      | 帖子卡片圆角     |
-| `--card-padding`      | `1rem`   | 帖子卡片内边距   |
-| `--card-border-width` | `0`      | 帖子卡片边框宽度 |
-| `--card-shadow`       | `none`   | 帖子卡片阴影     |
-| `--media-radius`      | `0.5rem` | 图片 / 视频圆角  |
-| `--avatar-size`       | `28px`   | 页头头像尺寸     |
-| `--avatar-radius`     | `50%`    | 头像圆角         |
-
-### 示例：把帖子做成卡片
+宽屏上，阅读栏占页面框架的固定比例，框架放宽，阅读栏也跟着变宽。窄于 `1024px` 时，阅读栏保持 `35rem`，与框架宽度无关。
 
 ```css
 :root {
-  --card-radius: 12px;
-  --card-padding: 1.5rem;
-  --card-border-width: 1px;
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --layout-body-max-width: 1280px;
 }
 ```
+
+### 侧注与缩进块
+
+脚注使用语义化的 HTML：正文里是上标的脚注引用链接，正文之后是原生的有序尾注列表。在详情页和公开的时间线列表里，Jant 按每篇帖子的实际容器（而不只是视口）判断右侧有没有空间放 Tufte 风格的侧栏。容器至少 `56rem` 宽、脚注放得下又不会溢出太多时，一小段渐进增强的脚本会把现有的尾注列表移到侧栏。时间线里的每一项单独测量。容器较窄或脚注较密、打印、不运行 JavaScript 的客户端以及旧浏览器，都保留底部尾注。
+
+这段脚本读取每个脚注引用的实际位置，而不是把浮动元素锚定在所在的块上，所以引用块或其他正文块带内边距时，不再需要额外的锚点偏移。侧栏编号和脚注文字同样大小、同一基线。侧栏的比例和语义颜色用主题 token 调整：
+
+```css
+:root {
+  --layout-sidenote-width: 42%;
+  --layout-sidenote-gap: 8%;
+  --type-footnote-ref: calc(var(--type-body-size) * 0.75);
+  --site-footnote-text: var(--site-reading-caption);
+  --site-footnote-marker: var(--site-text-secondary);
+}
+```
+
+侧栏在视觉上隐藏返回箭头，因为每条脚注已经紧挨着它第一次被引用的位置。返回链接仍然保留在语义 HTML 里，供底部尾注和辅助技术使用，键盘用户聚焦到它时会显示出来。
+
+主题选择器优先用 `.footnote-endnotes`、`.footnote-list`、`.footnote`、`.footnote-ref`、`.footnote-backlinks` 和 `.footnote-backref`（返回引用处的箭头链接）。片段 ID 不透明，任何版本都可能变化，不要给它们的压缩哈希写样式，也不要解析它。
+
+## 媒体与头像
+
+| 变量              | 默认值   | 作用            |
+| ----------------- | -------- | --------------- |
+| `--media-radius`  | `0.5rem` | 图片 / 视频圆角 |
+| `--avatar-size`   | `28px`   | 页头头像尺寸    |
+| `--avatar-radius` | `50%`    | 头像圆角        |
 
 ## 数据属性（data attributes）
 
 写选择器时可以用这些 data attribute 锁定特定页面或元素：
 
-| 属性                 | 出现在       | 取值                                                                         |
-| -------------------- | ------------ | ---------------------------------------------------------------------------- |
-| `data-theme`         | `<html>`     | 当前配色主题 id（`tufte`、`linen`、`frost` …）                               |
-| `data-theme-mode`    | `<html>`     | `auto`、`light`、`dark`                                                      |
-| `data-page`          | 页面外层容器 | `home`, `post`, `search`, `archive`, `collection`, `collections`, `featured` |
-| `data-post`          | `<article>`  | 每篇帖子都会带上                                                             |
-| `data-format`        | `<article>`  | `note`, `link`, `quote`                                                      |
-| `data-post-slug`     | `<article>`  | 帖子的 slug（便于调试和按帖子定制样式）                                      |
-| `data-post-pinned`   | `<article>`  | 置顶帖子会带上                                                               |
-| `data-post-featured` | `<article>`  | Featured 帖子会带上                                                          |
-| `data-feed`          | 信息流容器   | 包裹帖子列表                                                                 |
-| `data-authenticated` | `<body>`     | 登录时带上                                                                   |
+| 属性                 | 出现在               | 取值                                                                                      |
+| -------------------- | -------------------- | ----------------------------------------------------------------------------------------- |
+| `data-theme`         | `<html>`             | 当前配色主题 id（`tufte`、`linen`、`frost` …）                                            |
+| `data-theme-mode`    | `<html>`             | `auto`、`light`、`dark`                                                                   |
+| `data-page`          | `<body>`             | `home`, `post`, `search`, `archive`, `collection`, `collections`, `featured`, `subscribe` |
+| `data-post`          | `<article>`          | 每篇帖子都会带上                                                                          |
+| `data-format`        | `<article>`          | `note`, `link`, `quote`                                                                   |
+| `data-post-slug`     | `<article>`          | 帖子的 slug（便于调试和按帖子定制样式）                                                   |
+| `data-post-pinned`   | `<article>`          | 置顶帖子会带上                                                                            |
+| `data-post-featured` | `<article>`          | Featured 帖子会带上                                                                       |
+| `data-feed`          | 信息流容器           | 包裹帖子列表                                                                              |
+| `data-authenticated` | `<body>`             | 登录时带上                                                                                |
+| `data-post-end`      | 帖子详情页的帖子之后 | 帖子之后的空插槽，[代码注入](code-injection.md) 在这里挂载评论                            |
 
-帖子内部还有三个标记：`data-post-body`（正文容器）、`data-post-meta`（日期、标签等元信息）、`data-post-media`（图片 / 视频区）。三个一组，便于针对帖子的某一块单独写样式。
+帖子内部还有四个标记：`data-post-body`（正文，引用帖是评论）、`data-post-quote`（引用帖的引文）、`data-post-meta`（日期和合集）、`data-post-media`（附件：图片、视频、音频、文档和文本附件）。有了它们，可以针对帖子的某一块单独写样式。
+
+信息流、帖子详情页和合集里的帖子带上面全部的属性和标记。搜索结果带 `<article>` 上的属性，但不带里面的标记：它显示的是摘录，不是整篇帖子。归档网格视图里的卡片只带 `data-post` 和 `data-format`。
 
 ### 示例：只在首页加分隔线
 
@@ -190,7 +211,7 @@ Jant 提供三种自定义外观的方式，按粒度从粗到细：
 ### 示例：按格式区分样式
 
 ```css
-[data-format="quote"] [data-post-body] {
+[data-post-quote] {
   font-family: var(--font-serif);
   font-style: italic;
 }
@@ -213,28 +234,34 @@ Jant 提供三种自定义外观的方式，按粒度从粗到细：
 
 ## 深色模式
 
-Jant 会自动跟随访问者的系统偏好（浅色 / 深色）。如果想为深色模式单独设置变量，可以用 media query：
+站点默认跟随访问者的系统偏好（浅色 / 深色），也可以设为始终浅色或始终深色，`<html>` 上的 `data-theme-mode` 标明是哪一种。页面变成深色有两种情况，所以深色值要写两条规则：
 
 ```css
 :root {
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --site-threadline: oklch(0.8 0.05 250);
 }
 
+/* 站点设为深色 */
+:root[data-theme-mode="dark"] {
+  --site-threadline: oklch(0.45 0.05 250);
+}
+
+/* 系统是深色，且站点没有设为浅色 */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  :root:not([data-theme-mode="light"]) {
+    --site-threadline: oklch(0.45 0.05 250);
   }
 }
 ```
 
-站点也可以强制切换到深色模式（不跟随系统）。要在那种情况下也覆盖颜色，用 `:root[data-theme-mode="dark"]` 选择器。
+选择器照这样写。内建主题用的是同样的选择器，Custom CSS 排在它后面，所以你的值会生效。media query 里只写 `:root` 的话，优先级更低，会输给主题的深色值。
 
 ## 提示
 
-- 优先改变量，再考虑写选择器覆盖。变量层将来升级时不易破。
-- Custom CSS 优先级最高，会覆盖内建主题里的所有变量。
-- 颜色用 `oklch()` 比较好控制。一个常见做法：`--primary` 用饱和、稳定的颜色给按钮；`--site-accent` 用更柔和的颜色给链接和正文中的强调。
-- 浅色和深色都要测。如果在 `:root` 里覆盖了某个颜色变量，也要想一想它在 `@media (prefers-color-scheme: dark)` 或 `:root[data-theme-mode="dark"]` 下是否需要对应覆盖。
+- 优先改变量，再考虑写选择器覆盖。本页列出的变量、数据属性和 class，Jant 会尽量保持稳定，改动时在发布说明里写一句，见[兼容性](compatibility.md)；Jant 样式表里的其他自定义属性和 class 属于内部实现，任何版本都可能改变，不另行说明。
+- Custom CSS 排在内建主题之后，用的也是同样的选择器，所以能覆盖主题设置的每个变量：浅色值写在 `:root` 里，深色值用[深色模式](#深色模式)里的两条规则。
+- 颜色用 `oklch()` 比较好控制。一个常见做法：`--primary` 用饱和、稳定的颜色给按钮；`--site-accent` 用更柔和的颜色给引号和 Thread 连接线。链接用 `--site-content-link`。
+- 浅色和深色都要测。只写在 `:root` 里的颜色，在主题和 Jant 都没有给它设深色值的地方，深色模式下也会生效。
 
 ## 接下来
 

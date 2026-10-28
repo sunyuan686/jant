@@ -55,8 +55,6 @@ export interface DiscoverStatus {
   /** What this site's feeds actually declare right now. */
   declaredMode: DiscoverMode;
   publicPostCount: number;
-  /** Featured thread roots — what a `featured` feed would actually carry. */
-  featuredPostCount: number;
   /** The directory's threshold is met. */
   established: boolean;
   minPublicPosts: number;
@@ -127,13 +125,13 @@ export function GeneralContent({
   noindex: boolean;
   /** The stored choice, or "" when the owner has never used the control. */
   discover: string;
-  /** What the site declares while that choice is unmade. */
   /**
    * The deployment's own answer, unresolved: `""` when it has none.
    *
-   * Not the effective mode. `noindex` and the feed switch are controls on this
-   * same page, so folding them in here would hand the browser a value that is
-   * already stale by the first click; the component applies them itself.
+   * Not the effective mode. `noindex` is a control on this same page, so
+   * folding it in here would hand the browser a value that is already stale by
+   * the first click; the component applies it, and the rest of the rules,
+   * itself.
    */
   discoverDefault: DiscoverSetting | "";
   /** The directory's own pages, or `null` when none is configured. */
@@ -152,8 +150,9 @@ export function GeneralContent({
   const discoverCopy = getDiscoverCopy(i18n);
 
   const labels = JSON.stringify({
-    // The component finds the name and the rules in the help line to make
-    // them links, so it gets them on their own as well as inside the line.
+    // The component finds the name and the rules in the help line (and the
+    // name in the demo notice that replaces it) to make them links, so it gets
+    // them on their own as well as inside the lines.
     discoverName: discoverCopy.name,
     discoverRules: discoverCopy.rules,
     discoverEnabled: discoverCopy.label,
@@ -415,10 +414,11 @@ export function GeneralContent({
     ),
     discoverDemoLocked: i18n._(
       msg({
-        message: "Demo sites are never listed in Discover.",
+        message: "Demo sites are never listed in {name}.",
         comment:
-          "@context: Help text explaining that Discover is locked off in demo mode",
+          "@context: Help text under the Jant Discover checkbox explaining that Discover is locked off in demo mode, shown in place of the usual help line. {name} is the directory's name and is rendered as the link to it, so keep it as one run of text.",
       }),
+      { name: discoverCopy.name },
     ),
     discoverFeedsOffLocked: i18n._(
       msg({
@@ -534,26 +534,6 @@ export function GeneralContent({
           ),
         );
       }
-    }
-
-    // A site that stored `featured` under an older release: the directory
-    // reads only its featured feed, on every list. The box still reads as on,
-    // and only the owner ticking it again widens what the directory may show.
-    if (
-      discoverStatus.declaredMode === "featured" &&
-      discoverStatus.publicPostCount > 0 &&
-      discoverStatus.featuredPostCount === 0
-    ) {
-      statusLines.push(
-        i18n._(
-          msg({
-            message:
-              "This site still limits Discover to featured posts, and no post is marked Featured, so your feed carries nothing to show. Untick and tick the box to let Discover read every public post.",
-            comment:
-              "@context: Discover status line for a site that chose the old featured-only mode and has no featured posts. Says how to move to the current setting, which reads every public post.",
-          }),
-        ),
-      );
     }
 
     if (!discoverStatus.established) {

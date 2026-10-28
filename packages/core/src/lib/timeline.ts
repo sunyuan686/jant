@@ -16,7 +16,7 @@ import type { AppVariables } from "../types/app-context.js";
 import { buildMediaMap } from "./media-helpers.js";
 import { createMediaContext, resolveDraftTailId, toPostView } from "./view.js";
 import { getViewLang } from "./view-language.js";
-import { toPublicPath } from "./url.js";
+import { getPostPath, toPublicPath } from "./url.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
@@ -46,6 +46,11 @@ export interface TimelineResult {
 interface CuratedThreadSource {
   posts: Array<{ post: Post; position: number }>;
   highlightedPostIds: ReadonlySet<string>;
+  /**
+   * The first Post of each hidden run, keyed by the shown Post it follows —
+   * where that run's gap link points.
+   */
+  gapTargets: ReadonlyMap<string, Pick<Post, "id" | "slug">>;
 }
 
 interface CuratedThreadDisplayOptions {
@@ -53,6 +58,27 @@ interface CuratedThreadDisplayOptions {
   /** Visually focus the newest Post when the Thread itself is the selection. */
   highlightLatestPost?: boolean;
   showContextRatings: boolean;
+}
+
+/**
+ * Where a gap link points: the first post the gap hides, at its permalink.
+ *
+ * @param target - The first hidden post
+ * @param aliasesMap - Custom paths by post ID, `paths.getPostAliases()`'s
+ * @param sitePathPrefix - Public site path prefix
+ * @returns Public path of the post
+ * @example
+ * toGapHref({ id: "pst_…", slug: "abc12" }, new Map(), ""); // "/abc12"
+ */
+function toGapHref(
+  target: Pick<Post, "id" | "slug">,
+  aliasesMap: ReadonlyMap<string, string[]>,
+  sitePathPrefix: string | undefined,
+): string {
+  return toPublicPath(
+    getPostPath(target.slug, aliasesMap.get(target.id)?.[0]),
+    sitePathPrefix,
+  );
 }
 
 async function buildTimelineItems(
@@ -69,14 +95,14 @@ async function buildTimelineItems(
   const threadIds = posts.map((p) => p.threadId);
   const [
     rawMediaMap,
-    collectionsMap,
+    collectionsByThread,
     threadContexts,
     aliasesMap,
     publishedTails,
     draftInclusiveTails,
   ] = await Promise.all([
     c.var.services.media.getByPostIds(postIds),
-    c.var.services.collections.getCollectionsByPostIds(postIds),
+    c.var.services.collections.getCollectionsByThreadIds(threadIds),
     c.var.services.posts.getThreadTimelineContext(postIds),
     c.var.services.paths.getPostAliases(postIds),
     // The feed never renders drafts — it would turn a reading surface into a
@@ -101,7 +127,8 @@ async function buildTimelineItems(
     mediaCtx.sitePathPrefix,
   );
 
-  // Batch load media for the bounded leading/trailing thread context.
+  // Batch load media for the bounded leading/trailing thread context. Its
+  // collections are its Thread's, already loaded with the roots.
   const contextPostIds = new Set<string>();
   const gapPostIds = new Set<string>();
   for (const ctx of threadContexts.values()) {
@@ -113,7 +140,7 @@ async function buildTimelineItems(
     // only the alias that decides its address.
     if (ctx.firstHiddenReply) gapPostIds.add(ctx.firstHiddenReply.id);
   }
-  const [contextMediaMap, contextCollectionsMap, contextAliasesMap] =
+  const [contextMediaMap, contextAliasesMap] =
     contextPostIds.size > 0
       ? await Promise.all([
           c.var.services.media
@@ -128,9 +155,6 @@ async function buildTimelineItems(
                 mediaCtx.sitePathPrefix,
               ),
             ),
-          c.var.services.collections.getCollectionsByPostIds([
-            ...contextPostIds,
-          ]),
           // Gap targets ride along here and nowhere else: their address is
           // all the gap link needs.
           c.var.services.paths.getPostAliases([
@@ -138,7 +162,7 @@ async function buildTimelineItems(
             ...gapPostIds,
           ]),
         ])
-      : [new Map(), new Map(), new Map<string, string[]>()];
+      : [new Map(), new Map<string, string[]>()];
 
   const firstAlias = (id: string) => aliasesMap.get(id)?.[0];
   const firstContextAlias = (id: string) => contextAliasesMap.get(id)?.[0];
@@ -151,7 +175,7 @@ async function buildTimelineItems(
         mediaAttachments: mediaMap.get(post.id) ?? [],
       },
       mediaCtx,
-      collectionsMap.get(post.id),
+      collectionsByThread.get(post.threadId),
       undefined,
       firstAlias(post.id),
     );
@@ -175,7 +199,7 @@ async function buildTimelineItems(
             mediaAttachments: contextMediaMap.get(reply.id) ?? [],
           },
           mediaCtx,
-          contextCollectionsMap.get(reply.id),
+          collectionsByThread.get(reply.threadId),
           false,
           firstContextAlias(reply.id),
         );
@@ -190,7 +214,7 @@ async function buildTimelineItems(
           mediaAttachments: contextMediaMap.get(threadCtx.latestReply.id) ?? [],
         },
         mediaCtx,
-        contextCollectionsMap.get(threadCtx.latestReply.id),
+        collectionsByThread.get(threadCtx.latestReply.threadId),
         true, // latestReply is the last published post in the thread
         firstContextAlias(threadCtx.latestReply.id),
       );
@@ -203,11 +227,12 @@ async function buildTimelineItems(
           trailingReplies: trailingReplyViews,
           latestReply: latestReplyView,
           gapHref: threadCtx.firstHiddenReply
-            ? toPublicPath(
-                `/${firstContextAlias(threadCtx.firstHiddenReply.id) ?? threadCtx.firstHiddenReply.slug}`,
+            ? toGapHref(
+                threadCtx.firstHiddenReply,
+                contextAliasesMap,
                 mediaCtx.sitePathPrefix,
               )
-            : undefined,
+            : null,
           totalReplyCount: threadCtx.totalReplyCount,
         },
       };
@@ -253,14 +278,23 @@ async function buildCuratedThreadItems(
   }
 
   const mediaCtx = createMediaContext(c.var.appConfig);
-  const postIds = orderedThreads.flatMap((thread) =>
-    thread.posts.map(({ post }) => post.id),
+  const threadPosts = orderedThreads.flatMap((thread) =>
+    thread.posts.map(({ post }) => post),
   );
-  const [rawMediaMap, collectionsMap, curatedAliasesMap] = await Promise.all([
-    c.var.services.media.getByPostIds(postIds),
-    c.var.services.collections.getCollectionsByPostIds(postIds),
-    c.var.services.paths.getPostAliases(postIds),
-  ]);
+  const postIds = threadPosts.map((post) => post.id);
+  const gapPostIds = orderedThreads.flatMap((thread) =>
+    [...thread.gapTargets.values()].map((target) => target.id),
+  );
+  const [rawMediaMap, collectionsByThread, curatedAliasesMap] =
+    await Promise.all([
+      c.var.services.media.getByPostIds(postIds),
+      c.var.services.collections.getCollectionsByThreadIds(
+        threadPosts.map((post) => post.threadId),
+      ),
+      // Gap targets are never rendered, so they need only the alias that
+      // decides their address.
+      c.var.services.paths.getPostAliases([...postIds, ...gapPostIds]),
+    ]);
   const mediaMap = buildMediaMap(
     rawMediaMap,
     mediaCtx.r2PublicUrl,
@@ -272,7 +306,7 @@ async function buildCuratedThreadItems(
 
   return orderedThreads.reduce<TimelineItemView[]>((items, thread) => {
     const rootEntry = thread.posts[0];
-    if (!rootEntry || rootEntry.position !== 0) {
+    if (!rootEntry || rootEntry.post.id !== rootEntry.post.threadId) {
       return items;
     }
 
@@ -285,7 +319,7 @@ async function buildCuratedThreadItems(
           mediaAttachments: mediaMap.get(post.id) ?? [],
         },
         mediaCtx,
-        collectionsMap.get(post.id),
+        collectionsByThread.get(post.threadId),
         post.id === lastPostId,
         curatedAliasesMap.get(post.id)?.[0],
         post.id === post.threadId &&
@@ -301,17 +335,23 @@ async function buildCuratedThreadItems(
     const segments = renderedPosts.reduce<
       NonNullable<TimelineItemView["curatedThread"]>["segments"]
     >((items, renderedPost, segmentIndex) => {
-      const previousPosition =
-        segmentIndex === 0
-          ? undefined
-          : renderedPosts[segmentIndex - 1]?.position;
+      const previous =
+        segmentIndex === 0 ? undefined : renderedPosts[segmentIndex - 1];
+      const hiddenBeforeCount =
+        previous === undefined
+          ? renderedPost.position
+          : renderedPost.position - previous.position - 1;
+      const gapTarget =
+        previous && hiddenBeforeCount > 0
+          ? thread.gapTargets.get(previous.view.id)
+          : undefined;
 
       items.push({
         post: renderedPost.view,
-        hiddenBeforeCount:
-          previousPosition === undefined
-            ? renderedPost.position
-            : renderedPost.position - previousPosition - 1,
+        hiddenBeforeCount,
+        gapHref: gapTarget
+          ? toGapHref(gapTarget, curatedAliasesMap, mediaCtx.sitePathPrefix)
+          : null,
         highlighted:
           thread.highlightedPostIds.has(renderedPost.view.id) ||
           (display.highlightLatestPost === true &&
@@ -485,6 +525,9 @@ export async function assembleFeaturedTimeline(
       {
         posts: thread.posts,
         highlightedPostIds: new Set(thread.featuredPostIds),
+        gapTargets: new Map(
+          thread.gapTargets.map((target) => [target.afterPostId, target]),
+        ),
       },
     ]),
   );
@@ -560,6 +603,8 @@ export async function assembleCollectionTimeline(
       {
         posts: thread.map((post, position) => ({ post, position })),
         highlightedPostIds: new Set<string>(),
+        // Every post is shown, so there is no gap to point anywhere.
+        gapTargets: new Map(),
       },
     ]),
   );

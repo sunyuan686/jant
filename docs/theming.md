@@ -47,21 +47,24 @@ Most color variables come in pairs: a background color and its matching foregrou
 
 These derive from the core palette by default. Built-in themes set `--site-accent` independently; if you only override the core palette by hand, `--site-accent` falls back to `--primary`.
 
-| Variable                | Default                     | What it controls                                 |
-| ----------------------- | --------------------------- | ------------------------------------------------ |
-| `--site-accent`         | `var(--primary)`            | Editorial accent (links, thread connector dots)  |
-| `--site-accent-text`    | `var(--primary-foreground)` | Text on the site accent color                    |
-| `--site-page-bg`        | `var(--background)`         | Overall page background                          |
-| `--site-elevated-bg`    | `var(--background)`         | Main content area and overlays (menus, popovers) |
-| `--site-nav-hover-bg`   | `var(--accent)`             | Navigation hover background                      |
-| `--site-text-primary`   | `var(--foreground)`         | Primary text                                     |
-| `--site-text-secondary` | `var(--muted-foreground)`   | Secondary / caption text                         |
-| `--site-divider`        | `var(--border)`             | Content dividers                                 |
-| `--site-threadline`     | `var(--border)`             | Thread connection lines                          |
-| `--site-column-outline` | `var(--border)`             | Base color used to derive content block outlines |
-| `--site-media-outline`  | `var(--border)`             | Image / video border                             |
-| `--search-mark-bg`      | Built-in yellow             | Search result highlight background               |
-| `--search-mark-color`   | Built-in dark text          | Search result highlight text                     |
+| Variable                        | Default                              | What it controls                                                                                          |
+| ------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `--site-accent`                 | `var(--primary)`                     | Editorial accent: quote marks, Thread connector dots, the tint of link cards, hover and focus rings       |
+| `--site-page-bg`                | `var(--background)`                  | Page background, and the surfaces that sit on it                                                          |
+| `--site-subtle-bg`              | `var(--accent)`                      | Soft fill for navigation hover, cards in the feed, and code blocks                                        |
+| `--site-text-primary`           | `var(--foreground)`                  | Primary text                                                                                              |
+| `--site-text-secondary`         | `var(--muted-foreground)`            | Secondary / caption text                                                                                  |
+| `--site-divider`                | `var(--border)`                      | Content dividers                                                                                          |
+| `--site-threadline`             | `var(--border)`                      | Thread connection lines                                                                                   |
+| `--site-reading-body`           | Derived from `--site-text-primary`   | Body text on a post's own page. Built-in themes set it, so changing `--foreground` alone doesn't reach it |
+| `--site-reading-caption`        | Derived from the text colors         | Captions and footnotes on a post's page                                                                   |
+| `--site-content-link`           | `inherit`                            | Link text in posts                                                                                        |
+| `--site-content-link-hover`     | `var(--site-text-primary)`           | Link text on hover                                                                                        |
+| `--site-content-link-underline` | Derived from `--site-text-secondary` | Link underline                                                                                            |
+| `--site-footnote-text`          | `var(--site-reading-caption)`        | Footnote text in the wide-screen rail                                                                     |
+| `--site-footnote-marker`        | Derived from `--site-text-secondary` | Footnote numbers in the rail                                                                              |
+| `--site-search-mark-bg`         | Built-in yellow                      | Search result highlight background                                                                        |
+| `--site-search-mark-color`      | Built-in dark text                   | Search result highlight text                                                                              |
 
 ### Example: custom primary and site accent
 
@@ -72,14 +75,22 @@ These derive from the core palette by default. Built-in themes set `--site-accen
   --site-accent: oklch(0.56 0.06 240);
 }
 
+:root[data-theme-mode="dark"] {
+  --primary: oklch(0.79 0.06 255);
+  --primary-foreground: oklch(0.19 0.01 255);
+  --site-accent: oklch(0.74 0.07 240);
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme-mode="light"]) {
     --primary: oklch(0.79 0.06 255);
     --primary-foreground: oklch(0.19 0.01 255);
     --site-accent: oklch(0.74 0.07 240);
   }
 }
 ```
+
+The two dark rules are explained under [Dark mode](#dark-mode).
 
 ### Example: colored thread connectors
 
@@ -100,17 +111,15 @@ These derive from the core palette by default. Built-in themes set `--site-accen
 | `--font-serif`        | System serif + Noto fallback | Serif accent text                                                 |
 | `--font-blockquote`   | `inherit`                    | Blockquote font family; defaults to the body font                 |
 | `--font-mono`         | System monospace             | Code blocks                                                       |
+| `--type-body-size`    | Content body text size       | Post body text; footnote references and code scale from it        |
 | `--type-footnote-ref` | `75%` of content body text   | Inline footnote reference size                                    |
-| `--fw-light`          | 300                          | Light accents                                                     |
 | `--fw-regular`        | 400                          | Body text                                                         |
 | `--fw-medium`         | 500                          | Labels, active nav                                                |
 | `--fw-semibold`       | 600                          | Headings, buttons                                                 |
-| `--fw-bold`           | 700                          | Strong emphasis                                                   |
-| `--fw-extrabold`      | 800                          | Site logo                                                         |
 
 When you pick a font theme in **Settings > Font Theme**, `--font-heading`, `--font-body`, and a few related font weights switch with it. `--font-ui` is intentionally left out — buttons, navigation, and other interface text always stay system sans-serif for legibility. You can still override any variable in Custom CSS for further tuning.
 
-To use external font sources like Google Fonts, load the font files first via [code injection](code-injection.md#recipe-custom-fonts), then point the variables at the new fonts in Custom CSS.
+To use external font sources like Google Fonts, load the font files first via [code injection](code-injection.md#custom-fonts), then point the variables at the new fonts in Custom CSS.
 
 ### Example: lighter font weights
 
@@ -123,19 +132,20 @@ To use external font sources like Google Fonts, load the font files first via [c
 
 ## Layout variables
 
-| Variable                  | Default  | What it controls                    |
-| ------------------------- | -------- | ----------------------------------- |
-| `--content-max-width`     | `42rem`  | Maximum content width               |
-| `--site-padding`          | `1.5rem` | Horizontal padding                  |
-| `--content-gap`           | `1rem`   | Spacing between feed items          |
-| `--layout-sidenote-width` | `50%`    | Wide-screen footnote rail width     |
-| `--layout-sidenote-gap`   | `10%`    | Gap between prose and footnote rail |
+| Variable                  | Default  | What it controls                                        |
+| ------------------------- | -------- | ------------------------------------------------------- |
+| `--layout-body-max-width` | `1088px` | Widest the page frame gets: header, content, and footer |
+| `--site-feed-rhythm`      | `4.4rem` | Space between posts in a list, and above the first one  |
+| `--layout-sidenote-width` | `50%`    | Wide-screen footnote rail width                         |
+| `--layout-sidenote-gap`   | `10%`    | Gap between prose and footnote rail                     |
 
 ### Example: wider content area
 
+On a wide screen the reading column is a fixed share of the frame, so a wider frame gives it more room. Below `1024px` the column keeps a `35rem` measure whatever the frame.
+
 ```css
 :root {
-  --content-max-width: 55rem;
+  --layout-body-max-width: 1280px;
 }
 ```
 
@@ -172,52 +182,39 @@ endnotes and assistive technology, and becomes visible if a keyboard user
 focuses it.
 
 Theme selectors should prefer `.footnote-endnotes`, `.footnote-list`,
-`.footnote`, `.footnote-ref`, and `.footnote-backlinks`. Fragment IDs are
-opaque and may change between HTML contract versions; never style or parse
-their compact hash. The older `.margin-toggle + .sidenote` trio is retained
-only for legacy stored HTML.
+`.footnote`, `.footnote-ref`, `.footnote-backlinks`, and `.footnote-backref`,
+the arrow link back to a reference. Fragment IDs are opaque and may change in
+any release; never style or parse their compact hash.
 
-## Cards and media
+## Media and avatars
 
-| Variable              | Default  | What it controls            |
-| --------------------- | -------- | --------------------------- |
-| `--card-radius`       | `0`      | Post card corner radius     |
-| `--card-padding`      | `1rem`   | Post card inner padding     |
-| `--card-border-width` | `0`      | Post card border width      |
-| `--card-shadow`       | `none`   | Post card shadow            |
-| `--media-radius`      | `0.5rem` | Image / video corner radius |
-| `--avatar-size`       | `28px`   | Header avatar size          |
-| `--avatar-radius`     | `50%`    | Avatar corner radius        |
-
-### Example: turn posts into cards
-
-```css
-:root {
-  --card-radius: 12px;
-  --card-padding: 1.5rem;
-  --card-border-width: 1px;
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-}
-```
+| Variable          | Default  | What it controls            |
+| ----------------- | -------- | --------------------------- |
+| `--media-radius`  | `0.5rem` | Image / video corner radius |
+| `--avatar-size`   | `28px`   | Header avatar size          |
+| `--avatar-radius` | `50%`    | Avatar corner radius        |
 
 ## Data attributes
 
 You can target specific pages or elements with these data attributes when writing selectors:
 
-| Attribute            | Where it appears | Values                                                                       |
-| -------------------- | ---------------- | ---------------------------------------------------------------------------- |
-| `data-theme`         | `<html>`         | Active color theme id (`tufte`, `linen`, `frost`, …)                         |
-| `data-theme-mode`    | `<html>`         | `auto`, `light`, `dark`                                                      |
-| `data-page`          | Page wrapper     | `home`, `post`, `search`, `archive`, `collection`, `collections`, `featured` |
-| `data-post`          | `<article>`      | Present on every post                                                        |
-| `data-format`        | `<article>`      | `note`, `link`, `quote`                                                      |
-| `data-post-slug`     | `<article>`      | Post slug (handy for debugging and per-post styling)                         |
-| `data-post-pinned`   | `<article>`      | Present on pinned posts                                                      |
-| `data-post-featured` | `<article>`      | Present on Featured posts                                                    |
-| `data-feed`          | Feed container   | Wraps the post list                                                          |
-| `data-authenticated` | `<body>`         | Present when logged in                                                       |
+| Attribute            | Where it appears    | Values                                                                                    |
+| -------------------- | ------------------- | ----------------------------------------------------------------------------------------- |
+| `data-theme`         | `<html>`            | Active color theme id (`tufte`, `linen`, `frost`, …)                                      |
+| `data-theme-mode`    | `<html>`            | `auto`, `light`, `dark`                                                                   |
+| `data-page`          | `<body>`            | `home`, `post`, `search`, `archive`, `collection`, `collections`, `featured`, `subscribe` |
+| `data-post`          | `<article>`         | Present on every post                                                                     |
+| `data-format`        | `<article>`         | `note`, `link`, `quote`                                                                   |
+| `data-post-slug`     | `<article>`         | Post slug (handy for debugging and per-post styling)                                      |
+| `data-post-pinned`   | `<article>`         | Present on pinned posts                                                                   |
+| `data-post-featured` | `<article>`         | Present on Featured posts                                                                 |
+| `data-feed`          | Feed container      | Wraps the post list                                                                       |
+| `data-authenticated` | `<body>`            | Present when logged in                                                                    |
+| `data-post-end`      | After a post's page | Empty slot after the post, where [code injection](code-injection.md) mounts comments      |
 
-Inside each post there are three more markers: `data-post-body` (body container), `data-post-meta` (date, tags, and other metadata), and `data-post-media` (image / video area). Together they let you style any one section of a post on its own.
+Inside each post there are four more markers: `data-post-body` (the body, or a quote's commentary), `data-post-quote` (a quote's quoted text), `data-post-meta` (the date and the collections), and `data-post-media` (the attachments: images, video, audio, documents, and text files). Together they let you style any one section of a post on its own.
+
+Posts in the feed, on a post's page, and in a collection carry every attribute and marker above. A search result carries the `<article>` attributes but none of the markers inside: it shows a snippet instead of the post. A tile in the archive's grid view carries `data-post` and `data-format` only.
 
 ### Example: dividers only on the home page
 
@@ -231,7 +228,7 @@ Inside each post there are three more markers: `data-post-body` (body container)
 ### Example: style by format
 
 ```css
-[data-format="quote"] [data-post-body] {
+[data-post-quote] {
   font-family: var(--font-serif);
   font-style: italic;
 }
@@ -254,28 +251,34 @@ Inside each post there are three more markers: `data-post-body` (body container)
 
 ## Dark mode
 
-Jant follows the visitor's system preference (light / dark) automatically. To set values specifically for dark mode, use a media query:
+A site follows the visitor's system preference (light / dark) unless it is set to always light or always dark; `data-theme-mode` on `<html>` says which. A page is dark in two ways, so a dark value takes two rules:
 
 ```css
 :root {
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --site-threadline: oklch(0.8 0.05 250);
 }
 
+/* The site is set to dark */
+:root[data-theme-mode="dark"] {
+  --site-threadline: oklch(0.45 0.05 250);
+}
+
+/* The system is dark, and the site isn't set to light */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  :root:not([data-theme-mode="light"]) {
+    --site-threadline: oklch(0.45 0.05 250);
   }
 }
 ```
 
-A site can also be forced into dark mode (ignoring the system preference). To override colors in that case, use the `:root[data-theme-mode="dark"]` selector.
+Write the selectors as shown. The built-in theme uses the same ones, and custom CSS comes after it, so yours win. A plain `:root` inside the media query is less specific and loses to the theme's dark values.
 
 ## Tips
 
-- Override variables first, write selectors second. Variables hold up better across future upgrades.
-- Custom CSS has the highest priority and overrides every variable defined by the built-in theme.
-- `oklch()` is convenient for color tuning. A common pattern: keep `--primary` saturated and stable for buttons; let `--site-accent` carry a softer tone for links and inline emphasis.
-- Test in both light and dark. If you override a color variable in `:root`, think about whether it also needs a matching override under `@media (prefers-color-scheme: dark)` or `:root[data-theme-mode="dark"]`.
+- Override variables first, write selectors second. Jant keeps the variables, data attributes, and classes on this page stable where it can, and a release that changes one says so in its release notes; see [Compatibility](compatibility.md). Jant's stylesheets define many more custom properties and class names; those are internal and can change in any release without notice.
+- Custom CSS comes after the built-in theme and uses the same selectors, so it overrides every variable the theme sets: `:root` for light values, the two rules under [Dark mode](#dark-mode) for dark ones.
+- `oklch()` is convenient for color tuning. A common pattern: keep `--primary` saturated and stable for buttons; let `--site-accent` carry a softer tone for quote marks and Thread connectors. Links take `--site-content-link`.
+- Test in both light and dark. A color set only in `:root` also applies in dark mode wherever neither the theme nor Jant sets a dark value for it.
 
 ## What's next
 

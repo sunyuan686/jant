@@ -10,6 +10,7 @@
 
 - [Introduction](overview.md)
 - [Getting started](getting-started.md)
+- [Install with an AI assistant](install.md)
 
 ## Run your site
 
@@ -17,6 +18,8 @@
 - [Deploy with Docker](deployment-docker.md)
 - [Use Hosted Jant](hosted.md)
 - [Configuration](configuration.md)
+- [Command line](cli.md)
+- [Upgrading](upgrading.md)
 
 ## Use your site
 
@@ -36,4 +39,6 @@
 ## Reference
 
 - [FAQ](faq.md)
+- [Compatibility](compatibility.md)
 - [API Reference](API.md)
+- [Reading a Jant feed](feed-reading.md)

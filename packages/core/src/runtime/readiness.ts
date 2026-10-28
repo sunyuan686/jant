@@ -1,10 +1,13 @@
 import { createDatabase, createNodeDatabase } from "../db/index.js";
+import { describePendingMigrations } from "../db/migration-status.js";
 import { sqliteSchemaBundle } from "../db/schema-bundle.js";
+import { getEnvValueIssues } from "../lib/env-values.js";
 import {
   getAuthSecretIssueKind,
   getAuthSecretReadinessError,
   getHostBasedStartupConfigurationIssues,
 } from "../lib/startup-config.js";
+import { CORE_VERSION } from "../lib/version.js";
 import { createSiteService } from "../services/site.js";
 import type { Bindings } from "../types/bindings.js";
 
@@ -15,6 +18,15 @@ export interface ReadinessCheckStatus {
 
 export interface InstanceReadinessResult {
   status: "ok" | "error";
+  /** The running build: the package version, then the build's commit id. */
+  version: string;
+  /**
+   * When the Node process started serving, in Unix seconds. With `version`,
+   * it lets a deploy check from outside that the instance answering is one
+   * started after the deploy, not an older one a rollback left running.
+   * Absent on Workers.
+   */
+  startedAt?: number;
   checks: {
     startupConfig: ReadinessCheckStatus;
     database: ReadinessCheckStatus;
@@ -45,6 +57,10 @@ function getStartupConfigurationReadiness(
     errors.push(`${issue.variable}: ${issue.message}`);
   }
 
+  for (const issue of getEnvValueIssues(env)) {
+    errors.push(issue.message);
+  }
+
   return errors.length > 0
     ? {
         ok: false,
@@ -58,6 +74,11 @@ async function getDatabaseReadiness(
 ): Promise<ReadinessCheckStatus> {
   try {
     if (env.NODE_DATABASE?.db) {
+      const pending = (await env.NODE_DATABASE.pendingMigrations?.()) ?? [];
+      if (pending.length > 0) {
+        return { ok: false, error: describePendingMigrations(pending) };
+      }
+
       const siteService = createSiteService(
         env.NODE_DATABASE.db,
         env.NODE_DATABASE.schema,
@@ -102,7 +123,9 @@ async function getDatabaseReadiness(
  *
  * This is intentionally stricter than `/healthz`: it verifies startup
  * configuration and performs a lightweight database/schema query against the
- * shared `site` table through the service layer.
+ * shared `site` table through the service layer. On Node it also fails while
+ * the database has schema migrations the running code bundles but the
+ * database hasn't applied.
  */
 export async function getInstanceReadiness(
   env: Pick<
@@ -117,6 +140,7 @@ export async function getInstanceReadiness(
     | "INTERNAL_ADMIN_TOKEN"
     | "NODE_DATABASE"
     | "NODE_SQLITE"
+    | "NODE_STARTED_AT"
     | "SITE_RESOLUTION_MODE"
   >,
 ): Promise<InstanceReadinessResult> {
@@ -125,6 +149,10 @@ export async function getInstanceReadiness(
 
   return {
     status: startupConfig.ok && database.ok ? "ok" : "error",
+    version: CORE_VERSION,
+    ...(env.NODE_STARTED_AT === undefined
+      ? {}
+      : { startedAt: env.NODE_STARTED_AT }),
     checks: {
       startupConfig,
       database,

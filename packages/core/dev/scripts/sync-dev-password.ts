@@ -1,62 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { and, asc, eq } from "drizzle-orm";
 import { hashPassword } from "../../src/lib/password.js";
 import { now } from "../../src/lib/time.js";
-import {
-  applyNodeRuntimeEnvDefaults,
-  createNodeBindings,
-} from "../../src/node/request-handler.js";
-import type { Bindings } from "../../src/types/bindings.js";
-import { DEFAULT_DEV_PASSWORD, DEV_EMAIL } from "./dev-auth-db.mjs";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const coreDir = resolve(__dirname, "../..");
-const envPath = resolve(coreDir, ".env.node");
-const defaultDataDir = resolve(coreDir, "data");
-
-function readEnvFile(): Record<string, string> {
-  if (!existsSync(envPath)) {
-    return {};
-  }
-
-  const lines = readFileSync(envPath, "utf8").split(/\r?\n/);
-  const values: Record<string, string> = {};
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
-    }
-
-    const separatorIndex = line.indexOf("=");
-    if (separatorIndex <= 0) {
-      continue;
-    }
-
-    const key = line.slice(0, separatorIndex).trim();
-    if (!key) {
-      continue;
-    }
-
-    let value = line.slice(separatorIndex + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-
-    values[key] = value;
-  }
-
-  return values;
-}
+import { createNodeBindings } from "../../src/node/request-handler.js";
+import { loadNodeDevEnv, resolveNodeDevPassword } from "../node-dev-site.js";
+import { describeScriptEnvPath } from "../script-env.js";
 
 function printHelp() {
-  console.log("Usage: sync-dev-password.ts [password]");
+  console.log(
+    "Usage: node dev/run-script.mjs dev/scripts/sync-dev-password.ts [password]",
+  );
   console.log("");
   console.log(
     "Update the local Node admin password to match DEMO_PASSWORD in .env.node,",
@@ -69,8 +22,9 @@ function printHelp() {
   console.log("Resolution order: CLI arg, $DEMO_PASSWORD, .env.node, default.");
 }
 
-async function main() {
+export default async function main(args: string[]) {
   const { positionals, values } = parseArgs({
+    args,
     allowPositionals: true,
     options: {
       help: { type: "boolean", short: "h" },
@@ -82,26 +36,10 @@ async function main() {
     return;
   }
 
-  const envFileValues = readEnvFile();
-  const password =
-    positionals[0]?.trim() ||
-    process.env.DEMO_PASSWORD?.trim() ||
-    envFileValues.DEMO_PASSWORD?.trim() ||
-    DEFAULT_DEV_PASSWORD;
+  const devEnv = loadNodeDevEnv();
+  const password = resolveNodeDevPassword(devEnv, positionals[0]);
 
-  const env = {
-    ...envFileValues,
-    ...process.env,
-    DEMO_EMAIL: process.env.DEMO_EMAIL || envFileValues.DEMO_EMAIL || DEV_EMAIL,
-    DEMO_PASSWORD: password,
-  } as Bindings;
-
-  applyNodeRuntimeEnvDefaults(env, {
-    cwd: coreDir,
-    defaultDataDir,
-  });
-
-  const { bindings, close } = await createNodeBindings(env);
+  const { bindings, close } = await createNodeBindings(devEnv.env);
   try {
     const nodeDatabase = bindings.NODE_DATABASE;
     if (!nodeDatabase) {
@@ -130,7 +68,7 @@ async function main() {
     if (!target) {
       console.error("No credential user found in the local Node database.");
       console.error(
-        "Run `mise run db-node-rebuild-demo` first to bootstrap an admin.",
+        "Run `mise run db-node-bootstrap-shell` first to set up the dev account.",
       );
       process.exit(1);
     }
@@ -144,12 +82,10 @@ async function main() {
 
     console.log("");
     console.log("Local Node admin password synced.");
-    console.log(`  Env file: ${envPath}`);
+    console.log(`  Env file: ${describeScriptEnvPath(devEnv.envPath)}`);
     console.log(`  Email:    ${target.email}`);
     console.log(`  Password: ${password}`);
   } finally {
     await close();
   }
 }
-
-await main();

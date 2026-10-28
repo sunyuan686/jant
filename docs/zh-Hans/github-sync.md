@@ -10,6 +10,8 @@ Jant 是 source of truth。GitHub 仓库是 Jant 内容的镜像，外加一个�
 
 **Jant → GitHub**：当你创建、编辑或删除一篇帖子，Jant 把这次变更以带 YAML front matter 的 Markdown 文件推送到你的仓库。Thread 回复各自成为独立文件，嵌套在根帖目录下。媒体不进入仓库，仅以 URL 引用。
 
+所有帖子都会推送，包括草稿和私密帖子。它们带着 `draft: true`，用这个仓库构建 Hugo 站点时不会生成页面，但能读这个仓库的人都能看到它们。
+
 **GitHub → Jant**：当你在 GitHub 上编辑一个 Markdown 文件并 push，webhook 通知 Jant，Jant 按 front matter 里的 `slug` 字段匹配到已有帖子，更新内容。**webhook 只更新已存在帖子的内容字段——在 GitHub 上新增或删除 `.md` 文件不会在 Jant 里创建或删除帖子。** 这是为了避免误删（仓库被清空也不会拖垮站点）。
 
 Jant 自己产生的 commit 会带上 `[jant-sync]` 标记。带这个标记的 webhook 会被忽略，所以变更不会来回反弹。
@@ -35,7 +37,7 @@ Jant 自己产生的 commit 会带上 `[jant-sync]` 标记。带这个标记的 
 
 在 [github.com/settings/tokens?type=beta](https://github.com/settings/tokens?type=beta) 创建 token，建议把作用范围限定到单个仓库，只勾选 Contents 和 Webhooks 两项权限。
 
-1. 在 GitHub 上创建一个仓库（公开私有都行）
+1. 在 GitHub 上创建一个仓库。有草稿或私密帖子的话，用私有仓库：它们也会被推送
 2. 在 Jant 里打开 **Settings > Site > GitHub Sync**
 3. 粘贴 token，输入仓库 `owner/repo`
 4. 点击 **Connect**
@@ -49,6 +51,8 @@ Jant 会校验 token、保存配置，并在仓库里创建 webhook。不需要�
 1. 在 Jant 里打开 **Settings > Site > GitHub Sync**
 2. 点击 **Install GitHub App**，跳转到 GitHub 选择 App 可访问的仓库
 3. 安装完成后回到 Jant，选要同步的仓库，点 **Connect**
+
+一个 GitHub 账号只会安装一次这个 App，所以第二个站点连接同一个账号时不再跳转 GitHub：**Install GitHub App** 会直接打开仓库选择器，列出你已经授权过的账号。每个站点同步各自的仓库。要换一个账号，在选择器里用 **Install on another account**。
 
 ## 完整同步
 
@@ -66,6 +70,8 @@ Jant 会校验 token、保存配置，并在仓库里创建 webhook。不需要�
 - `.jant-sync` —— 所有权标记
 
 这些路径里 Jant 不再生成的文件会在下一次 push 时被删除。例如，在 Jant 里删除一篇帖子，下一次同步时 GitHub 上对应的 bundle 也会被删掉。
+
+`wrangler.jsonc` 是个例外：仓库里没有时 Jant 写入一次，之后不再改动。它的 Worker 名称默认取仓库名，和 Cloudflare 从仓库导入时给 Worker 起的名字一致。Worker 叫别的名字时，手工改过的名称在后续推送中会保留，见[部署到 Cloudflare Workers](export-and-import.md#部署到-cloudflare-workers)。
 
 仓库里其他文件 Jant 不会动。要自定义站点：
 

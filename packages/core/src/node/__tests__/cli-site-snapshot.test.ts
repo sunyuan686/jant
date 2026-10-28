@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  listInstalledSchemaTags,
+  readInstalledJantVersion,
+} from "../../../bin/lib/site-snapshot.js";
 import { createLocalDriver } from "../../lib/storage.js";
 import { migrate } from "../runtime.js";
 import type { Bindings } from "../../types.js";
@@ -244,6 +248,8 @@ describe("jant site snapshot export/import", () => {
       format: "jant-site-snapshot",
       version: 2,
       dialect: "sqlite",
+      jant: readInstalledJantVersion(),
+      schema: listInstalledSchemaTags("sqlite").at(-1),
       site: { id: SNAPSHOT_SITE_ID, key: SNAPSHOT_SITE_KEY },
     });
     expect(existsSync(join(snapshotPath, "storage-manifest.json"))).toBe(false);
@@ -542,6 +548,63 @@ describe("jant site snapshot export/import", () => {
     }
   });
 
+  it("replaces a setting a later version's snapshot carries and this one doesn't list", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jant-site-snapshot-upsert-"));
+    tempDirs.push(root);
+    const targetDbPath = join(root, "target.sqlite");
+    const snapshotPath = join(root, "snapshot");
+    await migrate({ DATABASE_URL: `file:${targetDbPath}` } as Bindings);
+
+    const sqlite = new Database(targetDbPath);
+    try {
+      // DISCOVER isn't among the settings this version's snapshot restores,
+      // so `--replace` leaves the target's row in place.
+      sqlite.exec(`
+        INSERT INTO "site" ("id", "key", "status", "created_at", "updated_at")
+        VALUES ('${SNAPSHOT_SITE_ID}', '${SNAPSHOT_SITE_KEY}', 'active', 1, 1);
+        INSERT INTO "site_setting" ("site_id", "key", "value", "updated_at")
+        VALUES ('${SNAPSHOT_SITE_ID}', 'DISCOVER', 'off', 1);
+      `);
+    } finally {
+      sqlite.close();
+    }
+
+    await mkdir(snapshotPath, { recursive: true });
+    await writeFile(
+      join(snapshotPath, "meta.json"),
+      JSON.stringify({
+        format: "jant-site-snapshot",
+        version: 2,
+        dialect: "sqlite",
+        site: { id: SNAPSHOT_SITE_ID, key: SNAPSHOT_SITE_KEY },
+      }),
+    );
+    const { SNAPSHOT_CONFLICT_CLAUSES } =
+      await import("../../../bin/lib/site-snapshot.js");
+    await writeFile(
+      join(snapshotPath, "db.sql"),
+      `INSERT INTO "site_setting" ("site_id", "key", "value", "updated_at") VALUES('${SNAPSHOT_SITE_ID}', 'DISCOVER', 'latest', 2) ${SNAPSHOT_CONFLICT_CLAUSES.site_setting};\n`,
+    );
+
+    useLocalSnapshotRuntime(`file:${targetDbPath}`, join(root, "target-media"));
+    const { run: runImport } =
+      await import("../../../bin/commands/site/snapshot/import.js");
+    await runImport(["--path", snapshotPath, "--replace"]);
+
+    const verifySqlite = new Database(targetDbPath, { readonly: true });
+    try {
+      expect(
+        verifySqlite
+          .prepare(
+            `SELECT "value" FROM "site_setting" WHERE "site_id" = ? AND "key" = 'DISCOVER'`,
+          )
+          .get(SNAPSHOT_SITE_ID),
+      ).toEqual({ value: "latest" });
+    } finally {
+      verifySqlite.close();
+    }
+  });
+
   it("skips downloading storage objects when --skip-objects is passed", async () => {
     const root = await mkdtemp(
       join(tmpdir(), "jant-site-snapshot-skip-objects-"),
@@ -778,6 +841,73 @@ describe("jant site snapshot export/import", () => {
 
     // Target storage still has the pre-existing file (we didn't try to upload).
     expect(await targetStorage.get(SNAPSHOT_MEDIA_KEY)).not.toBeNull();
+  });
+
+  // The snapshot was exported where the bytes lived in R2; this import puts
+  // them in local storage. Rows left saying `r2` would look for R2_PUBLIC_URL,
+  // miss the avatar's existing row on replacement, and never purge their trash.
+  it("records imported media under the storage the import wrote it to", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jant-site-snapshot-provider-"));
+    tempDirs.push(root);
+
+    const targetDbPath = join(root, "target.sqlite");
+    const targetStoragePath = join(root, "target-media");
+    const snapshotPath = join(root, "snapshot");
+
+    await migrate({ DATABASE_URL: `file:${targetDbPath}` } as Bindings);
+    const targetSqlite = new Database(targetDbPath);
+    try {
+      targetSqlite.exec(`
+        INSERT INTO "site" ("id", "key", "status", "created_at", "updated_at")
+        VALUES ('${SNAPSHOT_SITE_ID}', '${SNAPSHOT_SITE_KEY}', 'active', 1774009000, 1774009000);
+      `);
+    } finally {
+      targetSqlite.close();
+    }
+
+    await mkdir(
+      join(snapshotPath, "objects", "media", SNAPSHOT_SITE_ID, "files"),
+      {
+        recursive: true,
+      },
+    );
+    await writeFile(join(snapshotPath, "objects", SNAPSHOT_MEDIA_KEY), "png");
+    await writeFile(
+      join(snapshotPath, "meta.json"),
+      JSON.stringify({
+        format: "jant-site-snapshot",
+        version: 2,
+        dialect: "sqlite",
+        site: { id: SNAPSHOT_SITE_ID, key: SNAPSHOT_SITE_KEY },
+      }),
+    );
+    await writeFile(
+      join(snapshotPath, "db.sql"),
+      `INSERT INTO "media" ("id", "site_id", "post_id", "filename", "original_name", "mime_type", "size", "storage_key", "provider", "position", "media_kind", "created_at", "updated_at") VALUES('${SNAPSHOT_MEDIA_ID}', '${SNAPSHOT_SITE_ID}', NULL, '${SNAPSHOT_MEDIA_ID}.png', 'sample.png', 'image/png', 3, '${SNAPSHOT_MEDIA_KEY}', 'r2', 'a0', 'image', 1774009200, 1774009200);\n`,
+    );
+
+    useLocalSnapshotRuntime(`file:${targetDbPath}`, targetStoragePath);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { run: runImport } =
+      await import("../../../bin/commands/site/snapshot/import.js");
+    await runImport(["--path", snapshotPath, "--replace"]);
+
+    const verifySqlite = new Database(targetDbPath, { readonly: true });
+    try {
+      expect(
+        verifySqlite
+          .prepare(`SELECT "provider" FROM "media" WHERE "id" = ?`)
+          .pluck()
+          .get(SNAPSHOT_MEDIA_ID),
+      ).toBe("local");
+    } finally {
+      verifySqlite.close();
+    }
+    expect(
+      await createLocalDriver({ rootPath: targetStoragePath }).get(
+        SNAPSHOT_MEDIA_KEY,
+      ),
+    ).not.toBeNull();
   });
 
   it("requires --replace for snapshot import", async () => {

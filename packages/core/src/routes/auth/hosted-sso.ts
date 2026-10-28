@@ -8,7 +8,8 @@ import {
   getHostedControlPlaneSsoSecret,
 } from "../../lib/env.js";
 import { DomainError, NotFoundError } from "../../lib/errors.js";
-import { toPublicPath } from "../../lib/url.js";
+import { getClientIp } from "../../lib/rate-limit.js";
+import { isSafeInternalRedirect, toPublicPath } from "../../lib/url.js";
 import { renderHostedSsoExpiredPage } from "./hosted-sso-expired-page.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
@@ -17,11 +18,7 @@ const DEFAULT_REDIRECT_PATH = "/settings";
 const EXPIRED_SIGNIN_LINK_MESSAGE = "This sign-in link has expired.";
 
 function normalizeRedirectPath(path?: string): string {
-  if (!path || !path.startsWith("/") || path.startsWith("//")) {
-    return DEFAULT_REDIRECT_PATH;
-  }
-
-  return path;
+  return isSafeInternalRedirect(path) ? path : DEFAULT_REDIRECT_PATH;
 }
 
 function getHostedControlPlaneReturnTarget(env: object | undefined | null): {
@@ -58,9 +55,15 @@ hostedSsoRoutes.get("/__sso", async (c) => {
   }
 
   try {
+    const clientIp = getClientIp(c);
     const result = await c.var.hostedHandoff.completeFromSignedToken({
       currentSiteId: c.var.currentSite.id,
       token,
+      client: {
+        userAgent: c.req.header("User-Agent") ?? "",
+        ipAddress: clientIp === "unknown" ? "" : clientIp,
+        sessionToken: c.var.session?.session.token ?? null,
+      },
     });
 
     const authContext = await c.var.auth.$context;

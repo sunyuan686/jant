@@ -3,31 +3,34 @@
  */
 
 import { Hono, type Context } from "hono";
+import { buildFeedPostViews } from "../feed/feed.js";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { CollectionPage } from "../../ui/pages/CollectionPage.js";
-import type { CollectionPageProps } from "../../types.js";
+import type { CollectionPageProps, CollectionSortOrder } from "../../types.js";
 import { getNavigationData } from "../../lib/navigation.js";
 import { formatPageLabel, parsePageNumber } from "../../lib/pagination.js";
 import { buildPageTitle } from "../../lib/page-title.js";
 import { renderPublicPage } from "../../lib/render.js";
-import { CollectionSortOrderSchema } from "../../lib/schemas.js";
 import {
+  collectionSortParam,
+  isRatingSortOrder,
+  parseCollectionSortParam,
   resolveCollectionSortOrder,
   supportsCollectionRatingSort,
 } from "../../lib/collection-sort.js";
+import type { ResolvedCollectionSelection } from "../../services/collection.js";
 import { assembleCollectionTimeline } from "../../lib/timeline.js";
 import { defaultFeedRenderer } from "../../lib/feed.js";
 import {
   buildFeedDiscoveryFields,
-  getFeedEntryUpdatedAt,
+  buildFeedLabels,
   getFeedLimit,
   getRssPublishedBefore,
+  feedsPublished,
   renderFeed,
 } from "../../lib/feed-policy.js";
 import { toPlainText as markdownToPlainText } from "../../lib/markdown.js";
-import { buildMediaMap } from "../../lib/media-helpers.js";
-import { createMediaContext, toPostViews } from "../../lib/view.js";
 import { toAbsoluteSiteUrl } from "../../lib/url.js";
 import {
   buildLanguageSwitcher,
@@ -73,79 +76,110 @@ function buildCollectionSelectionTitle(
  * routes under `/collections/{slug1}+{slug2}`.
  *
  * @param c - Hono context
- * @param slugExpression - Collection slug (or `a+b` aggregate expression)
+ * @param slugExpressionOrSelection - Collection slug (or `a+b` aggregate
+ *   expression) to resolve, or a selection the caller already loaded
  * @param pagePathOverride - When set, used as the public page path instead of the derived canonical path
  */
 export async function renderCollectionPage(
   c: Context<Env>,
-  slugExpression: string,
+  slugExpressionOrSelection: string | ResolvedCollectionSelection,
   pagePathOverride?: string,
 ): Promise<Response | null> {
   const page = parsePageNumber(c.req.query("page"));
   const paginatedPageTitle = formatPageLabel(page);
+  const isAuthenticated = c.var.isAuthenticated;
 
-  const [selection, navData] = await Promise.all([
-    c.var.services.collections.resolveSelection(slugExpression),
-    getNavigationData(c),
-  ]);
+  // The chrome needs nothing from the selection, so it loads beside it. A
+  // page that ends early never awaits it, and must not leave its failure
+  // unhandled.
+  const navDataPromise = getNavigationData(c);
+  navDataPromise.catch(() => {});
+  const selection =
+    typeof slugExpressionOrSelection === "string"
+      ? await c.var.services.collections.resolveSelection(
+          slugExpressionOrSelection,
+        )
+      : slugExpressionOrSelection;
   if (!selection) return null;
 
   const canonicalPagePath =
     pagePathOverride ?? getCollectionSelectionPath(selection.slugExpression);
 
   // Only redirect for slug normalization when using the derived canonical path
-  if (!pagePathOverride && slugExpression !== selection.slugExpression) {
+  if (
+    !pagePathOverride &&
+    typeof slugExpressionOrSelection === "string" &&
+    slugExpressionOrSelection !== selection.slugExpression
+  ) {
     const search = new URL(c.req.url).search;
     return c.redirect(`${toViewPath(c, canonicalPagePath)}${search}`, 301);
   }
 
-  const sortQuery = c.req.query("sort");
-  const requestedSort =
-    sortQuery && CollectionSortOrderSchema.safeParse(sortQuery).success
-      ? CollectionSortOrderSchema.parse(sortQuery)
-      : undefined;
+  const requestedSort = parseCollectionSortParam(c.req.query("sort"));
   const primaryCollection = selection.collections[0];
   if (!primaryCollection) return null;
   const collectionIds = selection.collections.map(
     (collection) => collection.id,
   );
   const isAggregate = selection.collections.length > 1;
+  const requestedDefaultSort = isAggregate
+    ? "newest"
+    : primaryCollection.sortOrder;
+  const sortsFor = (showRatingSort: boolean) => {
+    const defaultSort = resolveCollectionSortOrder(
+      undefined,
+      requestedDefaultSort,
+      showRatingSort,
+    );
+    return {
+      defaultSort,
+      currentSort: resolveCollectionSortOrder(
+        requestedSort,
+        defaultSort,
+        showRatingSort,
+      ),
+    };
+  };
+  const timelineFor = (sortOrder: CollectionSortOrder) =>
+    assembleCollectionTimeline(c, {
+      collectionIds,
+      page,
+      isAuthenticated,
+      sortOrder,
+    });
 
-  const ratedThreadCount =
-    await c.var.services.posts.countCollectionThreadRootsUpToForCollections(
+  // Whether the rating sort is on offer depends on how many threads are
+  // rated, but the sort this page renders depends on that only when a rating
+  // sort is what was asked for. Any other sort starts the timeline beside the
+  // count instead of after it.
+  const ratedThreadCountPromise =
+    c.var.services.posts.countCollectionThreadRootsUpToForCollections(
       collectionIds,
       {
         status: "published",
-        excludePrivate: !navData.isAuthenticated,
+        excludePrivate: !isAuthenticated,
         hasRating: true,
       },
       2,
     );
+  const timelinePromise = isRatingSortOrder(
+    requestedSort ?? requestedDefaultSort,
+  )
+    ? ratedThreadCountPromise.then((count) =>
+        timelineFor(sortsFor(supportsCollectionRatingSort(count)).currentSort),
+      )
+    : timelineFor(sortsFor(false).currentSort);
+  const [
+    navData,
+    ratedThreadCount,
+    { items, totalCount: totalThreadCount, totalPages },
+  ] = await Promise.all([
+    navDataPromise,
+    ratedThreadCountPromise,
+    timelinePromise,
+  ]);
   const showRatingSort = supportsCollectionRatingSort(ratedThreadCount);
-  const requestedDefaultSort = isAggregate
-    ? "newest"
-    : primaryCollection.sortOrder;
-  const defaultSort = resolveCollectionSortOrder(
-    undefined,
-    requestedDefaultSort,
-    showRatingSort,
-  );
-  const currentSort = resolveCollectionSortOrder(
-    requestedSort,
-    defaultSort,
-    showRatingSort,
-  );
-
-  const {
-    items,
-    totalCount: totalThreadCount,
-    totalPages,
-  } = await assembleCollectionTimeline(c, {
-    collectionIds,
-    page,
-    isAuthenticated: navData.isAuthenticated,
-    sortOrder: currentSort,
-  });
+  const { defaultSort, currentSort } = sortsFor(showRatingSort);
   const i18n = getI18n(c);
   const selectionTitle = buildCollectionSelectionTitle(
     selection.collections,
@@ -181,6 +215,7 @@ export async function renderCollectionPage(
     : undefined;
 
   return renderPublicPage(c, {
+    page: "collection",
     title:
       page > 1
         ? buildPageTitle(selectionTitle, paginatedPageTitle, navData.siteName)
@@ -207,7 +242,10 @@ export async function renderCollectionPage(
         baseUrl={
           currentSort === defaultSort
             ? toViewPath(c, canonicalPagePath)
-            : toViewPath(c, `${canonicalPagePath}?sort=${currentSort}`)
+            : toViewPath(
+                c,
+                `${canonicalPagePath}?sort=${collectionSortParam(currentSort)}`,
+              )
         }
         currentSort={currentSort}
         defaultSort={defaultSort}
@@ -232,6 +270,9 @@ export async function renderCollectionFeed(
   slugExpression: string,
   feedPathOverride?: string,
 ): Promise<Response | null> {
+  // Null, which every caller answers with 404, as it does a selection that
+  // names nothing.
+  if (!feedsPublished(c)) return null;
   const selection =
     await c.var.services.collections.resolveSelection(slugExpression);
   if (!selection) return null;
@@ -271,87 +312,10 @@ export async function renderCollectionFeed(
     );
   const posts = entries.map((entry) => entry.post);
 
-  // Collect thread root IDs to batch-load replies
-  const rootIds = posts.filter((p) => p.threadId === p.id).map((p) => p.id);
-
-  const postIds = posts.map((post) => post.id);
-  const [threadMap, rawMediaMap, aliasesMap] = await Promise.all([
-    c.var.services.posts.getPublishedThreads(rootIds, { publishedBefore }),
-    c.var.services.media.getByPostIds(postIds),
-    c.var.services.paths.getPostAliases(postIds),
-  ]);
-
-  // Collect reply IDs for media loading
-  const replyIds: string[] = [];
-  for (const [rootId, thread] of threadMap) {
-    for (const reply of thread) {
-      if (reply.id !== rootId) {
-        replyIds.push(reply.id);
-      }
-    }
-  }
-
-  const replyMediaMap =
-    replyIds.length > 0
-      ? await c.var.services.media.getByPostIds(replyIds)
-      : new Map<
-          string,
-          typeof rawMediaMap extends Map<string, infer V> ? V : never
-        >();
-
-  const mediaCtx = createMediaContext(appConfig);
-
-  // Merge all media
-  const allRawMedia = new Map(rawMediaMap);
-  for (const [id, media] of replyMediaMap) {
-    allRawMedia.set(id, media);
-  }
-
-  const mediaMap = buildMediaMap(
-    allRawMedia,
-    mediaCtx.r2PublicUrl,
-    mediaCtx.imageTransformUrl,
-    mediaCtx.s3PublicUrl,
-    mediaCtx.localPublicUrl,
-    mediaCtx.sitePathPrefix,
-  );
-  const aliasMap = new Map<string, string>();
-  for (const [id, aliases] of aliasesMap) {
-    if (aliases[0]) aliasMap.set(id, aliases[0]);
-  }
-
-  const postViews = toPostViews(
-    posts.map((post) => ({
-      ...post,
-      mediaAttachments: mediaMap.get(post.id) ?? [],
-    })),
-    mediaCtx,
-    undefined,
-    aliasMap,
-  ).map((postView, index) => {
-    const post = posts[index] as (typeof posts)[number];
-    const collectedAt = entries[index]?.collectedAt;
-
-    // Build thread replies
-    const thread = threadMap.get(post.id);
-    const replies =
-      thread && thread.length > 1
-        ? toPostViews(
-            thread
-              .filter((r) => r.id !== post.id)
-              .map((r) => ({
-                ...r,
-                mediaAttachments: mediaMap.get(r.id) ?? [],
-              })),
-            mediaCtx,
-          )
-        : undefined;
-
-    return {
-      ...postView,
-      feedUpdatedAt: getFeedEntryUpdatedAt(post, thread, [collectedAt]),
-      threadReplies: replies,
-    };
+  const postViews = await buildFeedPostViews(c, posts, {
+    publishedBefore,
+    // A post a collection took in recently changed as far as its feed goes.
+    alsoUpdatedAt: (index) => [entries[index]?.collectedAt],
   });
   const i18n = getI18n(c);
   const selectionTitle = buildCollectionSelectionTitle(
@@ -361,6 +325,7 @@ export async function renderCollectionFeed(
 
   const xml = defaultFeedRenderer({
     ...buildFeedDiscoveryFields(c),
+    labels: buildFeedLabels(c),
     siteName,
     // Site name first, like every other feed: a reader's sidebar sorts by
     // feed title, so leading with the collection would scatter one site's
@@ -423,6 +388,7 @@ export async function renderCollectionSelectionRoute(
 export async function renderCollectionSelectionFeedRoute(
   c: Context<Env>,
 ): Promise<Response> {
+  if (!feedsPublished(c)) return c.notFound();
   const slugExpression = c.req.param("slug");
   if (!slugExpression) return c.notFound();
 

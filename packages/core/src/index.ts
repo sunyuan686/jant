@@ -1,84 +1,54 @@
 /**
  * Jant - A microblog system
  *
+ * The public JavaScript API is `createApp`. A site's entry point is
+ * `export default createApp();`, and every setting comes from the
+ * environment. Everything else under `src/` is internal and can change in
+ * any release; see `docs/compatibility.md`.
+ *
+ * This file is also where the package's published types come from: the
+ * library build writes `dist/index.d.ts` from it alone, so nothing here may
+ * name a type from another module. `App` is written out rather than taken
+ * from Hono for that reason, and so a site's types never depend on which
+ * Hono release Jant bundles.
+ *
  * @packageDocumentation
  */
 
-// Main app factory
-export { createApp } from "./app.js";
-export type { App, AppVariables } from "./app.js";
+import { createApp as createHonoApp } from "./app.js";
 
-// Types
-export type {
-  Format,
-  Status,
-  SortOrder,
-  NavItemType,
-  Bindings,
-  Post,
-  Media,
-  MediaAttachment,
-  PostWithMedia,
-  Collection,
-  NavItem,
-  CustomUrl,
-  Setting,
-  CreatePost,
-  UpdatePost,
-  PostAttachmentInput,
-  TextAttachmentContent,
-  CreateNavItem,
-  UpdateNavItem,
-  CreateCollection,
-  UpdateCollection,
-  AppConfig,
-  TextAttachmentContentFormat,
-  // View Model types
-  PostView,
-  MediaView,
-  NavItemView,
-  SearchResultView,
-  TimelineItemView,
-  ArchiveGroup,
-  // Page props
-  ArchiveFilters,
-  // Feed types
-  FeedData,
-  // Search
-  SearchResult,
-} from "./types.js";
+/**
+ * A Jant site, in the shape of a Cloudflare Workers module. The Node runtime
+ * and Docker image serve the same object.
+ */
+export interface App {
+  /**
+   * Answer one request.
+   *
+   * @param request - The incoming request
+   * @param env - The Worker's bindings, or the Node runtime's environment
+   * @param executionCtx - The Worker's execution context, when there is one
+   * @returns The response
+   */
+  fetch(
+    request: Request,
+    env?: unknown,
+    executionCtx?: unknown,
+  ): Response | Promise<Response>;
+}
 
-export type { ColorTheme } from "./ui/color-themes.js";
-
-export {
-  FORMATS,
-  STATUSES,
-  SORT_ORDERS,
-  NAV_ITEM_TYPES,
-  MAX_MEDIA_ATTACHMENTS,
-  MAX_PINNED_POSTS,
-  TEXT_ATTACHMENT_CONTENT_FORMATS,
-  MEDIA_KINDS,
-} from "./types.js";
-
-// Utilities
-export * as time from "./lib/time.js";
-export * as url from "./lib/url.js";
-export * as markdown from "./lib/markdown.js";
-
-// View Model conversion utilities
-export {
-  createMediaContext,
-  toPostView,
-  toPostViews,
-  toMediaView,
-  toNavItemView,
-  toNavItemViews,
-  toSearchResultView,
-  toArchiveGroups,
-  toArchiveGroupsWithMedia,
-} from "./lib/view.js";
-export type { MediaContext } from "./lib/view.js";
-
-// Default feed renderers (for custom feed implementations)
-export { defaultFeedRenderer } from "./lib/feed.js";
+/**
+ * Create a Jant site. It takes no options: every setting comes from the
+ * environment the request arrives with.
+ *
+ * @returns The site, ready to be a Worker's default export
+ * @example
+ * ```ts
+ * import { createApp } from "@jant/core";
+ *
+ * export default createApp();
+ * ```
+ */
+export function createApp(): App {
+  return createHonoApp();
+}

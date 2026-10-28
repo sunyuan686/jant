@@ -1,247 +1,45 @@
-import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { serve, type ServerType } from "@hono/node-server";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, stat } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
+import type { AddressInfo } from "node:net";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { and, asc, eq } from "drizzle-orm";
-import { getCliSiteResolutionMode } from "../../bin/lib/site-selection.js";
-import { resolveDatabaseDialect } from "../../src/db/dialect.js";
-import { AUTH_ID_PREFIX, createTypeId } from "../../src/lib/ids.js";
-import { hashPassword } from "../../src/lib/password.js";
-import { now } from "../../src/lib/time.js";
+import { CLI_API_TOKEN_ENV_VAR } from "../../bin/lib/cli-api-token.js";
+import { createApp } from "../../src/app.js";
 import {
-  applyNodeRuntimeEnvDefaults,
   createNodeBindings,
+  createNodeRequestHandler,
   migrate,
-  resolveDatabasePath,
 } from "../../src/node/request-handler.js";
-import { createNavItemService } from "../../src/services/navigation.js";
-import { createSettingsService } from "../../src/services/settings.js";
-import { createSiteMemberService } from "../../src/services/site-member.js";
-import { createSiteService } from "../../src/services/site.js";
 import type { Bindings } from "../../src/types/bindings.js";
 import {
-  DEFAULT_DEV_PASSWORD,
-  DEFAULT_SITE_NAME,
-  DEV_EMAIL,
-} from "./dev-auth-db.mjs";
+  applyNodeDevCredentials,
+  loadNodeDevEnv,
+  resolveNodeDevTarget,
+  setUpNodeDevSite,
+} from "../node-dev-site.js";
+import { describeScriptEnvPath } from "../script-env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const coreDir = resolve(__dirname, "../..");
 const repoRoot = resolve(coreDir, "../..");
-const envPath = resolve(coreDir, ".env.node");
 const canonicalDir = resolve(
   repoRoot,
   "sites/demo-source/canonical/site-export",
 );
-const defaultDataDir = resolve(coreDir, "data");
+const loopbackHost = "127.0.0.1";
 
-function readEnvLines() {
-  if (!existsSync(envPath)) {
-    return [];
-  }
-
-  return readFileSync(envPath, "utf8").split(/\r?\n/);
-}
-
-function parseEnvFile(lines: string[]) {
-  const values: Record<string, string> = {};
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
-    }
-
-    const separatorIndex = line.indexOf("=");
-    if (separatorIndex <= 0) {
-      continue;
-    }
-
-    const key = line.slice(0, separatorIndex).trim();
-    if (!key) {
-      continue;
-    }
-
-    let value = line.slice(separatorIndex + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-
-    values[key] = value;
-  }
-
-  return values;
-}
-
-function upsertEnvValue(lines: string[], key: string, value: string) {
-  const prefix = `${key}=`;
-  const nextLines = [];
-  let updated = false;
-
-  for (const line of lines) {
-    if (line.startsWith(prefix)) {
-      nextLines.push(`${key}=${value}`);
-      updated = true;
-      continue;
-    }
-
-    nextLines.push(line);
-  }
-
-  if (!updated) {
-    if (nextLines.length > 0 && nextLines.at(-1) !== "") {
-      nextLines.push("");
-    }
-    nextLines.push(`${key}=${value}`);
-  }
-
-  return nextLines;
-}
-
-function resolvePassword(cliPassword: string | undefined) {
-  if (cliPassword) {
-    return cliPassword;
-  }
-
-  const fromProcess = process.env.DEMO_PASSWORD?.trim();
-  if (fromProcess) {
-    return fromProcess;
-  }
-
-  const fromFile = parseEnvFile(readEnvLines()).DEMO_PASSWORD?.trim();
-  if (fromFile) {
-    return fromFile;
-  }
-
-  return DEFAULT_DEV_PASSWORD;
-}
-
-function buildRuntimeEnv(password: string, checkOnly: boolean) {
-  let lines = readEnvLines();
-  const envFileValues = parseEnvFile(lines);
-  const merged = {
-    ...envFileValues,
-    ...process.env,
-  };
-
-  const authSecret =
-    merged.AUTH_SECRET || randomBytes(32).toString("base64url");
-  const devApiToken =
-    merged.DEV_API_TOKEN || `jnt_dev_${randomBytes(16).toString("hex")}`;
-
-  const nextEnv = {
-    ...merged,
-    AUTH_SECRET: authSecret,
-    DEMO_EMAIL: DEV_EMAIL,
-    DEMO_PASSWORD: password,
-    DEV_API_TOKEN: devApiToken,
-  } as Bindings;
-
-  if (!checkOnly) {
-    lines = upsertEnvValue(lines, "AUTH_SECRET", authSecret);
-    lines = upsertEnvValue(lines, "DEV_API_TOKEN", devApiToken);
-    lines = upsertEnvValue(lines, "DEMO_EMAIL", DEV_EMAIL);
-    lines = upsertEnvValue(lines, "DEMO_PASSWORD", password);
-    writeFileSync(
-      envPath,
-      `${lines.join("\n").replace(/\n+$/u, "").trimEnd()}\n`,
-      "utf8",
-    );
-  }
-
-  applyNodeRuntimeEnvDefaults(nextEnv, {
-    cwd: coreDir,
-    defaultDataDir,
-  });
-
-  return {
-    devApiToken,
-    env: nextEnv,
-  };
-}
-
-function resolveLocalPath(pathValue: unknown, cwd: string) {
-  if (!pathValue) {
-    return null;
-  }
-
-  const normalized = String(pathValue).trim();
-  if (!normalized) {
-    return null;
-  }
-
-  return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
-}
-
-function describeDatabaseTarget(env: Bindings) {
-  const databaseUrl = String(env.DATABASE_URL ?? "").trim();
-  const dialect = resolveDatabaseDialect(databaseUrl);
-
-  if (dialect === "sqlite") {
-    return {
-      dialect,
-      target: resolveDatabasePath(databaseUrl, coreDir),
-    };
-  }
-
-  try {
-    const parsed = new URL(databaseUrl);
-    if (parsed.password) {
-      parsed.password = "*****";
-    }
-    return {
-      dialect,
-      target: parsed.toString(),
-    };
-  } catch {
-    return {
-      dialect,
-      target: databaseUrl,
-    };
-  }
-}
-
-function assertLocalImportConfig(env: Bindings) {
-  if (getCliSiteResolutionMode(env) !== "single-site") {
-    throw new Error(
-      "db-node-load-demo only supports single-site local development. Set SITE_RESOLUTION_MODE=single-site for this workflow.",
-    );
-  }
-
-  const databaseUrl = String(env.DATABASE_URL ?? "").trim();
-  const dialect = resolveDatabaseDialect(databaseUrl);
-  if (dialect === "sqlite") {
-    const databasePath = resolveDatabasePath(databaseUrl, coreDir);
-    if (databasePath === ":memory:") {
-      throw new Error(
-        "db-node-load-demo cannot target an in-memory SQLite database.",
-      );
-    }
-  }
-
-  const storageDriver = String(env.STORAGE_DRIVER ?? "").trim();
-  if (storageDriver && storageDriver !== "local") {
-    throw new Error(
-      "db-node-load-demo only supports STORAGE_DRIVER=local or an unset storage driver.",
-    );
-  }
-
-  return {
-    ...describeDatabaseTarget(env),
-    localStoragePath: resolveLocalPath(env.LOCAL_STORAGE_PATH, coreDir),
-  };
-}
-
-async function assertCanonicalSiteExport() {
-  const configPath = resolve(canonicalDir, "config.toml");
+async function assertSiteExport(sourceDir: string) {
+  const configPath = resolve(sourceDir, "hugo.toml");
   const configStat = await stat(configPath).catch(() => null);
   if (!configStat?.isFile()) {
+    if (sourceDir !== canonicalDir) {
+      throw new Error(
+        `No Jant site export at ${sourceDir}: hugo.toml is missing.`,
+      );
+    }
     throw new Error(
       [
         "Missing canonical demo site export at sites/demo-source/canonical/site-export.",
@@ -250,12 +48,12 @@ async function assertCanonicalSiteExport() {
     );
   }
 
-  const contentStat = await stat(resolve(canonicalDir, "content")).catch(
+  const contentStat = await stat(resolve(sourceDir, "content")).catch(
     () => null,
   );
   if (!contentStat?.isDirectory()) {
     throw new Error(
-      "Canonical demo site-export is missing its content/ directory.",
+      `The site export at ${sourceDir} has no content/ directory.`,
     );
   }
 }
@@ -273,134 +71,8 @@ async function openNodeDatabase(env: Bindings) {
     close,
     async query<T extends Record<string, unknown>>(sql: string) {
       const result = await nodeDatabase.rawQuery.prepare(sql).all<T>();
-      return result.results;
+      return result.results ?? [];
     },
-  };
-}
-
-async function ensureLocalDevShell(
-  bindings: Bindings,
-  password: string,
-  siteName: string,
-) {
-  const nodeDatabase = bindings.NODE_DATABASE;
-  if (!nodeDatabase) {
-    throw new Error("Node database binding is missing.");
-  }
-
-  const { db, schema } = nodeDatabase;
-  const timestamp = now();
-  const authTimestamp = new Date(timestamp * 1000);
-  const hashedPassword = await hashPassword(password);
-  const credentialUsers = await db
-    .select({
-      accountRowId: schema.account.id,
-      role: schema.user.role,
-      userId: schema.user.id,
-    })
-    .from(schema.user)
-    .innerJoin(
-      schema.account,
-      and(
-        eq(schema.account.userId, schema.user.id),
-        eq(schema.account.providerId, "credential"),
-      ),
-    )
-    .orderBy(asc(schema.user.createdAt))
-    .limit(1);
-
-  let createdCredentialUser = false;
-  let promotedToAdmin = false;
-  let ownerUserId = credentialUsers[0]?.userId ?? null;
-
-  if (!ownerUserId) {
-    ownerUserId = createTypeId(AUTH_ID_PREFIX.user);
-    const accountId = createTypeId(AUTH_ID_PREFIX.account);
-
-    await db.insert(schema.user).values({
-      createdAt: authTimestamp,
-      email: DEV_EMAIL,
-      emailVerified: false,
-      id: ownerUserId,
-      image: null,
-      name: siteName,
-      role: "admin",
-      updatedAt: authTimestamp,
-    });
-    await db.insert(schema.account).values({
-      accessToken: null,
-      accountId: ownerUserId,
-      accessTokenExpiresAt: null,
-      createdAt: authTimestamp,
-      id: accountId,
-      idToken: null,
-      password: hashedPassword,
-      providerId: "credential",
-      refreshToken: null,
-      refreshTokenExpiresAt: null,
-      scope: null,
-      updatedAt: authTimestamp,
-      userId: ownerUserId,
-    });
-
-    createdCredentialUser = true;
-    promotedToAdmin = true;
-  } else {
-    promotedToAdmin = credentialUsers[0]?.role !== "admin";
-
-    await db
-      .update(schema.user)
-      .set({
-        email: DEV_EMAIL,
-        role: "admin",
-        updatedAt: authTimestamp,
-      })
-      .where(eq(schema.user.id, ownerUserId));
-    await db
-      .update(schema.account)
-      .set({
-        password: hashedPassword,
-        updatedAt: authTimestamp,
-      })
-      .where(eq(schema.account.id, credentialUsers[0].accountRowId));
-  }
-
-  const siteService = createSiteService(db, schema);
-  const existingSite = await siteService.getOnlySite();
-  const { site } = await siteService.ensureSingleSite();
-
-  const siteMembers = createSiteMemberService(db, schema);
-  const navItems = createNavItemService(db, site.id, schema);
-  const settings = createSettingsService(db, site.id, schema);
-
-  const navCountBefore = (await navItems.list()).length;
-  const existingSiteName = await settings.get("SITE_NAME");
-  const existingLanguage = await settings.get("SITE_LANGUAGE");
-  const onboardingComplete = await settings.isOnboardingComplete();
-
-  await siteMembers.ensure(site.id, ownerUserId, "owner");
-  if (!onboardingComplete) {
-    await navItems.materializeDefaultNavigation();
-  }
-
-  if (!existingSiteName) {
-    await settings.set("SITE_NAME", siteName);
-  }
-
-  if (!existingLanguage) {
-    await settings.set("SITE_LANGUAGE", "en");
-  }
-
-  if (!onboardingComplete) {
-    await settings.completeOnboarding();
-  }
-
-  return {
-    completedOnboarding: !onboardingComplete,
-    createdCredentialUser,
-    createdSite: !existingSite,
-    promotedToAdmin,
-    seededNavigation: (await navItems.list()).length > navCountBefore,
   };
 }
 
@@ -457,49 +129,123 @@ async function assertEmptyImportTarget(env: Bindings) {
 
 function buildHelpText() {
   return [
-    "Usage: pnpm exec tsx dev/scripts/import-node-demo-site-export.ts [password] [--check]",
+    "Usage: node dev/run-script.mjs dev/scripts/import-node-demo-site-export.ts [password] [--check] [--path <dir>]",
     "",
-    "Bootstrap a local single-site Node runtime and import sites/demo-source/canonical/site-export.",
+    "Bootstrap a local single-site Node runtime and import sites/demo-source/canonical/site-export,",
+    "or the export directory --path names.",
+    "",
+    "The import runs `jant site import` against a temporary server on 127.0.0.1, the same API path a remote site uses.",
     "",
     "This task is intended for local PostgreSQL or SQLite development databases with local filesystem storage.",
   ].join("\n");
 }
 
-function runCliSiteImport(env: Bindings) {
-  console.log("Building @jant/core for local CLI import...");
-  execFileSync("pnpm", ["--filter", "@jant/core", "build"], {
-    cwd: repoRoot,
-    env: {
-      ...process.env,
-      ...env,
-    },
-    stdio: "inherit",
+/**
+ * Serve the app on a free loopback port for the length of the import.
+ *
+ * `jant site import` is an API client, so the canonical export goes in through
+ * the routes a remote site exposes. The server runs in this process, compiled
+ * by the script runner, so nothing has to be built first: the import only
+ * calls API routes, and no static assets are served.
+ *
+ * @param env - Runtime bindings for the local database and storage
+ * @returns The server's base URL and a function that stops it
+ */
+async function startLoopbackServer(env: Bindings) {
+  const handler = await createNodeRequestHandler({
+    env,
+    app: createApp(),
+    assetRoot: null,
   });
 
-  console.log(
-    "Importing canonical demo site-export into the local Node runtime...",
-  );
-  execFileSync(
+  let server: ServerType;
+  let port: number;
+  try {
+    ({ server, port } = await new Promise<{
+      server: ServerType;
+      port: number;
+    }>((resolveListening, rejectListening) => {
+      const listening = serve(
+        { fetch: handler.fetch, hostname: loopbackHost, port: 0 },
+        (info: AddressInfo) => {
+          listening.off("error", rejectListening);
+          resolveListening({ server: listening, port: info.port });
+        },
+      );
+      listening.once("error", rejectListening);
+    }));
+  } catch (error) {
+    await handler.close();
+    throw error;
+  }
+
+  return {
+    url: `http://${loopbackHost}:${port}`,
+    async close() {
+      await new Promise<void>((resolveClose, rejectClose) => {
+        server.close((error?: Error) =>
+          error ? rejectClose(error) : resolveClose(),
+        );
+      });
+      await handler.close();
+    },
+  };
+}
+
+/**
+ * Run `jant site import` for an export against a local server.
+ *
+ * A child process, not an in-process call: the command exits the process on
+ * failure, and this process has a server and a database to close. The token
+ * goes through the environment so it stays out of the process list. The
+ * server accepts `DEV_API_TOKEN` only from a loopback host.
+ *
+ * @param siteUrl - Base URL of the running local server
+ * @param devApiToken - The `DEV_API_TOKEN` the server was started with
+ * @param sourceDir - The export directory to import
+ */
+async function runSiteImport(
+  siteUrl: string,
+  devApiToken: string,
+  sourceDir: string,
+) {
+  const child = spawn(
     process.execPath,
-    [resolve(coreDir, "bin/jant.js"), "site", "import", "--path", canonicalDir],
+    [
+      resolve(coreDir, "bin/jant.js"),
+      "site",
+      "import",
+      "--url",
+      siteUrl,
+      "--path",
+      sourceDir,
+    ],
     {
       cwd: coreDir,
-      env: {
-        ...process.env,
-        ...env,
-      },
+      env: { ...process.env, [CLI_API_TOKEN_ENV_VAR]: devApiToken },
       stdio: "inherit",
     },
   );
+
+  const [code, signal] = (await once(child, "close")) as [
+    number | null,
+    NodeJS.Signals | null,
+  ];
+  if (code !== 0) {
+    throw new Error(
+      `jant site import failed (${signal ? `signal ${signal}` : `exit code ${code}`}).`,
+    );
+  }
 }
 
-async function main() {
+export default async function main(args: string[]) {
   const { values, positionals } = parseArgs({
-    args: process.argv.slice(2),
+    args,
     allowPositionals: true,
     options: {
       check: { type: "boolean" },
       help: { type: "boolean", short: "h" },
+      path: { type: "string" },
     },
   });
 
@@ -508,69 +254,56 @@ async function main() {
     process.exit(0);
   }
 
-  const password = resolvePassword(positionals[0]);
-  const checkOnly = values.check ?? false;
-  const { env } = buildRuntimeEnv(password, checkOnly);
-  const config = assertLocalImportConfig(env);
+  const devEnv = loadNodeDevEnv();
+  const target = resolveNodeDevTarget(devEnv.env, {
+    task: "db-node-load-demo",
+    localStorage: true,
+  });
 
-  await assertCanonicalSiteExport();
+  // Tests pass an older release's export here to hold head to reading it.
+  const sourceDir = values.path ? resolve(values.path) : canonicalDir;
+  await assertSiteExport(sourceDir);
 
-  if (checkOnly) {
+  if (values.check) {
     console.log("Node site-export import prerequisites look good.");
-    console.log(`  Env file:       ${envPath}`);
-    console.log(`  Canonical dir:  ${canonicalDir}`);
-    console.log(`  Database:       ${config.target}`);
-    console.log(`  Dialect:        ${config.dialect}`);
+    console.log(`  Env file:       ${describeScriptEnvPath(devEnv.envPath)}`);
+    console.log(`  Export dir:     ${sourceDir}`);
+    console.log(`  Database:       ${target.database}`);
+    console.log(`  Dialect:        ${target.dialect}`);
     console.log(
-      `  Local storage:  ${config.localStoragePath ?? "(managed by runtime defaults)"}`,
+      `  Local storage:  ${target.localStoragePath ?? "(managed by runtime defaults)"}`,
     );
     process.exit(0);
   }
 
+  const credentials = applyNodeDevCredentials(devEnv, {
+    cliPassword: positionals[0],
+    write: true,
+  });
+
   console.log("Running local Node migrations...");
-  await migrate(env);
+  await migrate(devEnv.env);
 
-  if (config.localStoragePath) {
-    await mkdir(config.localStoragePath, { recursive: true });
+  // Before setup, so a refused run leaves the database as migrations left it.
+  await assertEmptyImportTarget(devEnv.env);
+
+  if (target.localStoragePath) {
+    await mkdir(target.localStoragePath, { recursive: true });
   }
 
-  const opened = await openNodeDatabase(env);
-  let ensured;
+  const setup = await setUpNodeDevSite(devEnv.env, credentials);
 
+  const server = await startLoopbackServer(devEnv.env);
   try {
-    ensured = await ensureLocalDevShell(
-      opened.bindings,
-      password,
-      DEFAULT_SITE_NAME,
-    );
+    console.log(`Importing ${sourceDir} through ${server.url}...`);
+    await runSiteImport(server.url, credentials.devApiToken, sourceDir);
   } finally {
-    await opened.close();
+    await server.close();
   }
 
-  await assertEmptyImportTarget(env);
-  runCliSiteImport(env);
-
-  console.log(
-    "Canonical demo site-export imported into the local Node runtime.",
-  );
-  console.log(`  Env file:      ${envPath}`);
-  console.log(`  Database:      ${config.target}`);
-  console.log(`  Canonical dir: ${canonicalDir}`);
-  if (ensured.createdSite) {
-    console.log("  Site shell:    created");
-  }
-  if (ensured.createdCredentialUser) {
-    console.log("  Admin user:    created");
-  }
-  if (ensured.promotedToAdmin) {
-    console.log("  Admin role:    normalized");
-  }
-  if (ensured.completedOnboarding) {
-    console.log("  Onboarding:    completed");
-  }
-  if (ensured.seededNavigation) {
-    console.log("  Navigation:    seeded");
-  }
+  console.log("Site export imported into the local Node runtime.");
+  console.log(`  Env file:      ${describeScriptEnvPath(devEnv.envPath)}`);
+  console.log(`  Database:      ${target.database}`);
+  console.log(`  Export dir:    ${sourceDir}`);
+  console.log(`  Setup:         ${setup.outcome}`);
 }
-
-await main();

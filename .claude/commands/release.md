@@ -5,7 +5,7 @@ Create a changeset file for `@jant/core` and `create-jant` (fixed versioning —
 ## Steps
 
 1. Run `mise run changeset-status` to check if there are already pending changesets.
-2. Show the user a summary of unreleased changes (commits since last tag) using `git log $(git describe --tags --abbrev=0)..HEAD --oneline`. Ask what kind of version bump: **patch** (default), **minor**, or **major**. If the user doesn't specify, use **patch**.
+2. Show the user a summary of unreleased changes (commits since last tag) using `git log $(git describe --tags --abbrev=0)..HEAD --oneline`. Ask what kind of version bump: **patch**, **minor**, or **major**. A breaking change to anything the second level of `docs/compatibility.md` lists is **major**. If the user doesn't specify, use **major** when an unreleased commit makes such a change, otherwise **patch**.
 3. Write a concise summary of the changes for the changelog based on the commits.
 4. Run `mise run changeset-add <bump> "<summary>"` to create the changeset file. Example: `mise run changeset-add patch "Add avatar upload and configurable RSS feed limit"`
 5. Stage and commit ONLY the new changeset file (the `.changeset/*.md` file) with message: `chore: add changeset`
@@ -18,3 +18,4 @@ Create a changeset file for `@jant/core` and `create-jant` (fixed versioning —
 - **Always use `mise run changeset-add`** to create the changeset — NEVER write `.changeset/*.md` files directly.
 - **Do NOT modify** `package.json`, `CHANGELOG.md`, or any file other than the new `.changeset/*.md` file.
 - **Always show the user what changed** before asking for bump type.
+- **A `major` bump** writes its upgrade notes into `docs/upgrading.md` and `docs/zh-Hans/upgrading.md` first, as end states, and the changeset links there (see `docs/RELEASING.md`).

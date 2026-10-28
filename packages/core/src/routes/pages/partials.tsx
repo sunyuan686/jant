@@ -6,13 +6,17 @@ import {
   assemblePostCardView,
   assemblePostPageDisplay,
 } from "../../lib/post-display.js";
+import { assembleShareCard } from "../../lib/share-card.js";
 import { assembleTimelineItem } from "../../lib/timeline.js";
+import { ShareCard } from "../../ui/share/ShareCard.js";
+import { renderIconsInline } from "../../ui/shared/icon-collector.js";
 import { TimelineFeedItemContent } from "../../ui/feed/TimelineFeed.js";
 import { TimelineItemFromPost } from "../../ui/feed/TimelineItem.js";
 import { PostPage } from "../../ui/pages/PostPage.js";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { CORE_VERSION } from "../../lib/version.js";
+import { matchesIfNoneMatch } from "../../lib/http-cache.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
 
@@ -20,6 +24,39 @@ export const partialPageRoutes = new Hono<Env>();
 
 partialPageRoutes.get("/_/version", (c) => {
   return c.json({ version: CORE_VERSION });
+});
+
+/**
+ * A text file attached to a post, for the preview dialog: its HTML, safe to
+ * insert, and its source, for copying. The attachment's own page,
+ * `/{post}/text/{id}`, applies the same rule of who may read it.
+ */
+partialPageRoutes.get("/_/text/:mediaId", async (c) => {
+  const mediaId = parseIdParam(c.req.param("mediaId"), ID_PREFIX.media);
+  const attachment = await c.var.services.textAttachments.readForViewer(
+    mediaId,
+    { isAuthenticated: c.var.isAuthenticated },
+    c.var.storage,
+  );
+  if (!attachment) return c.notFound();
+
+  // A shared cache may keep a public post's file, revalidating each time; a
+  // private post's stays with the author's browser.
+  const etag = `"${attachment.media.updatedAt}"`;
+  const cacheControl =
+    attachment.post.visibility === "private"
+      ? "private, no-cache"
+      : "public, no-cache";
+  if (matchesIfNoneMatch(c.req.header("If-None-Match"), etag)) {
+    return new Response(null, {
+      status: 304,
+      headers: { ETag: etag, "Cache-Control": cacheControl },
+    });
+  }
+  return c.json({ html: attachment.html, source: attachment.source }, 200, {
+    ETag: etag,
+    "Cache-Control": cacheControl,
+  });
 });
 
 partialPageRoutes.get("/_/timeline-item/:threadRootId", async (c) => {
@@ -98,6 +135,26 @@ partialPageRoutes.get("/_/post-preview/:postId", async (c) => {
       />
     </I18nProvider>,
   );
+});
+
+/**
+ * The card "Share as image" captures, for the author and readers alike: it
+ * shows only what the post's own address already does, and
+ * `assembleShareCard` refuses drafts and Private posts. Icons are drawn
+ * inline because the capture copies the card without the page's icon sprite.
+ */
+partialPageRoutes.get("/_/share-card/:postId", async (c) => {
+  const postId = parseIdParam(c.req.param("postId"), ID_PREFIX.post);
+  const card = await assembleShareCard(c, postId);
+  if (!card) return c.notFound();
+  const html = renderIconsInline(() =>
+    (
+      <I18nProvider c={c}>
+        <ShareCard card={card} />
+      </I18nProvider>
+    ).toString(),
+  );
+  return c.html(html);
 });
 
 partialPageRoutes.get("/_/post-view/:postId", async (c) => {

@@ -21,14 +21,71 @@ import {
   getConfiguredStorageDriver,
   getDiscoverDefault,
   getEnvString,
+  readEnvBoolean,
+  readEnvInteger,
 } from "./env.js";
+import { readConfigEnvValue } from "./env-values.js";
 import { parseLanguageList } from "../i18n/locales.js";
 import { getPublicUrlForProvider, getMediaUrl, getImageUrl } from "./image.js";
 import { normalizeTimeZone } from "./timezones.js";
 import { getSiteOrigin, getSitePathPrefix, normalizeSiteUrl } from "./url.js";
 
 /**
+ * Whether an empty stored value means "never configured" for this field.
+ *
+ * The test is whether the editor could have produced the empty value, and it
+ * mirrors what `normalizeConfigEditorDefinitionValue` accepts. A boolean takes
+ * only `true` or `false`; a number has to parse; an enum has to name one of its
+ * options. None of those can be stored empty, so an empty row for one of them
+ * is not a choice anybody made — it comes from a path that skips validation,
+ * and a snapshot's `db.sql`, replayed as raw SQL, is exactly that. Read as a
+ * configured value it silences the environment variable the operator did set,
+ * for as long as the row exists.
+ *
+ * Text is the opposite: clearing a description or a footer is an ordinary edit,
+ * so an empty value there is a decision and keeps its precedence. So is an enum
+ * that lists `""` among its options, the way `DASHBOARD_LANGUAGE` does, and one
+ * whose options come from a runtime source, where nothing here can rule it
+ * out.
+ *
+ * @param field - Config registry entry for the key being resolved
+ * @returns True when an empty stored value should fall through to env/default
+ *
+ * @example
+ * ```ts
+ * isUnsetWhenEmpty(CONFIG_FIELDS.NOINDEX); // true  (boolean)
+ * isUnsetWhenEmpty(CONFIG_FIELDS.SITE_FOOTER); // false (string)
+ * ```
+ */
+function isUnsetWhenEmpty(
+  field: (typeof CONFIG_FIELDS)[keyof typeof CONFIG_FIELDS],
+): boolean {
+  if (!("editor" in field)) return false;
+  const editor = field.editor;
+  switch (editor.type) {
+    case "boolean":
+    case "number":
+      return true;
+    case "enum":
+      // Only a fixed option list proves the value is impossible. `""` is a real
+      // choice for `DASHBOARD_LANGUAGE`, which offers it, and an enum drawing
+      // its options from a runtime source cannot rule it out either.
+      return (
+        "options" in editor &&
+        !(editor.options as readonly string[]).includes("")
+      );
+    default:
+      return false;
+  }
+}
+
+/**
  * Resolve a single config value following priority rules.
+ *
+ * Settings saved in the dashboard outrank the environment, which outranks the
+ * default. The exception is an empty boolean or numeric value — see
+ * {@link isUnsetWhenEmpty}, which explains why that is absence rather than
+ * choice.
  *
  * @param key - CONFIG_FIELDS key
  * @param allSettings - DB settings map
@@ -42,15 +99,17 @@ function resolve(
 ): string {
   const field = CONFIG_FIELDS[key as keyof typeof CONFIG_FIELDS];
   if (!field) return "";
-  const envKeys = "envKeys" in field ? field.envKeys : undefined;
 
   // User-configurable: DB > ENV > Default
   if (!field.envOnly && Object.hasOwn(allSettings, key)) {
-    return allSettings[key] ?? "";
+    const stored = allSettings[key] ?? "";
+    if (stored !== "" || !isUnsetWhenEmpty(field)) {
+      return stored;
+    }
   }
 
   // ENV > Default
-  const envValue = getEnvString(env, ...(envKeys ?? []));
+  const envValue = readConfigEnvValue(env, key as keyof typeof CONFIG_FIELDS);
   if (envValue) return envValue;
 
   if (field.defaultValue) return field.defaultValue;
@@ -72,9 +131,8 @@ function resolve(
 function resolveFallback(key: string, env: Bindings): string {
   const field = CONFIG_FIELDS[key as keyof typeof CONFIG_FIELDS];
   if (!field) return "";
-  const envKeys = "envKeys" in field ? field.envKeys : undefined;
 
-  const envValue = getEnvString(env, ...(envKeys ?? []));
+  const envValue = readConfigEnvValue(env, key as keyof typeof CONFIG_FIELDS);
   if (envValue) return envValue;
 
   if (field.defaultValue) return field.defaultValue;
@@ -94,10 +152,15 @@ type RuntimeNumberConfigKey =
   | "RSS_FEED_LIMIT"
   | "RSS_PUBLISH_DELAY_SECONDS";
 
+/**
+ * A numeric setting's value, or `fallback` when it isn't a whole number in
+ * the setting's range. `fallback` defaults to the registry's default, so a
+ * value the site can't use runs as the value `GET /api/settings` reports.
+ */
 function parseConfigInt(
   key: RuntimeNumberConfigKey,
   value: string,
-  fallback: number,
+  fallback = Number(CONFIG_FIELDS[key].defaultValue),
 ): number {
   const normalized = value.trim();
   const parsed = Number(normalized);
@@ -136,12 +199,10 @@ export function resolveSummaryConfig(
     maxParagraphs: parseConfigInt(
       "SUMMARY_MAX_PARAGRAPHS",
       resolve("SUMMARY_MAX_PARAGRAPHS", allSettings, env),
-      5,
     ),
     maxChars: parseConfigInt(
       "SUMMARY_MAX_CHARS",
       resolve("SUMMARY_MAX_CHARS", allSettings, env),
-      500,
     ),
   };
 }
@@ -181,7 +242,6 @@ export function resolveConfig(
   const pageSize = parseConfigInt(
     "PAGE_SIZE",
     resolve("PAGE_SIZE", allSettings, env),
-    50,
   );
   const searchPageSize = parseConfigInt(
     "SEARCH_PAGE_SIZE",
@@ -203,7 +263,7 @@ export function resolveConfig(
   const s3PublicUrl = getEnvString(env, "S3_PUBLIC_URL") || "";
   const localPublicUrl = getEnvString(env, "LOCAL_PUBLIC_URL") || "";
   const imageTransformUrl = getEnvString(env, "IMAGE_TRANSFORM_URL") || "";
-  const demoMode = getEnvString(env, "DEMO_MODE") === "true";
+  const demoMode = readEnvBoolean(env, "DEMO_MODE") ?? false;
 
   // Resolve avatar URL from storage key
   const siteAvatar = allSettings["SITE_AVATAR"] ?? "";
@@ -306,16 +366,14 @@ export function resolveConfig(
     imageTransformUrl,
 
     // Upload (ENV only)
-    uploadMaxFileSize:
-      parseInt(getEnvString(env, "UPLOAD_MAX_FILE_SIZE_MB") ?? "1024", 10) ||
-      1024,
+    uploadMaxFileSize: readEnvInteger(env, "UPLOAD_MAX_FILE_SIZE_MB") ?? 1024,
 
     // Summary extraction (DB > ENV > Default)
     summaryMaxParagraphs: summaryConfig.maxParagraphs,
     summaryMaxChars: summaryConfig.maxChars,
 
     // Slug (ENV only)
-    slugIdLength: parseInt(getEnvString(env, "SLUG_ID_LENGTH") ?? "5", 10) || 5,
+    slugIdLength: readEnvInteger(env, "SLUG_ID_LENGTH") ?? 5,
 
     // Pagination/feed (DB > ENV > Default)
     pageSize,
@@ -324,12 +382,10 @@ export function resolveConfig(
     rssFeedLimit: parseConfigInt(
       "RSS_FEED_LIMIT",
       resolve("RSS_FEED_LIMIT", allSettings, env),
-      50,
     ),
     rssPublishDelaySeconds: parseConfigInt(
       "RSS_PUBLISH_DELAY_SECONDS",
       resolve("RSS_PUBLISH_DELAY_SECONDS", allSettings, env),
-      300,
     ),
 
     // Demo (ENV only)
@@ -371,10 +427,8 @@ export function resolveConfig(
     // Rate limiting (ENV only). Defaults are conservative enough for a
     // human typing in the search UI but reject bot floods.
     rateLimit: {
-      disabled: getEnvString(env, "RATE_LIMIT_DISABLED") === "true",
-      searchPerMinute:
-        parseInt(getEnvString(env, "RATE_LIMIT_SEARCH_PER_MIN") ?? "30", 10) ||
-        30,
+      enabled: readEnvBoolean(env, "RATE_LIMIT_ENABLED") ?? true,
+      searchPerMinute: readEnvInteger(env, "RATE_LIMIT_SEARCH_PER_MIN") ?? 30,
     },
 
     // Settings form placeholders (ENV > Default, without DB)

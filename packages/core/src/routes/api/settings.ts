@@ -2,23 +2,29 @@
  * Settings API Routes
  */
 
+import { parseLanguageList } from "../../i18n/locales.js";
 import { Hono } from "hono";
 import type { Bindings } from "../../types.js";
 import type { AppVariables } from "../../types/app-context.js";
 import { requireAuthApi } from "../../middleware/auth.js";
+import { validate } from "../../middleware/validate.js";
 import { z } from "zod";
 import { now } from "../../lib/time.js";
 import { SETTINGS_KEYS } from "../../lib/constants.js";
-import { parseValidated } from "../../lib/schemas.js";
-import { ValidationError } from "../../lib/errors.js";
+import {
+  DomainError,
+  ExternalServiceError,
+  ValidationError,
+} from "../../lib/errors.js";
+import { requireStorage } from "../../lib/storage.js";
+import { FormFileSchema } from "../../lib/schemas.js";
 import { syncHostedControlPlaneSiteAvatar } from "../../lib/hosted-control-plane-sync.js";
 import {
-  buildConfigEditorFields,
-  buildEditableSettingsResponse,
+  buildApiSettingsResponse,
   demoLockedSettingKeys,
   isResettableConfigEditorKey,
-  partitionEditableSettingUpdates,
-  partitionImportableSettingUpdates,
+  partitionApiSettingUpdates,
+  partitionLanguageSettingUpdates,
 } from "../../lib/api-settings.js";
 
 type Env = { Bindings: Bindings; Variables: AppVariables };
@@ -31,7 +37,7 @@ const UpdateSettingsSchema = z.record(z.string(), z.string());
 settingsApiRoutes.get("/", requireAuthApi(), async (c) => {
   const allSettings = await c.var.services.settings.getAll();
   return c.json({
-    settings: buildEditableSettingsResponse(
+    settings: buildApiSettingsResponse(
       allSettings,
       c.var.appConfig.demoMode,
       c.env,
@@ -40,63 +46,81 @@ settingsApiRoutes.get("/", requireAuthApi(), async (c) => {
 });
 
 // Update settings (requires auth)
-settingsApiRoutes.put("/", requireAuthApi(), async (c) => {
-  const updates = parseValidated(UpdateSettingsSchema, await c.req.json());
-  const { filteredUpdates, rejectedKeys } = partitionEditableSettingUpdates(
-    updates,
-    c.var.appConfig.demoMode,
-  );
-
-  if (rejectedKeys.length > 0 && Object.keys(filteredUpdates).length === 0) {
-    const message = c.var.appConfig.demoMode
-      ? "Demo mode locks these settings"
-      : "None of the provided keys are editable";
-    throw new ValidationError(message, { rejectedKeys });
-  }
-
-  if (Object.keys(filteredUpdates).length > 0) {
-    await c.var.services.settings.setMany(filteredUpdates as never);
-  }
-
-  // Return updated state
-  const allSettings = await c.var.services.settings.getAll();
-
-  return c.json({
-    settings: buildEditableSettingsResponse(
-      allSettings,
+settingsApiRoutes.put(
+  "/",
+  requireAuthApi(),
+  validate("json", UpdateSettingsSchema),
+  async (c) => {
+    const updates = c.req.valid("json");
+    const { filteredUpdates, rejectedKeys } = partitionApiSettingUpdates(
+      updates,
       c.var.appConfig.demoMode,
-      c.env,
-    ),
-    ...(rejectedKeys.length > 0 && { rejectedKeys }),
-  });
-});
+    );
 
-// Import internal-config settings (requires auth). Used by the site importer
-// to restore config-like internal keys (theme, font, mode, custom CSS, header
-// avatar toggle) that are not writable through the regular settings route.
-settingsApiRoutes.put("/import", requireAuthApi(), async (c) => {
-  const updates = parseValidated(UpdateSettingsSchema, await c.req.json());
-  const { filteredUpdates, rejectedKeys } = partitionImportableSettingUpdates(
-    updates,
-    c.var.appConfig.demoMode,
-  );
+    if (rejectedKeys.length > 0 && Object.keys(filteredUpdates).length === 0) {
+      const message = c.var.appConfig.demoMode
+        ? "Demo mode locks these settings"
+        : "None of the provided keys are editable";
+      throw new ValidationError(message, { rejectedKeys });
+    }
 
-  if (rejectedKeys.length > 0 && Object.keys(filteredUpdates).length === 0) {
-    const message = c.var.appConfig.demoMode
-      ? "Demo mode locks these settings"
-      : "None of the provided keys are importable";
-    throw new ValidationError(message, { rejectedKeys });
-  }
+    if (Object.keys(filteredUpdates).length > 0) {
+      await c.var.services.settings.setMany(filteredUpdates as never);
+    }
 
-  if (Object.keys(filteredUpdates).length > 0) {
-    await c.var.services.settings.setMany(filteredUpdates as never);
-  }
+    // Return updated state
+    const allSettings = await c.var.services.settings.getAll();
 
-  return c.json({
-    success: true,
-    ...(rejectedKeys.length > 0 && { rejectedKeys }),
-  });
-});
+    return c.json({
+      settings: buildApiSettingsResponse(
+        allSettings,
+        c.var.appConfig.demoMode,
+        c.env,
+      ),
+      ...(rejectedKeys.length > 0 && { rejectedKeys }),
+    });
+  },
+);
+
+// Restore the site's languages from a site export (requires auth). The pair
+// is only valid together and against the site's paths, so the language
+// service applies it rather than writing it as given.
+settingsApiRoutes.put(
+  "/import",
+  requireAuthApi(),
+  validate("json", UpdateSettingsSchema),
+  async (c) => {
+    const updates = c.req.valid("json");
+    const { filteredUpdates, rejectedKeys } =
+      partitionLanguageSettingUpdates(updates);
+
+    if (Object.keys(filteredUpdates).length === 0) {
+      throw new ValidationError("None of the provided keys are importable", {
+        rejectedKeys,
+      });
+    }
+
+    const current = await c.var.services.settings.getAll();
+    const additional =
+      filteredUpdates.ADDITIONAL_LANGUAGES ?? current.ADDITIONAL_LANGUAGES;
+    const enabled =
+      filteredUpdates.MULTILINGUAL_ENABLED ?? current.MULTILINGUAL_ENABLED;
+    await c.var.services.language.restore({
+      additional: parseLanguageList(additional),
+      enabled: enabled === "true",
+    });
+
+    const allSettings = await c.var.services.settings.getAll();
+    return c.json({
+      settings: buildApiSettingsResponse(
+        allSettings,
+        c.var.appConfig.demoMode,
+        c.env,
+      ),
+      ...(rejectedKeys.length > 0 && { rejectedKeys }),
+    });
+  },
+);
 
 settingsApiRoutes.post(
   "/discovery/compose-open-shortcut",
@@ -136,67 +160,73 @@ settingsApiRoutes.post(
   },
 );
 
+const AvatarFormSchema = z.object({
+  file: FormFileSchema,
+  favicon: FormFileSchema,
+  appleTouch: FormFileSchema,
+});
+
 // Upload site avatar (requires auth)
-settingsApiRoutes.post("/avatar", requireAuthApi(), async (c) => {
-  const storage = c.var.storage;
-  if (!storage) {
-    return c.json(
-      { error: "File storage isn't set up. Check your server config." },
-      500,
-    );
-  }
+settingsApiRoutes.post(
+  "/avatar",
+  requireAuthApi(),
+  validate("form", AvatarFormSchema),
+  async (c) => {
+    const storage = requireStorage(c.var.storage);
 
-  const formData = await c.req.formData();
-  const file = formData.get("file") as File | null;
-  if (!file) {
-    return c.json({ error: "No file selected. Choose a file to upload." }, 400);
-  }
+    const {
+      file,
+      favicon: faviconFile,
+      appleTouch: appleTouchFile,
+    } = c.req.valid("form");
+    if (!file) {
+      throw new ValidationError("No file selected. Choose a file to upload.");
+    }
 
-  const faviconFile = formData.get("favicon") as File | null;
-  const appleTouchFile = formData.get("appleTouch") as File | null;
-
-  try {
-    await c.var.services.settings.uploadAvatar(
-      {
-        file,
-        faviconIco: faviconFile ? await faviconFile.arrayBuffer() : undefined,
-        appleTouchIcon: appleTouchFile
-          ? await appleTouchFile.arrayBuffer()
-          : undefined,
-      },
-      {
-        media: c.var.services.media,
-        storage,
-        storageProvider: c.var.appConfig.storageDriver,
-        maxFileSizeMB: c.var.appConfig.uploadMaxFileSize,
-      },
-    );
     try {
-      await syncHostedControlPlaneSiteAvatar({
-        appConfig: c.var.appConfig,
-        env: c.env,
-        settings: c.var.services.settings,
-        siteId: c.var.currentSite.id,
-      });
+      await c.var.services.settings.uploadAvatar(
+        {
+          file,
+          faviconIco: faviconFile ? await faviconFile.arrayBuffer() : undefined,
+          appleTouchIcon: appleTouchFile
+            ? await appleTouchFile.arrayBuffer()
+            : undefined,
+        },
+        {
+          media: c.var.services.media,
+          storage,
+          storageProvider: c.var.appConfig.storageDriver,
+          maxFileSizeMB: c.var.appConfig.uploadMaxFileSize,
+        },
+      );
+      try {
+        await syncHostedControlPlaneSiteAvatar({
+          appConfig: c.var.appConfig,
+          env: c.env,
+          settings: c.var.services.settings,
+          siteId: c.var.currentSite.id,
+        });
+      } catch (error) {
+        // eslint-disable-next-line no-console -- Error logging is intentional
+        console.error(
+          "[Jant] Failed to sync hosted control plane avatar metadata:",
+          error,
+        );
+      }
+
+      return c.json({ success: true }, 201);
     } catch (error) {
+      // Validation and quota errors reach the client as they are; anything else
+      // is a failed write.
+      if (error instanceof DomainError) throw error;
       // eslint-disable-next-line no-console -- Error logging is intentional
-      console.error(
-        "[Jant] Failed to sync hosted control plane avatar metadata:",
-        error,
+      console.error("[Jant] Avatar upload failed:", error);
+      throw new ExternalServiceError(
+        "Upload didn't go through. Try again in a moment.",
       );
     }
-
-    return c.json({ success: true }, 201);
-  } catch (error) {
-    if (error instanceof ValidationError) {
-      return c.json({ error: error.message }, 400);
-    }
-    return c.json(
-      { error: "Upload didn't go through. Try again in a moment." },
-      500,
-    );
-  }
-});
+  },
+);
 
 // Remove site avatar (requires auth)
 settingsApiRoutes.delete("/avatar", requireAuthApi(), async (c) => {
@@ -240,12 +270,8 @@ settingsApiRoutes.delete("/:key", requireAuthApi(), async (c) => {
 
   await c.var.services.settings.remove(key);
   const allSettings = await c.var.services.settings.getAll();
-  const setting = buildConfigEditorFields(allSettings, c.env, demoMode).find(
-    (field) => field.key === key,
-  );
 
   return c.json({
-    settings: buildEditableSettingsResponse(allSettings, demoMode, c.env),
-    setting,
+    settings: buildApiSettingsResponse(allSettings, demoMode, c.env),
   });
 });

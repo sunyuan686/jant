@@ -44,6 +44,22 @@ describe("Settings API Routes", () => {
       expect(body.settings.RSS_PUBLISH_DELAY_SECONDS).toBe("0");
     });
 
+    it("reports the appearance settings and languages in effect", async () => {
+      const { app } = createTestApp({ authenticated: true });
+      app.route("/api/settings", settingsApiRoutes);
+
+      const res = await app.request("/api/settings");
+      expect((await res.json()).settings).toMatchObject({
+        THEME: "tufte",
+        FONT_THEME: "classic",
+        THEME_MODE: "auto",
+        CUSTOM_CSS: "",
+        SHOW_HEADER_AVATAR: "false",
+        MULTILINGUAL_ENABLED: "false",
+        ADDITIONAL_LANGUAGES: "",
+      });
+    });
+
     it("returns stored settings overriding defaults", async () => {
       const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/settings", settingsApiRoutes);
@@ -218,6 +234,52 @@ describe("Settings API Routes", () => {
       const body = await res.json();
       expect(body.details.rejectedKeys).toContain("MULTILINGUAL_ENABLED");
       expect(body.details.rejectedKeys).toContain("ADDITIONAL_LANGUAGES");
+    });
+
+    it("writes the appearance settings, checked as their screens check them", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/settings", settingsApiRoutes);
+
+      const res = await app.request("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          THEME: "paper",
+          FONT_THEME: "literary",
+          THEME_MODE: "dark",
+          CUSTOM_CSS: "  body { color: red; }\n",
+          SHOW_HEADER_AVATAR: "true",
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).settings).toMatchObject({
+        THEME: "paper",
+        FONT_THEME: "literary",
+        THEME_MODE: "dark",
+        CUSTOM_CSS: "body { color: red; }",
+        SHOW_HEADER_AVATAR: "true",
+      });
+      expect(await services.settings.get("THEME")).toBe("paper");
+    });
+
+    it.each([
+      ["THEME", "no-such-theme"],
+      ["FONT_THEME", "serif"],
+      ["THEME_MODE", "sepia"],
+      ["SHOW_HEADER_AVATAR", "yes"],
+    ])("refuses %s=%s and writes nothing", async (key, value) => {
+      const { app, services } = createTestApp({ authenticated: true });
+      app.route("/api/settings", settingsApiRoutes);
+
+      const res = await app.request("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ SITE_NAME: "Changed", [key]: value }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(await services.settings.get("SITE_NAME")).toBeNull();
     });
 
     it("rejects internal keys", async () => {
@@ -420,11 +482,7 @@ describe("Settings API Routes", () => {
       expect(await services.settings.get("SITE_NAME")).toBeNull();
       const body = await res.json();
       expect(body.settings.SITE_NAME).toBe("Jant");
-      expect(body.setting).toMatchObject({
-        key: "SITE_NAME",
-        value: "Jant",
-        modified: false,
-      });
+      expect(body).not.toHaveProperty("setting");
     });
 
     it("resets search page size to the current page-size setting", async () => {
@@ -441,12 +499,7 @@ describe("Settings API Routes", () => {
       expect(await services.settings.get("SEARCH_PAGE_SIZE")).toBeNull();
       const body = await res.json();
       expect(body.settings.SEARCH_PAGE_SIZE).toBe("80");
-      expect(body.setting).toMatchObject({
-        key: "SEARCH_PAGE_SIZE",
-        value: "80",
-        fallbackValue: "80",
-        modified: false,
-      });
+      expect(body).not.toHaveProperty("setting");
     });
 
     it("removes a safe linked scalar override and returns its fallback", async () => {
@@ -461,14 +514,8 @@ describe("Settings API Routes", () => {
       expect(res.status).toBe(200);
       expect(await services.settings.get("THEME")).toBeNull();
       const body = await res.json();
-      expect(body.settings.THEME).toBeUndefined();
-      expect(body.setting).toMatchObject({
-        key: "THEME",
-        mode: "link",
-        value: "tufte",
-        modified: false,
-        resettable: true,
-      });
+      expect(body.settings.THEME).toBe("tufte");
+      expect(body).not.toHaveProperty("setting");
     });
 
     it("resets an API-editable textarea setting through its linked editor state", async () => {
@@ -484,14 +531,7 @@ describe("Settings API Routes", () => {
       expect(await services.settings.get("SITE_DESCRIPTION")).toBeNull();
       const body = await res.json();
       expect(body.settings.SITE_DESCRIPTION).toBe("");
-      expect(body.setting).toMatchObject({
-        key: "SITE_DESCRIPTION",
-        mode: "link",
-        value: "false",
-        modified: false,
-        resettable: true,
-        settingsPath: "/settings/general",
-      });
+      expect(body).not.toHaveProperty("setting");
     });
 
     it("rejects unsafe, specialized, and demo-locked keys", async () => {
@@ -528,13 +568,13 @@ describe("Settings API Routes", () => {
       const res = await app.request("/api/settings/import", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ THEME: "paper" }),
+        body: JSON.stringify({ MULTILINGUAL_ENABLED: "false" }),
       });
 
       expect(res.status).toBe(401);
     });
 
-    it("stores whitelisted internal settings", async () => {
+    it("restores the site's languages through the language rules", async () => {
       const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/settings", settingsApiRoutes);
 
@@ -542,62 +582,41 @@ describe("Settings API Routes", () => {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          THEME: "paper",
-          FONT_THEME: "serif",
-          THEME_MODE: "dark",
-          CUSTOM_CSS: "body { color: red; }",
-          SHOW_HEADER_AVATAR: "true",
+          ADDITIONAL_LANGUAGES: "ja,zh-Hans",
+          MULTILINGUAL_ENABLED: "true",
         }),
       });
 
       expect(res.status).toBe(200);
+      const state = await services.language.getState();
+      expect(state.enabled).toBe(true);
+      expect(state.additional).toEqual(["ja", "zh-Hans"]);
+      // Answered as PUT /api/settings answers.
       const body = await res.json();
-      expect(body.success).toBe(true);
-
-      expect(await services.settings.get("THEME")).toBe("paper");
-      expect(await services.settings.get("FONT_THEME")).toBe("serif");
-      expect(await services.settings.get("THEME_MODE")).toBe("dark");
-      expect(await services.settings.get("CUSTOM_CSS")).toBe(
-        "body { color: red; }",
-      );
-      expect(await services.settings.get("SHOW_HEADER_AVATAR")).toBe("true");
+      expect(body.settings).toMatchObject({
+        ADDITIONAL_LANGUAGES: "ja,zh-Hans",
+        MULTILINGUAL_ENABLED: "true",
+        SITE_NAME: "Jant",
+      });
     });
 
-    it("rejects non-whitelisted internal keys", async () => {
-      const { app } = createTestApp({ authenticated: true });
+    it("keeps multilingual content off without a second language", async () => {
+      const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/settings", settingsApiRoutes);
 
-      const res = await app.request("/api/settings/import", {
+      await app.request("/api/settings/import", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          SITE_AVATAR: "media/sit/assets/avatar/avatar.png",
-          SITE_FAVICON_ICO: "ZmFrZQ==",
+          ADDITIONAL_LANGUAGES: "",
+          MULTILINGUAL_ENABLED: "true",
         }),
       });
 
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.details.rejectedKeys).toContain("SITE_AVATAR");
-      expect(body.details.rejectedKeys).toContain("SITE_FAVICON_ICO");
+      expect((await services.language.getState()).enabled).toBe(false);
     });
 
-    it("rejects regular editable keys (caller should use PUT /api/settings)", async () => {
-      const { app } = createTestApp({ authenticated: true });
-      app.route("/api/settings", settingsApiRoutes);
-
-      const res = await app.request("/api/settings/import", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ SITE_NAME: "Blog" }),
-      });
-
-      expect(res.status).toBe(400);
-      const body = await res.json();
-      expect(body.details.rejectedKeys).toContain("SITE_NAME");
-    });
-
-    it("partially applies when mixing whitelisted and unknown keys", async () => {
+    it("takes only the languages; other keys belong to PUT /api/settings", async () => {
       const { app, services } = createTestApp({ authenticated: true });
       app.route("/api/settings", settingsApiRoutes);
 
@@ -605,16 +624,23 @@ describe("Settings API Routes", () => {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          ADDITIONAL_LANGUAGES: "ja",
           THEME: "paper",
           SITE_NAME: "ignored",
         }),
       });
 
       expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.success).toBe(true);
-      expect(body.rejectedKeys).toContain("SITE_NAME");
-      expect(await services.settings.get("THEME")).toBe("paper");
+      expect((await res.json()).rejectedKeys).toEqual(["THEME", "SITE_NAME"]);
+      expect(await services.settings.get("THEME")).toBeNull();
+
+      const none = await app.request("/api/settings/import", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ SITE_AVATAR: "media/avatar.png" }),
+      });
+      expect(none.status).toBe(400);
+      expect((await none.json()).details.rejectedKeys).toEqual(["SITE_AVATAR"]);
     });
   });
 
@@ -743,9 +769,11 @@ describe("Settings API Routes", () => {
       const formData = new FormData();
       formData.append(
         "file",
-        new File([new Uint8Array([1, 2, 3])], "avatar.png", {
-          type: "image/png",
-        }),
+        new File(
+          [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+          "avatar.png",
+          { type: "image/png" },
+        ),
       );
 
       const res = await app.request("/api/settings/avatar", {
@@ -766,9 +794,11 @@ describe("Settings API Routes", () => {
       const formData = new FormData();
       formData.append(
         "file",
-        new File([new Uint8Array([1, 2, 3])], "avatar.png", {
-          type: "image/png",
-        }),
+        new File(
+          [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+          "avatar.png",
+          { type: "image/png" },
+        ),
       );
 
       const res = await app.request("/api/settings/avatar", {
@@ -810,15 +840,19 @@ describe("Settings API Routes", () => {
       const formData = new FormData();
       formData.append(
         "file",
-        new File([new Uint8Array([1, 2, 3])], "avatar.png", {
-          type: "image/png",
-        }),
+        new File(
+          [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+          "avatar.png",
+          { type: "image/png" },
+        ),
       );
       formData.append(
         "appleTouch",
-        new File([new Uint8Array([137, 80, 78, 71])], "apple-touch-icon.png", {
-          type: "image/png",
-        }),
+        new File(
+          [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])],
+          "apple-touch-icon.png",
+          { type: "image/png" },
+        ),
       );
 
       const res = await app.request("/api/settings/avatar", {
@@ -838,7 +872,7 @@ describe("Settings API Routes", () => {
       );
       expect(storage.put).toHaveBeenCalledTimes(2);
 
-      const mediaList = await services.media.list();
+      const mediaList = (await services.media.listPage({ limit: 10 })).media;
       expect(mediaList).toHaveLength(2);
       const originalNames = mediaList.map((entry) => entry.originalName).sort();
       expect(originalNames).toEqual(["apple-touch-icon.png", "avatar.png"]);

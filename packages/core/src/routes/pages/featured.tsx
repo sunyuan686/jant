@@ -17,7 +17,7 @@ import { renderPublicPage } from "../../lib/render.js";
 import { assembleFeaturedTimeline } from "../../lib/timeline.js";
 import { buildSurfaceAlternates, toViewPath } from "../../lib/view-language.js";
 import { defaultFeedRenderer } from "../../lib/feed.js";
-import { renderFeed } from "../../lib/feed-policy.js";
+import { feedsPublished, renderFeed } from "../../lib/feed-policy.js";
 import { buildFeedData } from "../feed/feed.js";
 import { FeaturedPage } from "../../ui/pages/FeaturedPage.js";
 
@@ -32,7 +32,10 @@ export const featuredRoutes = new Hono<Env>();
  * @returns Featured page response
  */
 export async function renderFeaturedPage(c: Context<Env>): Promise<Response> {
-  const navData = await getNavigationData(c);
+  // The chrome and the timeline are independent, so they load together. The
+  // timeline only ever wanted `navData.isAuthenticated`, which is
+  // `c.var.isAuthenticated` verbatim.
+  const navDataPromise = getNavigationData(c);
   const i18n = getI18n(c);
 
   const page = parsePageNumber(c.req.query("page"));
@@ -43,12 +46,16 @@ export async function renderFeaturedPage(c: Context<Env>): Promise<Response> {
     }),
   );
   const paginatedPageTitle = formatPageLabel(page);
-  const { items, currentPage, totalPages } = await assembleFeaturedTimeline(c, {
-    page,
-    isAuthenticated: navData.isAuthenticated,
-  });
+  const [navData, { items, currentPage, totalPages }] = await Promise.all([
+    navDataPromise,
+    assembleFeaturedTimeline(c, {
+      page,
+      isAuthenticated: c.var.isAuthenticated,
+    }),
+  ]);
 
   return renderPublicPage(c, {
+    page: "featured",
     title:
       page > 1
         ? buildPageTitle(featuredTitle, paginatedPageTitle, navData.siteName)
@@ -75,6 +82,7 @@ featuredRoutes.get("/", renderFeaturedPage);
  * @returns Atom feed response
  */
 export async function renderFeaturedFeed(c: Context<Env>): Promise<Response> {
+  if (!feedsPublished(c)) return c.notFound();
   const feedData = await buildFeedData(c, {
     kind: "featured",
     selfPath: "/featured/feed",
@@ -83,7 +91,10 @@ export async function renderFeaturedFeed(c: Context<Env>): Promise<Response> {
 }
 
 /** Legacy atom.xml suffix → canonical /featured/feed, inside the same view. */
-export function redirectLegacyFeaturedFeed(c: Context<Env>): Response {
+export function redirectLegacyFeaturedFeed(
+  c: Context<Env>,
+): Response | Promise<Response> {
+  if (!feedsPublished(c)) return c.notFound();
   return c.redirect(toViewPath(c, "/featured/feed"), 308);
 }
 

@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate as drizzleMigrate } from "drizzle-orm/better-sqlite3/migrator";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import {
   dirname,
@@ -13,7 +13,16 @@ import {
 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createNodeDatabase } from "../db/index.js";
-import { createNodePgDatabase, migrateNodePgDatabase } from "../db/pg/node.js";
+import {
+  type BundledMigration,
+  listPendingMigrations,
+  PendingMigrationsError,
+} from "../db/migration-status.js";
+import {
+  createNodePgDatabase,
+  migrateNodePgDatabase,
+  readPgLastMigrationAt,
+} from "../db/pg/node.js";
 import {
   type RawQueryClient,
   type RawQueryStatement,
@@ -30,9 +39,11 @@ import {
   getSiteResolutionMode,
   shouldTrustProxy,
 } from "../lib/env.js";
+import { getEnvValueIssues } from "../lib/env-values.js";
 import { getHostBasedStartupConfigurationIssues } from "../lib/startup-config.js";
+import { now } from "../lib/time.js";
 import { createSiteService } from "../services/site.js";
-import type { App } from "../types/app-context.js";
+import type { HonoApp } from "../types/app-context.js";
 import type { Bindings } from "../types/bindings.js";
 
 const DEFAULT_HOST = "127.0.0.1";
@@ -332,6 +343,54 @@ function assertDatabaseInitialized(sqlite: Database.Database): void {
   }
 }
 
+function readSqliteLastMigrationAt(sqlite: Database.Database): number | null {
+  const hasMigrationsTable = sqlite
+    .prepare(
+      `
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table' AND name = '__drizzle_migrations'
+        LIMIT 1
+      `,
+    )
+    .pluck()
+    .get();
+  if (!hasMigrationsTable) {
+    return null;
+  }
+
+  const last = sqlite
+    .prepare(`SELECT MAX(created_at) FROM "__drizzle_migrations"`)
+    .pluck()
+    .get();
+  return last === null || last === undefined ? null : Number(last);
+}
+
+function readBundledMigrations(migrationsFolder: string): BundledMigration[] {
+  const journal = JSON.parse(
+    readFileSync(join(migrationsFolder, "meta/_journal.json"), "utf8"),
+  ) as { entries: BundledMigration[] };
+  return journal.entries.map(({ tag, when }) => ({ tag, when }));
+}
+
+/**
+ * Build `NODE_DATABASE.pendingMigrations`. The journal is the one `migrate()`
+ * reads, read on first use and then kept: it belongs to the code that is
+ * running, even if a newer package replaces the files on disk.
+ */
+function createPendingMigrationsCheck(
+  dialect: "sqlite" | "pg",
+  readLastAppliedAt: () => Promise<number | null>,
+): () => Promise<string[]> {
+  let bundled: BundledMigration[] | undefined;
+  return async () => {
+    bundled ??= readBundledMigrations(
+      resolveNodeMigrationsDir(import.meta.url, dialect),
+    );
+    return listPendingMigrations(bundled, await readLastAppliedAt());
+  };
+}
+
 function createNodeSqlite(
   env: Bindings,
   options?: { createParentDir?: boolean; requireInitialized?: boolean },
@@ -402,6 +461,9 @@ export async function createNodeBindings(
           rawQuery,
           schema: pgSchemaBundle,
           close: () => pool.end(),
+          pendingMigrations: createPendingMigrationsCheck("pg", () =>
+            readPgLastMigrationAt(pool),
+          ),
         },
       },
       async close() {
@@ -423,6 +485,9 @@ export async function createNodeBindings(
         close: () => {
           sqlite.close();
         },
+        pendingMigrations: createPendingMigrationsCheck("sqlite", async () =>
+          readSqliteLastMigrationAt(sqlite),
+        ),
       },
       NODE_SQLITE: sqlite,
     },
@@ -569,14 +634,55 @@ export async function migrate(
   }
 }
 
-export type NodeAppResolver = App | (() => App | Promise<App>);
+export type NodeAppResolver = HonoApp | (() => HonoApp | Promise<HonoApp>);
+
+/** What `@hono/node-server` passes alongside each request. */
+export interface NodeConnection {
+  incoming?: { socket?: { remoteAddress?: string } };
+}
 
 export interface NodeRequestHandler {
   close(): Promise<void>;
-  fetch(request: Request): Promise<Response>;
+  fetch(request: Request, connection?: NodeConnection): Promise<Response>;
 }
 
-async function resolveApp(app: NodeAppResolver | undefined): Promise<App> {
+/**
+ * Pins the client address a request carries to one Jant can vouch for.
+ *
+ * Without a trusted proxy in front, an `X-Forwarded-For` or
+ * `CF-Connecting-IP` header came from the client itself, and a rate limit
+ * keyed on it could be dodged by changing it on every request. Both are
+ * replaced by the socket's address. Behind a trusted proxy the headers are
+ * the proxy's, and stay.
+ *
+ * @param request - The request as the server received it
+ * @param socketAddress - The connecting socket's address, when known
+ * @param trustProxy - Whether `TRUST_PROXY` is on
+ * @returns The request, with client-address headers only Jant set
+ *
+ * @example
+ * ```ts
+ * withClientAddress(request, "203.0.113.7", false).headers.get("x-forwarded-for");
+ * // "203.0.113.7"
+ * ```
+ */
+export function withClientAddress(
+  request: Request,
+  socketAddress: string | undefined,
+  trustProxy: boolean,
+): Request {
+  if (trustProxy) return request;
+  const headers = new Headers(request.headers);
+  headers.delete("cf-connecting-ip");
+  if (socketAddress) {
+    headers.set("x-forwarded-for", socketAddress);
+  } else {
+    headers.delete("x-forwarded-for");
+  }
+  return new Request(request, { headers });
+}
+
+async function resolveApp(app: NodeAppResolver | undefined): Promise<HonoApp> {
   if (typeof app === "function") {
     return app();
   }
@@ -586,6 +692,18 @@ async function resolveApp(app: NodeAppResolver | undefined): Promise<App> {
   }
 
   throw new Error("Node request handler requires an app instance or loader.");
+}
+
+/**
+ * Refuse a database the running code is ahead of. Every query that touches a
+ * column a pending migration adds fails, so serving would answer 500 on every
+ * page while `/healthz` stays green.
+ */
+async function assertNoPendingMigrations(bindings: Bindings): Promise<void> {
+  const pending = (await bindings.NODE_DATABASE?.pendingMigrations?.()) ?? [];
+  if (pending.length > 0) {
+    throw new PendingMigrationsError(pending);
+  }
 }
 
 async function assertNodeSiteResolutionReady(
@@ -616,8 +734,16 @@ export async function createNodeRequestHandler(options?: {
       `Host-based startup configuration is invalid:\n- ${hostBasedStartupIssues.map((issue) => issue.message).join("\n- ")}`,
     );
   }
-  const { bindings, close } = await createNodeBindings(env);
+  const envValueIssues = getEnvValueIssues(env);
+  if (envValueIssues.length > 0) {
+    throw new Error(
+      `Jant can't use these environment values:\n- ${envValueIssues.map((issue) => issue.message).join("\n- ")}`,
+    );
+  }
+  const { bindings: databaseBindings, close } = await createNodeBindings(env);
+  const bindings: Bindings = { ...databaseBindings, NODE_STARTED_AT: now() };
   try {
+    await assertNoPendingMigrations(bindings);
     await assertNodeSiteResolutionReady(bindings);
 
     const assetRoot =
@@ -631,7 +757,12 @@ export async function createNodeRequestHandler(options?: {
     let closed = false;
 
     return {
-      async fetch(request: Request) {
+      async fetch(receivedRequest: Request, connection?: NodeConnection) {
+        const request = withClientAddress(
+          receivedRequest,
+          connection?.incoming?.socket?.remoteAddress,
+          shouldTrustProxy(bindings),
+        );
         const publicRequestUrl = resolvePublicRequestUrl(request, bindings);
         const preparedRequest =
           publicRequestUrl === request.url

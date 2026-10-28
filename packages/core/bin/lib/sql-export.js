@@ -1,4 +1,17 @@
-const TABLE_EXPORT_ORDER = [
+/**
+ * The order rows are dumped, and so the order they are replayed on import.
+ *
+ * It is a foreign-key topological sort: a table follows everything it points
+ * at. `sortExportTables` applies it to whatever table list it is handed, so
+ * this — not the caller's list — is what decides an export's order.
+ *
+ * A table missing from here is not an ordering no-op. Unknown names sort after
+ * every known one, so a new child table lands at the end, behind its own
+ * parents, and the dump only fails once there is a row to violate the
+ * constraint. `snapshot-tables.test.ts` checks the sorted result, not the
+ * caller's list, for that reason.
+ */
+export const TABLE_EXPORT_ORDER = [
   "site",
   "user",
   "account",
@@ -8,11 +21,15 @@ const TABLE_EXPORT_ORDER = [
   "site_setting",
   "site_member",
   "collection",
-  "nav_item",
-  "collection_directory_item",
+  // Before the three tables that hold a key into it: `nav_item`,
+  // `collection_directory_item` and `path_registry`.
+  "smart_collection",
   "api_token",
   "post",
   "thread_collection",
+  // After `post`: a `page` nav item carries a `post_id`.
+  "nav_item",
+  "collection_directory_item",
   "path_registry",
   "media",
 ];
@@ -33,8 +50,24 @@ function toHex(bytes) {
   );
 }
 
-export function sqlValue(value) {
-  if (value === null) {
+/**
+ * A value as a SQL literal in the dialect the dump will be replayed into.
+ *
+ * SQLite stores booleans as integers and reads `X'…'` blobs. Postgres wants
+ * `TRUE`/`FALSE`, which it won't take as `1`/`0`, `'\x…'::bytea` for bytes, and
+ * returns `timestamp` columns as `Date` objects, which must go back as ISO
+ * text.
+ *
+ * @param {unknown} value - A column value as the driver returned it
+ * @param {"sqlite" | "pg"} [dialect] - The database the SQL is for
+ * @returns {string} The literal
+ *
+ * @example
+ * sqlValue(true, "pg"); // "TRUE"
+ * sqlValue(true); // "1"
+ */
+export function sqlValue(value, dialect = "sqlite") {
+  if (value === null || value === undefined) {
     return "NULL";
   }
 
@@ -47,24 +80,50 @@ export function sqlValue(value) {
   }
 
   if (typeof value === "boolean") {
+    if (dialect === "pg") return value ? "TRUE" : "FALSE";
     return value ? "1" : "0";
   }
 
-  if (value instanceof Uint8Array) {
-    return `X'${toHex(value)}'`;
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+    const hex = toHex(
+      value instanceof Uint8Array ? value : new Uint8Array(value),
+    );
+    return dialect === "pg" ? `'\\x${hex}'::bytea` : `X'${hex}'`;
   }
 
-  if (value instanceof ArrayBuffer) {
-    return `X'${toHex(new Uint8Array(value))}'`;
+  if (value instanceof Date) {
+    return `'${value.toISOString()}'`;
   }
 
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-export function buildInsertStatement(tableName, columnNames, row) {
+/**
+ * One row as an INSERT statement.
+ *
+ * @param {string} tableName - The table
+ * @param {string[]} columnNames - Columns to write, in order
+ * @param {Record<string, unknown>} row - The row as the driver returned it
+ * @param {"sqlite" | "pg"} [dialect] - The database the SQL is for
+ * @param {string} [conflictClause] - An `ON CONFLICT …` clause to append
+ * @returns {string} The statement
+ *
+ * @example
+ * buildInsertStatement("site_setting", ["site_id", "key", "value"], row, "pg");
+ */
+export function buildInsertStatement(
+  tableName,
+  columnNames,
+  row,
+  dialect = "sqlite",
+  conflictClause = "",
+) {
   const columns = columnNames.map(quoteIdentifier).join(", ");
-  const values = columnNames.map((column) => sqlValue(row[column])).join(", ");
-  return `INSERT INTO ${quoteIdentifier(tableName)} (${columns}) VALUES(${values});`;
+  const values = columnNames
+    .map((column) => sqlValue(row[column], dialect))
+    .join(", ");
+  const conflict = conflictClause ? ` ${conflictClause}` : "";
+  return `INSERT INTO ${quoteIdentifier(tableName)} (${columns}) VALUES(${values})${conflict};`;
 }
 
 export function sortExportTables(tableNames) {
@@ -122,6 +181,10 @@ export async function listExportTables(queryRunner, dialect = "sqlite") {
     rows
       .filter((row) => typeof row.name === "string" && row.name.length > 0)
       .filter((row) => !EXCLUDED_TABLES.has(row.name))
+      // D1's own bookkeeping, `_cf_KV` remotely and `_cf_METADATA` locally:
+      // D1 refuses every read of it, the column lookup included, so listing
+      // it failed the whole export.
+      .filter((row) => !String(row.name).startsWith("_cf_"))
       .filter((row) => !String(row.name).startsWith("post_fts"))
       .filter(
         (row) => !String(row.sql ?? "").startsWith("CREATE VIRTUAL TABLE"),
@@ -167,8 +230,50 @@ export async function getTableColumns(
     .map((row) => String(row.name));
 }
 
+/**
+ * Read an ordered SELECT a page at a time.
+ *
+ * `LIMIT … OFFSET …` is appended to the statement, so it must end in an
+ * ORDER BY with a unique tiebreaker. Pages are separate reads: rows written
+ * between two of them can be skipped or repeated, which is why a snapshot
+ * should be taken of a site nobody is writing to.
+ *
+ * @param {{ query(sql: string): Promise<Record<string, unknown>[]> }} queryRunner
+ * @param {string} selectSql - An ordered SELECT with no LIMIT
+ * @param {number} pageSize - Rows per read
+ * @returns {Promise<Record<string, unknown>[]>} Every row, in order
+ * @example
+ * await queryAllPages(runner, 'SELECT * FROM "post" ORDER BY rowid', 200);
+ */
+async function queryAllPages(queryRunner, selectSql, pageSize) {
+  const base = selectSql.trim();
+  const rows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await queryRunner.query(
+      `${base} LIMIT ${pageSize} OFFSET ${offset}`,
+    );
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
+}
+
+/**
+ * Dump tables as INSERT statements.
+ *
+ * `options.pageSize` reads each table in pages. D1 needs it: every query runs
+ * through `wrangler d1 execute --json`, and one SELECT of a real site's
+ * `post` table outgrew the output the CLI can buffer.
+ * `options.orderRowsByTable` reorders a table's rows before they are written,
+ * for inserts that must follow their own foreign keys.
+ * `options.conflictClauseByTable` appends an `ON CONFLICT` clause to a table's
+ * inserts.
+ */
 export async function dumpDatabaseToSql(queryRunner, options) {
   const dialect = options.dialect ?? "sqlite";
+  const pageSize =
+    Number.isInteger(options.pageSize) && options.pageSize > 0
+      ? options.pageSize
+      : null;
   const onProgress =
     typeof options.onProgress === "function" ? options.onProgress : null;
   const configuredTables = Array.isArray(options.tables)
@@ -194,15 +299,29 @@ export async function dumpDatabaseToSql(queryRunner, options) {
 
     const selectSql =
       options.selectSqlByTable?.[tableName] ||
-      `SELECT * FROM ${quoteIdentifier(tableName)}`;
-    const rows = await queryRunner.query(selectSql);
+      (pageSize && dialect === "sqlite"
+        ? `SELECT * FROM ${quoteIdentifier(tableName)} ORDER BY rowid`
+        : `SELECT * FROM ${quoteIdentifier(tableName)}`);
+    const readRows = pageSize
+      ? await queryAllPages(queryRunner, selectSql, pageSize)
+      : await queryRunner.query(selectSql);
+    const orderRows = options.orderRowsByTable?.[tableName];
+    const rows = orderRows ? orderRows(readRows) : readRows;
     if (rows.length === 0) {
       continue;
     }
 
     sql += `-- ${tableName}\n`;
     sql += rows
-      .map((row) => buildInsertStatement(tableName, columnNames, row))
+      .map((row) =>
+        buildInsertStatement(
+          tableName,
+          columnNames,
+          row,
+          dialect,
+          options.conflictClauseByTable?.[tableName],
+        ),
+      )
       .join("\n");
     sql += "\n\n";
   }

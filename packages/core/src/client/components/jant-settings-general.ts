@@ -511,10 +511,11 @@ export class JantSettingsGeneral extends LitElement {
    *
    * The same `resolveDiscoverMode` the server runs, over the same inputs, so
    * the checkbox cannot disagree with the feed. It has to be computed here
-   * rather than sent down resolved because two of its inputs — search
-   * indexing and the feed switch — are controls on this page: a value resolved
-   * on the server is correct until the first click and wrong from then until
-   * the next page load, which is exactly the state an owner reads it in.
+   * rather than sent down resolved because one of its inputs, search indexing,
+   * is a control on this page: a value resolved on the server is correct until
+   * the first click and wrong from then until the next page load, which is
+   * exactly the state an owner reads it in. The feed switch is not — it lives
+   * in the Config Editor, so `feedsEnabled` holds for the life of the page.
    */
   private _effectiveDiscoverMode(overrides: { noindex?: boolean } = {}) {
     return resolveDiscoverMode({
@@ -531,10 +532,6 @@ export class JantSettingsGeneral extends LitElement {
    * On writes `latest`: the directory may read any public post, and decides
    * itself which list each one reaches — featured posts on its home, links
    * and quotes on their own lists.
-   *
-   * A site that stored `featured` under an older release still reads as
-   * ticked, and stays `featured` until its owner touches the box: widening
-   * what the directory may show is the owner's to do, not an upgrade's.
    */
   private _onDiscoverToggle(enabled: boolean) {
     this._saveDiscover(enabled ? "latest" : "off");
@@ -1004,13 +1001,13 @@ export class JantSettingsGeneral extends LitElement {
             <span>${this.labels.discoverEnabled}</span>
           </label>
           <p class="text-sm text-muted-foreground">
-            ${
+            ${this._renderDiscoverHelp(
               locked
                 ? this.demoMode
                   ? this.labels.discoverDemoLocked
                   : this.labels.discoverFeedsOffLocked
-                : this._renderDiscoverIntro()
-            }
+                : this.labels.discoverIntro,
+            )}
           </p>
           ${
             heldBackBySearch
@@ -1026,14 +1023,18 @@ export class JantSettingsGeneral extends LitElement {
   }
 
   /**
-   * The help line, with each page it names linking to that page.
+   * The help line under the checkbox, with each page it names linking to that
+   * page.
    *
-   * Which words link where is `discoverIntroRuns`'s to decide, so the setup
-   * screen, which shows the same line, links the same words.
+   * Whichever line is showing goes through here, the usual one or the notice
+   * that replaces it while the box is locked, so a demo site's notice links the
+   * directory's name too. Which words link where is `discoverIntroRuns`'s to
+   * decide, so the setup screen, which shows the same opening, links the same
+   * words.
    */
-  private _renderDiscoverIntro() {
+  private _renderDiscoverHelp(line: string) {
     const runs = discoverIntroRuns(
-      this.labels.discoverIntro ?? "",
+      line ?? "",
       {
         name: this.labels.discoverName ?? "",
         rules: this.labels.discoverRules ?? "",

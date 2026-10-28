@@ -6,7 +6,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 import { createApp } from "../../dist/index.js";
-import { createNodeRequestHandler } from "../../dist/node.js";
+import {
+  createNodeBindings,
+  createNodeRequestHandler,
+} from "../../dist/node.js";
 
 const nodeBin = process.execPath;
 const jantBin = fileURLToPath(new URL("../../bin/jant.js", import.meta.url));
@@ -108,6 +111,58 @@ async function resetPublicSchema(databaseUrl) {
   }
 }
 
+/**
+ * Take the newest migration out of Drizzle's record, the way a database one
+ * release behind looks, and check that the runtime refuses to start on it and
+ * that `/readyz` reports the database as not ready. The record goes back
+ * afterwards.
+ */
+async function assertRefusesPendingMigration(databaseUrl, env) {
+  const pool = new Pool({ connectionString: databaseUrl });
+  try {
+    const {
+      rows: [newest],
+    } = await pool.query(`
+      DELETE FROM drizzle.__drizzle_migrations
+      WHERE id = (
+        SELECT id FROM drizzle.__drizzle_migrations
+        ORDER BY created_at DESC
+        LIMIT 1
+      )
+      RETURNING hash, created_at
+    `);
+    assert.ok(newest, "the database recorded no migrations");
+
+    try {
+      await assert.rejects(
+        createNodeRequestHandler({ env, app: createApp(), assetRoot: null }),
+        (error) => error.code === "JANT_PENDING_MIGRATIONS",
+      );
+
+      const { bindings, close } = await createNodeBindings(env);
+      try {
+        const response = await createApp().fetch(
+          new Request("http://127.0.0.1:3000/readyz"),
+          bindings,
+        );
+        assert.equal(response.status, 503);
+        const body = await response.json();
+        assert.equal(body.checks.database.ok, false);
+        assert.match(body.checks.database.error, /jant migrate/);
+      } finally {
+        await close();
+      }
+    } finally {
+      await pool.query(
+        "INSERT INTO drizzle.__drizzle_migrations (hash, created_at) VALUES ($1, $2)",
+        [newest.hash, newest.created_at],
+      );
+    }
+  } finally {
+    await pool.end();
+  }
+}
+
 async function main() {
   const databaseUrl = getRequiredEnv("PG_SMOKE_DATABASE_URL");
   const adminDatabaseUrl = process.env.PG_SMOKE_ADMIN_DATABASE_URL;
@@ -132,14 +187,17 @@ async function main() {
       stdio: "inherit",
     });
 
+    const env = {
+      DATABASE_URL: databaseUrl,
+      AUTH_SECRET: "test-secret-with-enough-entropy-for-pg-smoke",
+      DATA_DIR: dataDir,
+      SITE_RESOLUTION_MODE: "single-site",
+      SITE_ORIGIN: "http://127.0.0.1:3000",
+    };
+    await assertRefusesPendingMigration(databaseUrl, env);
+
     handler = await createNodeRequestHandler({
-      env: {
-        DATABASE_URL: databaseUrl,
-        AUTH_SECRET: "test-secret-with-enough-entropy-for-pg-smoke",
-        DATA_DIR: dataDir,
-        SITE_RESOLUTION_MODE: "single-site",
-        SITE_ORIGIN: "http://127.0.0.1:3000",
-      },
+      env,
       app: createApp(),
       assetRoot: null,
     });
@@ -271,6 +329,15 @@ async function main() {
     assert.equal(archivePage.status, 200);
     assert.match(await archivePage.text(), /Hello from Postgres smoke\./);
 
+    // The grid groups by month and the year picker by year, each through a
+    // CASE over calendar boundaries worked out for the site's time zone.
+    const thisYear = new Date().getUTCFullYear();
+    const archiveGrid = await handler.fetch(
+      new Request(`http://127.0.0.1:3000/archive?layout=grid&year=${thisYear}`),
+    );
+    assert.equal(archiveGrid.status, 200);
+    assert.match(await archiveGrid.text(), /Hello from Postgres smoke\./);
+
     // The collections directory aggregates with COUNT(DISTINCT) under a LEFT
     // JOIN whose ON clause carries the reader's visibility, plus a correlated
     // subquery inside MAX(). That combination is where the two dialects are
@@ -338,8 +405,21 @@ async function main() {
       assert.equal(attach.status, 201);
     }
 
+    // The reader's count is printed on the directory page; the API is the
+    // author's and counts without the visibility condition.
+    const directoryPage = await handler.fetch(
+      new Request("http://127.0.0.1:3000/collections"),
+    );
+    assert.equal(directoryPage.status, 200);
+    assert.match(
+      await directoryPage.text(),
+      /collection-directory-title">Smoke<[\s\S]*?collection-directory-meta">1 thread</,
+    );
+
     const directoryResponse = await handler.fetch(
-      new Request("http://127.0.0.1:3000/api/collections"),
+      new Request("http://127.0.0.1:3000/api/collections", {
+        headers: { Cookie: cookieHeader },
+      }),
     );
     assert.equal(directoryResponse.status, 200);
     const directory = await directoryResponse.json();
@@ -369,7 +449,7 @@ async function main() {
     assert.equal(smartResponse.status, 201);
     const smartBody = await smartResponse.json();
     // Round-tripped through the boolean column, not merely echoed back.
-    assert.deepEqual(smartBody.smartCollection.selection, {
+    assert.deepEqual(smartBody.selection, {
       format: "note",
       title: false,
     });
@@ -415,6 +495,186 @@ async function main() {
     // above, and a draft is never counted for anyone.
     assert.equal(smartRow?.threadCount, 2);
 
+    // Paging reads its cursor back out of SQL: the ORDER BY keys are selected
+    // as columns beside the row, NULLs folded by `coalesce(…, -1)`, and the
+    // next page compares against them. Postgres sorts NULLs first under DESC
+    // where SQLite sorts them last, so a key left unwrapped would reorder the
+    // walk here and nowhere else. Ties and a pinned post put page breaks on
+    // every key.
+    const createPost = async (fields) => {
+      const response = await handler.fetch(
+        new Request("http://127.0.0.1:3000/api/posts", {
+          method: "POST",
+          headers: {
+            Cookie: cookieHeader,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            format: "note",
+            status: "published",
+            ...fields,
+          }),
+        }),
+      );
+      assert.equal(response.status, 201);
+      return response.json();
+    };
+    for (const bodyMarkdown of ["Tie one.", "Tie two.", "Tie three."]) {
+      await createPost({ bodyMarkdown, publishedAt: 1_700_000_000 });
+    }
+    await createPost({
+      bodyMarkdown: "Pinned.",
+      publishedAt: 1_600_000_000,
+      pinned: true,
+    });
+    const privatePost = await createPost({
+      bodyMarkdown: "Private.",
+      visibility: "private",
+    });
+
+    // A collection's keys are aggregates over each Thread's members, read
+    // back out of a grouped subquery: a Collection pin, the first publication
+    // (oldest), Thread activity, and the highest rating (rating_desc).
+    const walkCollectionResponse = await handler.fetch(
+      new Request("http://127.0.0.1:3000/api/collections", {
+        method: "POST",
+        headers: {
+          Cookie: cookieHeader,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ slug: "smoke-walk", title: "Smoke walk" }),
+      }),
+    );
+    assert.equal(walkCollectionResponse.status, 201);
+    const walkCollection = await walkCollectionResponse.json();
+    const inWalk = { collectionIds: [walkCollection.id] };
+    for (const bodyMarkdown of ["Walk tie one.", "Walk tie two."]) {
+      await createPost({
+        ...inWalk,
+        bodyMarkdown,
+        publishedAt: 1_700_000_000,
+        rating: 3,
+      });
+    }
+    const walkBumped = await createPost({
+      ...inWalk,
+      bodyMarkdown: "Walk root with a later reply.",
+      publishedAt: 1_650_000_000,
+    });
+    await createPost({
+      bodyMarkdown: "Walk reply.",
+      replyToId: walkBumped.id,
+      publishedAt: 1_750_000_000,
+      rating: 5,
+    });
+    const walkPinned = await createPost({
+      ...inWalk,
+      bodyMarkdown: "Walk pinned.",
+      publishedAt: 1_600_000_000,
+    });
+    const pinResponse = await handler.fetch(
+      new Request(
+        `http://127.0.0.1:3000/api/collections/${walkCollection.id}/threads/${walkPinned.id}/pin`,
+        { method: "PUT", headers: { Cookie: cookieHeader } },
+      ),
+    );
+    assert.equal(pinResponse.status, 200);
+    await createPost({ ...inWalk, bodyMarkdown: "Walk unrated." });
+    const walkPrivate = await createPost({
+      ...inWalk,
+      bodyMarkdown: "Walk private.",
+      visibility: "private",
+    });
+
+    const readIds = async (path, headers = {}) => {
+      const response = await handler.fetch(
+        new Request(`http://127.0.0.1:3000${path}`, { headers }),
+      );
+      assert.equal(response.status, 200, path);
+      const body = await response.json();
+      const items = body.posts ?? body.threads;
+      return { ids: items.map((item) => item.id), next: body.nextCursor };
+    };
+    const walkedOrders = new Map();
+    for (const [path, headers] of [
+      ["/api/posts?", { Cookie: cookieHeader }],
+      ["/api/posts?status=draft&", { Cookie: cookieHeader }],
+      // The Thread lists: every order on the plain list, a collection's own
+      // orders with the other dimensions pushed into a root subquery (the
+      // `replies` one correlates an EXISTS inside it), and one Thread's posts.
+      ["/api/threads?", { Cookie: cookieHeader }],
+      ["/api/public/threads?", {}],
+      ["/api/public/threads?visibility=any&sort=published&", {}],
+      ["/api/public/threads?sort=updated&", {}],
+      ["/api/public/threads?sort=oldest&", {}],
+      ["/api/public/threads?sort=rating&include=fold&", {}],
+      ["/api/public/threads?collection=smoke-walk&", {}],
+      ["/api/public/threads?collection=smoke-walk&sort=activity&", {}],
+      ["/api/public/threads?collection=smoke-walk&sort=oldest&", {}],
+      ["/api/public/threads?collection=smoke-walk&sort=rating&", {}],
+      ["/api/public/threads?collection=smoke-walk&replies=any&", {}],
+      ["/api/public/threads?collection=smoke-walk&sort=published&", {}],
+      [`/api/public/threads/${walkBumped.slug}/posts?`, {}],
+    ]) {
+      const expected = (await readIds(`${path}limit=100`, headers)).ids;
+      assert.ok(expected.length >= 1, path);
+      const walked = [];
+      let cursor = null;
+      for (let page = 0; page <= expected.length; page++) {
+        const query = cursor
+          ? `limit=1&cursor=${encodeURIComponent(cursor)}`
+          : "limit=1";
+        const { ids, next } = await readIds(`${path}${query}`, headers);
+        walked.push(...ids);
+        cursor = next;
+        if (cursor === null) break;
+      }
+      assert.equal(cursor, null, path);
+      assert.deepEqual(walked, expected, path);
+      walkedOrders.set(path, expected);
+    }
+    // Each sort reads its own keys: the pinned Thread leads all three, then
+    // activity, first publication, and rating put the rest in three orders.
+    assert.deepEqual(
+      walkedOrders.get(
+        "/api/public/threads?collection=smoke-walk&replies=any&",
+      ),
+      [walkBumped.id],
+    );
+    assert.equal(
+      walkedOrders.get(`/api/public/threads/${walkBumped.slug}/posts?`)?.length,
+      2,
+    );
+    const collectionOrders = ["activity", "oldest", "rating"].map((sort) =>
+      walkedOrders.get(
+        `/api/public/threads?collection=smoke-walk&sort=${sort}&`,
+      ),
+    );
+    assert.equal(collectionOrders.length, 3);
+    for (const ids of collectionOrders) {
+      assert.equal(ids.length, 5);
+      assert.equal(ids[0], walkPinned.id);
+    }
+    assert.equal(
+      new Set(collectionOrders.map((ids) => ids.join())).size,
+      3,
+      "collection sort orders",
+    );
+
+    // A private post's ID, the old cursor format, answers as an unknown one.
+    const privateCursor = await handler.fetch(
+      new Request(
+        `http://127.0.0.1:3000/api/public/threads?visibility=any&sort=published&cursor=${privatePost.id}`,
+      ),
+    );
+    assert.equal(privateCursor.status, 400);
+    const privateCollectionCursor = await handler.fetch(
+      new Request(
+        `http://127.0.0.1:3000/api/public/threads?collection=smoke-walk&cursor=${walkPrivate.id}`,
+      ),
+    );
+    assert.equal(privateCollectionCursor.status, 400);
+
     // A collection slug that names nothing is answered, not dropped — the
     // whole archive under the reader's own word is never the right response.
     const missingCollection = await handler.fetch(
@@ -427,6 +687,74 @@ async function main() {
     );
     assert.equal(searchPage.status, 200);
     assert.match(await searchPage.text(), /<mark>Postgres<\/mark>/);
+
+    // Punctuation is tsquery syntax. A query of nothing else used to reach
+    // to_tsquery as written and fail to parse: the API answered with an error
+    // and the page with "search failed".
+    for (const query of ["'''", "&|!():"]) {
+      const punctuationSearch = await handler.fetch(
+        new Request(
+          `http://127.0.0.1:3000/api/search?q=${encodeURIComponent(query)}`,
+          { headers: { Cookie: cookieHeader } },
+        ),
+      );
+      assert.equal(punctuationSearch.status, 200, query);
+    }
+
+    // Search keeps private posts, and replies that inherit a private root's
+    // visibility, from anyone signed out, and finds them for the author.
+    // `lanterns` takes the full-text statement and then its ILIKE fallback;
+    // `灯笼` is short enough to go straight to ILIKE. Each is its own SQL, and
+    // each has to apply the rule.
+    const privateSearchRoot = await createPost({
+      title: "Secret diary",
+      bodyMarkdown: "Private root lanterns 灯笼.",
+      visibility: "private",
+    });
+    await createPost({
+      bodyMarkdown: "Private reply lanterns 灯笼.",
+      replyToId: privateSearchRoot.id,
+    });
+    for (const query of ["lanterns", "灯笼"]) {
+      const q = encodeURIComponent(query);
+      // The search API is the author's: a signed-out caller gets nothing.
+      const anonymousApi = await handler.fetch(
+        new Request(`http://127.0.0.1:3000/api/search?q=${q}`),
+      );
+      assert.equal(anonymousApi.status, 401);
+
+      const authorApi = await handler.fetch(
+        new Request(`http://127.0.0.1:3000/api/search?q=${q}`, {
+          headers: { Cookie: cookieHeader },
+        }),
+      );
+      assert.equal(authorApi.status, 200);
+      const authorApiBody = await authorApi.json();
+      assert.equal(authorApiBody.count, 2);
+      assert.deepEqual(
+        authorApiBody.results.map((result) => result.visibility),
+        ["private", "private"],
+      );
+
+      const anonymousPage = await handler.fetch(
+        new Request(`http://127.0.0.1:3000/search?q=${q}`),
+      );
+      assert.equal(anonymousPage.status, 200);
+      assert.doesNotMatch(
+        await anonymousPage.text(),
+        /Secret diary|Private root|Private reply/,
+      );
+
+      const authorPage = await handler.fetch(
+        new Request(`http://127.0.0.1:3000/search?q=${q}`, {
+          headers: { Cookie: cookieHeader },
+        }),
+      );
+      assert.equal(authorPage.status, 200);
+      const authorHtml = await authorPage.text();
+      assert.match(authorHtml, /Secret diary/);
+      assert.match(authorHtml, /Private reply/);
+    }
 
     const settingsResponse = await handler.fetch(
       new Request("http://127.0.0.1:3000/api/settings", {
@@ -444,6 +772,57 @@ async function main() {
     assert.equal(settingsResponse.status, 200);
     const settingsBody = await settingsResponse.json();
     assert.equal(settingsBody.settings.SITE_NAME, "PG Smoke Updated");
+
+    // A snapshot written on Postgres restores on Postgres. Import once sent
+    // SQLite's `PRAGMA defer_foreign_keys` along with the data and failed.
+    {
+      const snapshotPath = join(dataDir, "snapshot.zip");
+      const cliOptions = {
+        cwd: fileURLToPath(new URL("../../", import.meta.url)),
+        env: {
+          ...process.env,
+          DATABASE_URL: databaseUrl,
+          DATA_DIR: dataDir,
+          JANT_ENV_FILE: "",
+        },
+        stdio: "inherit",
+      };
+      const countPosts = async () =>
+        (await assertPool.query('SELECT COUNT(*)::text AS "count" FROM "post"'))
+          .rows[0]?.count;
+      const postsBefore = await countPosts();
+
+      execFileSync(
+        nodeBin,
+        [jantBin, "site", "snapshot", "export", "--output", snapshotPath],
+        cliOptions,
+      );
+      await assertPool.query(
+        `UPDATE "site_setting" SET "value" = 'Changed after the snapshot' WHERE "key" = 'SITE_NAME'`,
+      );
+      await assertPool.query(
+        'DELETE FROM "post" WHERE "reply_to_id" IS NOT NULL',
+      );
+      execFileSync(
+        nodeBin,
+        [
+          jantBin,
+          "site",
+          "snapshot",
+          "import",
+          "--path",
+          snapshotPath,
+          "--replace",
+        ],
+        cliOptions,
+      );
+
+      assert.equal(
+        await readSetting(assertPool, "SITE_NAME"),
+        "PG Smoke Updated",
+      );
+      assert.equal(await countPosts(), postsBefore);
+    }
 
     console.log("Postgres smoke passed.");
   } finally {

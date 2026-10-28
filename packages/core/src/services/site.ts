@@ -17,8 +17,18 @@ export interface SiteLookupResult {
   domain: SiteDomain | null;
 }
 
+/**
+ * Where a single-site install's row and domain come from. Every field applies
+ * only when the site is created; an existing site keeps its own.
+ */
 export interface EnsureSingleSiteOptions {
   host?: string | null;
+  /**
+   * The id to create the site with, instead of a random one. A deployment
+   * that restores a snapshot on every start gives the site the snapshot's id,
+   * so media URLs — which carry the site id — stay the same across rebuilds.
+   */
+  id?: string;
   key?: string;
   pathPrefix?: string | null;
 }
@@ -131,6 +141,9 @@ function toSiteDomain(row: typeof _sqliteSiteDomains.$inferSelect): SiteDomain {
 
 export const TRANSIENT_SINGLE_SITE_ID = "sit_pending";
 
+/** Joined-row ceiling for the single-site read — see `loadSingleSiteWithDomain`. */
+const SINGLE_SITE_JOIN_SCAN_LIMIT = 25;
+
 export function createTransientSite(key = "default"): Site {
   return {
     id: TRANSIENT_SINGLE_SITE_ID,
@@ -173,6 +186,49 @@ export function createSiteService(
     }
 
     return rows[0];
+  }
+
+  /**
+   * The instance's one site together with its oldest domain, in one read.
+   *
+   * Every request resolves the site before it can do anything else, so the two
+   * reads this replaces sat at the head of the chain, one waiting on the other.
+   * Joining them keeps the domain ordering the separate read had — oldest
+   * first — and the multi-site guard that read carried.
+   *
+   * The limit bounds the scan, but it now bounds *joined* rows rather than
+   * sites, so one site with many domains could in principle fill the window and
+   * hide a second site from the guard. That case falls back to
+   * {@link loadSingleSiteRow}, which bounds sites; a single-site install has a
+   * handful of domains, so it is not reached in practice.
+   */
+  async function loadSingleSiteWithDomain(): Promise<{
+    site: typeof sites.$inferSelect | undefined;
+    domain: typeof siteDomains.$inferSelect | undefined;
+  }> {
+    const rows = await db
+      .select({ site: sites, domain: siteDomains })
+      .from(sites)
+      .leftJoin(siteDomains, eq(siteDomains.siteId, sites.id))
+      .orderBy(asc(sites.createdAt), asc(siteDomains.createdAt))
+      .limit(SINGLE_SITE_JOIN_SCAN_LIMIT);
+
+    const distinctSites = new Map<string, typeof sites.$inferSelect>();
+    for (const row of rows) {
+      distinctSites.set(row.site.id, row.site);
+    }
+    if (distinctSites.size > 1) {
+      throw createSingleSiteModeConfigurationError([...distinctSites.values()]);
+    }
+
+    // Only one site is in play, so the first non-null domain is its oldest.
+    const domain = rows.find((row) => row.domain)?.domain ?? undefined;
+
+    if (rows.length === SINGLE_SITE_JOIN_SCAN_LIMIT) {
+      return { site: await loadSingleSiteRow(), domain };
+    }
+
+    return { site: rows[0]?.site, domain };
   }
 
   return {
@@ -223,7 +279,12 @@ export function createSiteService(
 
     async resolveSingleSite(options = {}) {
       const shouldCreateIfMissing = options.createIfMissing ?? false;
-      const existingRow = await loadSingleSiteRow();
+      // The domain is only read when the caller names a host, so only that
+      // path pays for the join.
+      const loaded = options.host
+        ? await loadSingleSiteWithDomain()
+        : { site: await loadSingleSiteRow(), domain: undefined };
+      const existingRow = loaded.site;
       const timestamp = now();
       const created = existingRow
         ? existingRow
@@ -232,7 +293,7 @@ export function createSiteService(
               await db
                 .insert(sites)
                 .values({
-                  id: createEntityId("site"),
+                  id: options.id ?? createEntityId("site"),
                   key: options.key?.trim() || "default",
                   status: "active",
                   createdAt: timestamp,
@@ -249,35 +310,26 @@ export function createSiteService(
         };
       }
 
-      let domainRow: typeof siteDomains.$inferSelect | undefined;
+      // A site that was just inserted has no domains yet, whatever the read
+      // above returned.
+      let domainRow = existingRow ? loaded.domain : undefined;
 
-      if (options.host) {
-        const domainRows = await db
-          .select()
-          .from(siteDomains)
-          .where(eq(siteDomains.siteId, created.id))
-          .orderBy(asc(siteDomains.createdAt))
-          .limit(1);
-
-        domainRow = domainRows[0];
-
-        if (!domainRow && shouldCreateIfMissing) {
-          domainRow = (
-            await db
-              .insert(siteDomains)
-              .values({
-                id: createEntityId("siteDomain"),
-                siteId: created.id,
-                host: options.host,
-                pathPrefix: options.pathPrefix?.trim() || null,
-                kind: "primary",
-                redirectToPrimary: true,
-                createdAt: timestamp,
-                updatedAt: timestamp,
-              })
-              .returning()
-          )[0];
-        }
+      if (options.host && !domainRow && shouldCreateIfMissing) {
+        domainRow = (
+          await db
+            .insert(siteDomains)
+            .values({
+              id: createEntityId("siteDomain"),
+              siteId: created.id,
+              host: options.host,
+              pathPrefix: options.pathPrefix?.trim() || null,
+              kind: "primary",
+              redirectToPrimary: true,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            })
+            .returning()
+        )[0];
       }
 
       return {

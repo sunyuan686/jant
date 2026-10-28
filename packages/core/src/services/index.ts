@@ -16,6 +16,10 @@ import { createPostService, type PostService } from "./post.js";
 import { createCustomUrlService, type CustomUrlService } from "./custom-url.js";
 import { createPathService, type PathService } from "./path.js";
 import { createMediaService, type MediaService } from "./media.js";
+import {
+  createTextAttachmentService,
+  type TextAttachmentService,
+} from "./text-attachment.js";
 import { createSiteService, type SiteService } from "./site.js";
 import {
   createCollectionService,
@@ -26,6 +30,7 @@ import {
   type SmartCollectionService,
 } from "./smart-collection.js";
 import { createSearchService, type SearchService } from "./search.js";
+import { createThreadService, type ThreadService } from "./thread.js";
 import { createNavItemService, type NavItemService } from "./navigation.js";
 import { createAuthService, type AuthService } from "./auth.js";
 import { createApiTokenService, type ApiTokenService } from "./api-token.js";
@@ -58,6 +63,7 @@ export interface Services {
   site: SiteService;
   paths: PathService;
   posts: PostService;
+  threads: ThreadService;
   customUrls: CustomUrlService;
   media: MediaService;
   uploads: UploadSessionService;
@@ -75,6 +81,7 @@ export interface Services {
   language: LanguageService;
   githubAppInstallations: GitHubAppInstallationsService;
   telegram: TelegramService;
+  textAttachments: TextAttachmentService;
 }
 
 export function createServices(
@@ -135,8 +142,10 @@ export function createServices(
     site,
     paths,
     posts,
+    threads: createThreadService({ posts, collections }),
     customUrls: createCustomUrlService(db, siteId, paths, databaseSchema),
     media,
+    textAttachments: createTextAttachmentService({ posts, media }),
     uploads: createUploadSessionService(db, siteId, media, databaseSchema),
     collections,
     smartCollections,
@@ -148,6 +157,8 @@ export function createServices(
       {
         databaseDialect: dialect,
         authSecret: config?.authSecret,
+        siteId,
+        siteResolutionMode: config?.siteResolutionMode,
       },
       databaseSchema,
     ),
@@ -193,12 +204,13 @@ export type { SettingsService } from "./settings.js";
 export type { SiteService } from "./site.js";
 export type { PathService } from "./path.js";
 export type { PostService, PostFilters, PostDeleteDeps } from "./post.js";
+export type { ThreadService } from "./thread.js";
 export type { CustomUrlService } from "./custom-url.js";
 export type {
   SmartCollectionService,
   SmartCollectionViewer,
 } from "./smart-collection.js";
-export type { MediaService, MediaFilters } from "./media.js";
+export type { MediaService, MediaListPage } from "./media.js";
 export type { UploadSessionService } from "./upload-session.js";
 export type { CollectionService } from "./collection.js";
 export type { SearchService, SearchResult, SearchOptions } from "./search.js";

@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createExportService, type ExportFile } from "../services/export.js";
 import { parseFrontMatter } from "../lib/hugo-markdown.js";
-import { __test__ as importTestHelpers } from "../../bin/commands/import-site.js";
+import { __test__ as importTestHelpers } from "../../bin/commands/site/import.js";
 import type { Collection, Media, Post } from "../types.js";
 import {
   makeCollection,
@@ -49,12 +49,14 @@ function buildRoundtripServices(opts: {
 
   return {
     posts: {
-      list: async () => opts.posts,
+      listPage: async () => ({ posts: opts.posts, nextCursor: null }),
     },
     paths: {
       getPostSlugMap: async () => slugMap,
+      listStandalonePaths: async () => [],
       getPostAliases: async () => opts.aliasMap ?? new Map(),
       getCollectionSlugMap: async () => collectionSlugMap,
+      getCollectionAliases: async () => new Map(),
     },
     collections: {
       list: async () => opts.collections,
@@ -71,7 +73,7 @@ function buildRoundtripServices(opts: {
         })),
         directoryItems: [],
       }),
-      getCollectionsByPostIds: async () => new Map(),
+      getCollectionsByThreadIds: async () => new Map(),
       getCollectionEntriesByThreadIds: async () =>
         opts.collectionEntriesByThread,
     },
@@ -263,5 +265,98 @@ describe("export → import round-trip", () => {
       secondByPath.get("content/walk-notes/_index.md") as string,
     );
     expect(firstFm).toEqual(secondFm);
+  });
+  // Replies written in one go share a second, and a migrated archive puts
+  // hundreds of roots on the same second. Jant breaks those ties by ID; the
+  // export records the order and the importer creates posts in it, so the
+  // new IDs tie-break the same way.
+  it("keeps the order of posts that share a second", async () => {
+    const second = 1773014400;
+    const root = makePost({
+      id: "pst_01aaaaaaaaaaaaaaaaaaaaaaaa",
+      slug: "thread",
+      threadId: "pst_01aaaaaaaaaaaaaaaaaaaaaaaa",
+      createdAt: 1773000000,
+      publishedAt: second,
+      updatedAt: 1773090000,
+    });
+    // IDs in thread order are the reverse of the slugs' alphabetical order.
+    const replies = [
+      ["pst_01bbbbbbbbbbbbbbbbbbbbbbb1", "zeta"],
+      ["pst_01bbbbbbbbbbbbbbbbbbbbbbb2", "mu"],
+      ["pst_01bbbbbbbbbbbbbbbbbbbbbbb3", "alpha"],
+    ].map(([id, slug]) =>
+      makePost({
+        id,
+        slug,
+        replyToId: root.id,
+        threadId: root.id,
+        createdAt: second,
+        publishedAt: second,
+        updatedAt: second,
+      }),
+    );
+    const olderSameSecondRoot = makePost({
+      id: "pst_01000000000000000000000000",
+      slug: "zzz-older-same-second",
+      threadId: "pst_01000000000000000000000000",
+      publishedAt: second,
+    });
+    const video = makeMedia({
+      id: "med-video",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      durationSeconds: 11,
+    });
+
+    const services = buildRoundtripServices({
+      // Listed out of order on purpose.
+      posts: [replies[2], root, replies[0], olderSameSecondRoot, replies[1]],
+      collections: [],
+      mediaByPost: new Map([[root.id, [video]]]),
+      collectionEntriesByThread: new Map(),
+    });
+    const files = await createExportService(
+      services,
+      makeSiteConfig(),
+    ).generateHugoFiles();
+    await writeExportToDir(files, tempDir);
+    await mkdir(join(tempDir, "static", "media"), { recursive: true });
+    await writeFile(join(tempDir, "static/media/med-video.mp4"), "video");
+
+    const walked = await importTestHelpers.walkHugoContent(tempDir);
+    expect(walked.rootBundles.map((bundle) => bundle.slug)).toEqual([
+      "zzz-older-same-second",
+      "thread",
+    ]);
+    const thread = walked.rootBundles[1];
+    expect(thread.children.map((bundle) => bundle.slug)).toEqual([
+      "zeta",
+      "mu",
+      "alpha",
+    ]);
+    expect(thread.children.map((bundle) => bundle.frontMatter.weight)).toEqual([
+      1, 2, 3,
+    ]);
+
+    // Creation and edit times come back with the payload.
+    const payload = importTestHelpers.buildPostPayloadFromBundle(thread, {
+      bodyMarkdown: "",
+      attachments: [],
+      memberships: { entries: [], ids: [] },
+      replyToId: null,
+    });
+    expect(payload).toMatchObject({
+      publishedAt: second,
+      createdAt: 1773000000,
+      updatedAt: 1773090000,
+    });
+
+    const [videoSpec] = await Promise.all(
+      (thread.frontMatter.media ?? []).map((entry) =>
+        importTestHelpers.mediaSpecFromJantMedia(entry, tempDir),
+      ),
+    );
+    expect(videoSpec?.durationSeconds).toBe(11);
   });
 });

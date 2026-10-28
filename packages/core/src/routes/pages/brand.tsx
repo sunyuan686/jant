@@ -61,12 +61,13 @@ async function renderBrandSpecPage(
     noindex: true,
   });
   c.header("X-Robots-Tag", "noindex, nofollow");
-  c.set("themeStyle", buildThemeStyle(options.theme, "light", fontOverrides));
+  c.set("themeStyle", buildThemeStyle(options.theme, fontOverrides));
   const socialImageUrl = getJantIconHref("socialImage", navData.sitePathPrefix);
   const faviconHref = getJantIconHref("favicon", navData.sitePathPrefix);
   const appleTouchHref = getJantIconHref("appleTouch", navData.sitePathPrefix);
 
   return renderPublicPage(c, {
+    page: "brand",
     title: buildPageTitle(options.pageTitle, navData.siteName),
     description: options.description,
     socialImageUrl,

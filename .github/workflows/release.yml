@@ -14,21 +14,41 @@ concurrency:
 jobs:
   release:
     name: Release
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # CI also runs on pull requests, and the `branches` filter above matches
+    # the triggering run's head branch by name, so a fork's own `main` passes
+    # it. This job checks out that run's commit and holds npm's publish token,
+    # so it runs only for a push to this repository's main.
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.head_repository.full_name == github.repository)
+      }}
     runs-on: ubuntu-latest
     outputs:
       published: ${{ steps.changesets.outputs.published }}
       core_published: ${{ steps.release-meta.outputs.core_published }}
       release_version: ${{ steps.release-meta.outputs.version }}
+      release_sha: ${{ steps.release-sha.outputs.sha }}
     permissions:
       contents: write
       pull-requests: write
       id-token: write # Required for npm trusted publishing (OIDC)
     steps:
+      # The commit CI passed, not whatever main holds by now: under
+      # workflow_run, github.sha is main's head when this run starts, and a
+      # push during CI would publish code CI never ran.
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
+
+      - name: Record the release commit
+        id: release-sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Setup mise
         uses: jdx/mise-action@v2
@@ -58,16 +78,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Uses trusted publishing via OIDC (id-token: write permission)
 
-      # Auto-merge Release PR during development (0.x.x)
-      # Remove this step when ready for 1.0.0
-      # Uses PAT_TOKEN to trigger subsequent workflow runs (GITHUB_TOKEN won't trigger them)
-      - name: Auto-merge Release PR
-        if: steps.changesets.outputs.pullRequestNumber
-        run: |
-          gh pr merge ${{ steps.changesets.outputs.pullRequestNumber }} --squash --delete-branch
-        env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
-
       - name: Derive release metadata
         if: steps.changesets.outputs.published == 'true'
         id: release-meta
@@ -88,6 +98,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.release-meta.outputs.version }}
+          target_commitish: ${{ steps.release-sha.outputs.sha }}
           name: v${{ steps.release-meta.outputs.version }}
           body: |
             ## Published Packages
@@ -111,6 +122,8 @@ jobs:
     needs: release
     if: needs.release.outputs.published == 'true'
     uses: ./.github/workflows/sync-starter.yml
+    with:
+      ref: ${{ needs.release.outputs.release_sha }}
     secrets:
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
 
@@ -120,5 +133,88 @@ jobs:
     uses: ./.github/workflows/docker-publish.yml
     with:
       version: ${{ needs.release.outputs.release_version }}
+      ref: ${{ needs.release.outputs.release_sha }}
       push_latest: true
     secrets: inherit
+
+  # What this release writes, frozen as test fixtures (RELEASING step 7), so a
+  # later change that can no longer read it fails in CI. A step people had to
+  # remember was missed for 0.12.0.
+  freeze-fixtures:
+    name: Freeze Release Fixtures
+    needs: release
+    if: needs.release.outputs.published == 'true' && needs.release.outputs.core_published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.release.outputs.release_version }}
+      # The commit below adds only fixtures, which Prettier ignores, so the
+      # pre-commit hook has nothing to do.
+      HUSKY: "0"
+    steps:
+      # main as it is now, since the fixtures are committed on top of it. What
+      # gets frozen doesn't come from this checkout: the script installs the
+      # release from npm and reads the demo content and the public surface
+      # manifest at the release's tag.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup mise
+        uses: jdx/mise-action@v2
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store/v10
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The freeze installs the release from npm, which can take minutes to
+      # serve it: 1.0.1 took six and a half, past the five this step used to
+      # allow. Same wait as the starter sync.
+      - name: Wait for npm to serve this @jant/core
+        run: bash scripts/release/wait-for-npm.sh @jant/core "$VERSION"
+
+      # Already on main when someone froze them by hand before this ran.
+      - name: Freeze the fixtures
+        id: freeze
+        run: |
+          if [ -d "packages/core/src/__tests__/fixtures/releases/$VERSION" ]; then
+            echo "Fixtures for $VERSION are already on main."
+            exit 0
+          fi
+          mise run release-freeze-fixtures "$VERSION"
+          echo "frozen=true" >> "$GITHUB_OUTPUT"
+
+      # release-fixtures restores snapshots through the CLI, which loads
+      # dist/node.js. public-surface holds main to the manifest just frozen.
+      - name: Read them back with the current code
+        if: steps.freeze.outputs.frozen == 'true'
+        run: |
+          pnpm --filter @jant/core build:lib
+          pnpm --filter @jant/core exec vitest run src/__tests__/release-fixtures.test.ts src/__tests__/public-surface.test.ts
+
+      - name: Commit to main
+        if: steps.freeze.outputs.frozen == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "packages/core/src/__tests__/fixtures/releases/$VERSION"
+          git commit --quiet \
+            -m "Freeze the $VERSION release fixtures" \
+            -m "Written by \`mise run release-freeze-fixtures $VERSION\` from @jant/core@$VERSION on npm and the v$VERSION tag, by the Release workflow. release-fixtures.test.ts restores and imports them with the current code, and public-surface.test.ts holds later releases of the same major to its public-surface.json."
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            git pull --rebase origin main
+          done
+          echo "Couldn't push the fixtures to main." >&2
+          exit 1

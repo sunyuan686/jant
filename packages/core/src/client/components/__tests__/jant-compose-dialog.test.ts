@@ -2445,6 +2445,194 @@ describe("JantComposeDialog", () => {
     }
   });
 
+  // An edit saves the whole attachment list, so a restored edit that came
+  // back without the post's own attachments would delete them on save.
+  it("restores an interrupted edit with the attachments the post already had", async () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+    const paragraph = (text: string) => ({
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    });
+    mockEditPost({
+      format: "note",
+      title: null,
+      body: JSON.stringify(paragraph("Saved body")),
+      attachments: [
+        {
+          type: "media",
+          id: "med_photo",
+          previewUrl: "/media/photo.jpg",
+          mimeType: "image/jpeg",
+        },
+      ],
+    });
+    globalThis.localStorage.setItem(
+      "jant:compose-edit:pst_123",
+      JSON.stringify({
+        format: "note",
+        title: "",
+        bodyJson: paragraph("Written before the tab closed"),
+        url: "",
+        quoteText: "",
+        quoteAuthor: "",
+        slug: "",
+        visibility: "public",
+        rating: 0,
+        showTitle: false,
+        showRating: false,
+        collectionIds: [],
+        replyToId: null,
+        attachedTexts: [
+          {
+            clientId: "text-a",
+            bodyJson: paragraph("Notes, edited"),
+            bodyHtml: "",
+            summary: "Notes",
+            mediaId: "med_text",
+            originalBodyJson: paragraph("Notes"),
+          },
+        ],
+        attachmentOrder: ["photo-a", "text-a"],
+        mediaAttachments: [
+          {
+            clientId: "photo-a",
+            mediaId: "med_photo",
+            url: "/media/photo.jpg",
+            mimeType: "image/jpeg",
+            persisted: true,
+          },
+        ],
+        savedAt: Date.now(),
+      }),
+    );
+
+    const el = await createElement();
+    await el.openEdit("pst_123");
+    await flushUpdates(el);
+
+    const editor = requireElement(
+      el.querySelector<JantComposeEditor>("jant-compose-editor"),
+      "expected compose editor",
+    );
+    expect(
+      editor._attachments.map((a) => [a.mediaId, a.persisted, a.status]),
+    ).toEqual([["med_photo", true, "done"]]);
+    const [text] = editor.getEffectiveAttachedTexts();
+    expect(text?.mediaId).toBe("med_text");
+    // Still counts as changed, so the edited text is saved.
+    expect(text?.originalBodyJson).toEqual(paragraph("Notes"));
+    expect(text?.bodyJson).toEqual(paragraph("Notes, edited"));
+    expect(editor._attachmentOrder).toEqual(["photo-a", "text-a"]);
+  });
+
+  // An omitted alt leaves the stored one alone, so a cleared alt has to go
+  // out as "" or the old text survives the save.
+  it("sends a cleared alt text on an edit", async () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+    mockEditPost({
+      format: "note",
+      title: null,
+      body: JSON.stringify({
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "Harbour" }] },
+        ],
+      }),
+      attachments: [
+        {
+          type: "media",
+          id: "med_photo",
+          previewUrl: "/media/photo.jpg",
+          mimeType: "image/jpeg",
+          alt: "A harbour at dusk",
+        },
+      ],
+    });
+
+    const el = await createElement();
+    await el.openEdit("pst_123");
+    await flushUpdates(el);
+    const editor = requireElement(
+      el.querySelector<JantComposeEditor>("jant-compose-editor"),
+      "expected compose editor",
+    );
+    editor.updateAlt(0, "");
+    await flushUpdates(el);
+
+    let receivedDetail: ComposeSubmitDetail | null = null;
+    el.addEventListener("jant:compose-submit-deferred", (event) => {
+      receivedDetail = (event as CustomEvent<ComposeSubmitDetail>).detail;
+    });
+    requireElement(
+      el.querySelector<HTMLButtonElement>(".compose-publish-main"),
+      "expected update button",
+    ).click();
+
+    const detail = receivedDetail as ComposeSubmitDetail | null;
+    expect(detail?.attachments).toEqual([
+      expect.objectContaining({
+        type: "media",
+        mediaId: "med_photo",
+        alt: "",
+      }),
+    ]);
+  });
+
+  it("keeps a text attachment's stored version in the edit's local copy", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+        cb(0);
+        return 1;
+      });
+      mockEditPost({ format: "note", title: null, body: null });
+
+      const el = await createElement();
+      await el.openEdit("pst_123");
+      await el.updateComplete;
+      const editor = requireElement(
+        el.querySelector<JantComposeEditor>("jant-compose-editor"),
+        "expected compose editor",
+      );
+      const stored = {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "Notes" }] },
+        ],
+      };
+      editor.populate({
+        format: "note",
+        textAttachments: [
+          {
+            clientId: "text-a",
+            bodyJson: JSON.stringify(stored),
+            summary: "Notes",
+            mediaId: "med_text",
+          },
+        ],
+      });
+      editor._title = "Changed";
+      await editor.updateComplete;
+      vi.advanceTimersByTime(1000);
+
+      const saved = JSON.parse(
+        globalThis.localStorage.getItem("jant:compose-edit:pst_123") ?? "{}",
+      ) as { attachedTexts?: Array<Record<string, unknown>> };
+      expect(saved.attachedTexts?.[0]).toMatchObject({
+        mediaId: "med_text",
+        originalBodyJson: stored,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("enables the publish button right after an edit-mode switch to quote", async () => {
     vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
       cb(0);
@@ -5430,6 +5618,7 @@ describe("JantComposeDialog", () => {
         status: "done",
         progress: null,
         mediaId: "media-1",
+        persisted: false,
         alt: "",
         error: null,
         posterUrl: null,
@@ -5942,6 +6131,7 @@ describe("JantComposeDialog", () => {
         status: "done",
         progress: null,
         mediaId: "media-1",
+        persisted: false,
         alt: "",
         error: null,
         posterUrl: null,
@@ -5985,6 +6175,7 @@ describe("JantComposeDialog", () => {
         status: "done",
         progress: null,
         mediaId: "media-1",
+        persisted: false,
         alt: "",
         error: null,
         posterUrl: null,
@@ -6041,6 +6232,7 @@ describe("JantComposeDialog", () => {
         status: "done",
         progress: null,
         mediaId: "media-1",
+        persisted: false,
         alt: "A test image",
         error: null,
         posterUrl: null,
@@ -6111,6 +6303,7 @@ describe("JantComposeDialog", () => {
         status: "uploading",
         progress: null,
         mediaId: null,
+        persisted: false,
         alt: "Alt for pending",
         error: null,
         posterUrl: null,
@@ -7836,7 +8029,7 @@ describe("JantComposeDialog", () => {
     expect(postBtn.textContent?.trim()).toBe("Post");
   });
 
-  it("discard on loaded draft sends DELETE request", async () => {
+  it("discard on a loaded draft keeps the saved draft", async () => {
     const el = await createElement();
     const editor = requireElement(
       el.querySelector<JantComposeEditor>("jant-compose-editor"),
@@ -7871,9 +8064,9 @@ describe("JantComposeDialog", () => {
     discardBtn.click();
     await el.updateComplete;
 
-    expect(fetchSpy).toHaveBeenCalledWith("/api/posts/draft456", {
-      method: "DELETE",
-    });
+    // "Don't save" drops this session's changes; the saved draft stays.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(el._confirmPanelOpen).toBe(false);
 
     fetchSpy.mockRestore();
   });
@@ -7996,6 +8189,103 @@ describe("JantComposeDialog", () => {
     expect(
       (receivedDetail as unknown as ComposeSubmitDetail).threadPosts,
     ).toHaveLength(2);
+    expect(requests.every((request) => request.method === "GET")).toBe(true);
+  });
+
+  function mockThreadDraft(rootId: string, replyId: string) {
+    const requests: Array<{ url: string; method: string }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method ?? "GET" });
+      if (url === `/api/posts/${rootId}`) {
+        return new Response(
+          JSON.stringify({
+            id: rootId,
+            threadId: rootId,
+            format: "note",
+            status: "draft",
+            slug: "draft-thread",
+            title: "Draft thread",
+            body: null,
+            attachments: [],
+            collectionIds: [],
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url === "/api/posts?status=draft&limit=50") {
+        return new Response(
+          JSON.stringify({
+            posts: [
+              {
+                id: replyId,
+                threadId: rootId,
+                replyToId: rootId,
+                format: "quote",
+                status: "draft",
+                quoteText: "Draft reply",
+                attachments: [],
+              },
+            ],
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    return requests;
+  }
+
+  // Opening a draft to read it is not writing anything, so closing it asks
+  // nothing — the prompt used to appear, and its "Don't save" deleted the draft.
+  it("closes a draft opened from Drafts without asking when nothing changed", async () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+    const requests = mockThreadDraft("pst_draft_root", "pst_draft_reply");
+
+    const el = await createElement();
+    await el.openDraft("pst_draft_root");
+    await flushUpdates(el);
+
+    el.requestClose();
+    await el.updateComplete;
+
+    expect(el._confirmPanelOpen).toBe(false);
+    expect(el._draftSourceId).toBeNull();
+    expect(requests.every((request) => request.method === "GET")).toBe(true);
+  });
+
+  it("asks before closing a Thread draft whose later post changed", async () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0);
+      return 1;
+    });
+    const requests = mockThreadDraft("pst_draft_root", "pst_draft_reply");
+
+    const el = await createElement();
+    await el.openDraft("pst_draft_root");
+    await flushUpdates(el);
+
+    const reply = requireElement(
+      el.querySelectorAll<JantComposeEditor>("jant-compose-editor")[1],
+      "expected reply editor",
+    );
+    reply._quoteText = "Draft reply, revised";
+    await reply.updateComplete;
+
+    el.requestClose();
+    await el.updateComplete;
+    expect(el._confirmPanelOpen).toBe(true);
+
+    requireElement(
+      el.querySelector<HTMLButtonElement>(".compose-confirm-discard"),
+      "expected discard button",
+    ).click();
+    await el.updateComplete;
+
+    expect(el._confirmPanelOpen).toBe(false);
     expect(requests.every((request) => request.method === "GET")).toBe(true);
   });
 
@@ -8138,6 +8428,7 @@ describe("JantComposeDialog", () => {
         status: "done",
         progress: null,
         mediaId: "media-1",
+        persisted: false,
         alt: "",
         error: null,
         posterUrl: null,
